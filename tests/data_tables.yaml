@@ -1,0 +1,10 @@
+name: "Nexus CRM: Customer Data Search"
+url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+description: "Verifies table filtering logic visually."
+steps:
+  - action: "Wait for the 'Recent Deals' table to load"
+    expect: "Should see Acme Corp, Global Tech and Nebula Inc in the table"
+  - action: "Type 'Nebula' into the search box above the table"
+    expect: "The table should filter to show only the 'Nebula Inc' row"
+  - action: "Clear the search box"
+    expect: "All rows should be visible again"
