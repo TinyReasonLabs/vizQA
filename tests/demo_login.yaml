@@ -1,0 +1,9 @@
+name: "Demo Login Test"
+url: "https://example.com/login"
+description: "A simple test to verify the login flow visually."
+steps:
+  - action: "Type 'admin' into the username field"
+    expect: "Username field should contain 'admin'"
+  - action: "Type 'password123' into the password field"
+  - action: "Click the login button"
+    expect: "Should redirect to dashboard and show 'Welcome back'"

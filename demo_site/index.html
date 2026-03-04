@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus CRM | Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --sidebar-bg: rgba(255, 255, 255, 0.03);
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #38bdf8;
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body.light-mode {
+            --bg: #f8fafc;
+            --sidebar-bg: rgba(0, 0, 0, 0.03);
+            --card-bg: #ffffff;
+            --text: #0f172a;
+            --text-dim: #64748b;
+            --accent: #0284c7;
+            --glass-border: rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        aside {
+            width: 260px;
+            background: var(--sidebar-bg);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            padding: 2rem 1rem;
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--accent);
+            margin-bottom: 3rem;
+            padding-left: 1rem;
+        }
+
+        nav ul {
+            list-style: none;
+        }
+
+        nav li {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 0.5rem;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+        }
+
+        nav li:hover, nav li.active {
+            background: var(--card-bg);
+            color: var(--text);
+        }
+
+        nav li.active {
+            border-left: 3px solid var(--accent);
+        }
+
+        /* Main Content */
+        main {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+        }
+
+        button {
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+            background: var(--card-bg);
+            color: var(--text);
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        button.primary {
+            background: var(--accent);
+            color: white;
+            border: none;
+        }
+
+        /* Dashboard Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            padding: 1.5rem;
+            border-radius: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        th {
+            text-align: left;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            padding-bottom: 1rem;
+        }
+
+        td {
+            padding: 0.75rem 0;
+            border-top: 1px solid var(--glass-border);
+        }
+
+        /* Auth Modal */
+        #auth-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(5px);
+            z-index: 100;
+        }
+
+        .modal-content {
+            background: var(--bg);
+            border: 1px solid var(--glass-border);
+            padding: 3rem;
+            border-radius: 20px;
+            width: 400px;
+            text-align: center;
+        }
+
+        input {
+            width: 100%;
+            padding: 0.8rem;
+            margin: 0.5rem 0 1rem;
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text);
+            border-radius: 8px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 2rem;
+            background: #ef4444;
+            color: white;
+            border-radius: 8px;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <aside>
+        <div class="logo">Nexus CRM</div>
+        <nav>
+            <ul>
+                <li class="active" onclick="switchView('Overview')">Overview</li>
+                <li onclick="switchView('Customers')">Customers</li>
+                <li onclick="switchView('Campaigns')">Campaigns</li>
+                <li onclick="switchView('Settings')">Settings</li>
+            </ul>
+        </nav>
+    </aside>
+
+    <main>
+        <header>
+            <h1 id="view-title">Dashboard Overview</h1>
+            <div class="controls">
+                <button id="theme-toggle" onclick="toggleTheme()">Toggle Dark Mode</button>
+                <button class="primary" onclick="showLogin()">Login</button>
+            </div>
+        </header>
+
+        <div id="content-area">
+            <div class="grid">
+                <div class="card">
+                    <h3>Active Users</h3>
+                    <p style="font-size: 2rem; font-weight: 600; margin-top: 0.5rem;">14,292</p>
+                    <p style="color: #22c55e; font-size: 0.9rem;">+12.5% from last month</p>
+                </div>
+                <div class="card">
+                    <h3>Revenue</h3>
+                    <p style="font-size: 2rem; font-weight: 600; margin-top: 0.5rem;">$52,042</p>
+                    <p style="color: var(--text-dim); font-size: 0.9rem;">Target: $60,000</p>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 1.5rem;">
+                <h3>Recent Deals</h3>
+                <input type="text" id="table-search" placeholder="Search customers..." onkeyup="filterTable()">
+                <table id="deals-table">
+                    <thead>
+                        <tr>
+                            <th>Customer</th>
+                            <th>Value</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Acme Corp</td><td>$12,000</td><td style="color: #eab308">Pending</td></tr>
+                        <tr><td>Global Tech</td><td>$25,000</td><td style="color: #22c55e">Closed</td></tr>
+                        <tr><td>Nebula Inc</td><td>$8,400</td><td style="color: #ef4444">Cancelled</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Auth Modal -->
+    <div id="auth-modal">
+        <div class="modal-content">
+            <h2 style="margin-bottom: 1.5rem;">Sign In</h2>
+            <input type="text" id="username" placeholder="Username">
+            <input type="password" id="password" placeholder="Password">
+            <button class="primary" style="width: 100%" onclick="attemptLogin()">Submit</button>
+            <button style="width: 100%; margin-top: 0.5rem;" onclick="closeLogin()">Cancel</button>
+        </div>
+    </div>
+
+    <div id="error-toast" class="toast">Invalid credentials. Please try again.</div>
+
+    <script>
+        function switchView(view) {
+            document.getElementById('view-title').innerText = view === 'Overview' ? 'Dashboard Overview' : view;
+            document.querySelectorAll('nav li').forEach(li => {
+                li.classList.remove('active');
+                if (li.innerText === view) li.classList.add('active');
+            });
+        }
+
+        function toggleTheme() {
+            document.body.classList.toggle('light-mode');
+            const isLight = document.body.classList.contains('light-mode');
+            document.getElementById('theme-toggle').innerText = isLight ? 'Toggle Dark Mode' : 'Toggle Light Mode';
+        }
+
+        function showLogin() {
+            document.getElementById('auth-modal').style.display = 'flex';
+        }
+
+        function closeLogin() {
+            document.getElementById('auth-modal').style.display = 'none';
+        }
+
+        function attemptLogin() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+
+            if (user === 'admin' && pass === 'password') {
+                closeLogin();
+                alert('Login Successful!');
+            } else {
+                showToast();
+            }
+        }
+
+        function showToast() {
+            const toast = document.getElementById('error-toast');
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+
+        function filterTable() {
+            const input = document.getElementById("table-search");
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById("deals-table");
+            const tr = table.getElementsByTagName("tr");
+
+            for (let i = 1; i < tr.length; i++) {
+                const td = tr[i].getElementsByTagName("td")[0];
+                if (td) {
+                    const txtValue = td.textContent || td.innerText;
+                    tr[i].style.display = txtValue.toUpperCase().indexOf(filter) > -1 ? "" : "none";
+                }
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+name: "Nexus CRM: Visual Regression & Theme Toggling"
+url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+description: "Verifies dark/light mode transition."
+steps:
+  - action: "Verify the current background is dark"
+    expect: "The theme toggle button should say 'Toggle Dark Mode'"
+  - action: "Click the 'Toggle Dark Mode' button"
+    expect: "The UI should switch to a light background and the button text changes to 'Toggle Light Mode'"
+  - action: "Click the button again"
+    expect: "The UI should revert to the dark theme"
