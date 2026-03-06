@@ -6,7 +6,7 @@ Core execution engine for vision-driven UI automation.
 import asyncio
 import os
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -20,9 +20,10 @@ class Automator:
     Main controller for browser automation and perception-integrated execution.
     """
 
-    def __init__(self, perception_client: PerceptionClient):
+    def __init__(self, perception_client: PerceptionClient, verbosity: int = 0):
         self.client = perception_client
         self.planner = StepPlanner()
+        self.verbosity = verbosity
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -103,7 +104,7 @@ class Automator:
                         step.status = StepStatus.PASSED
                     else:
                         step.status = StepStatus.FAILED
-                        step.failure_reason = f"Element not found for query: '{query}'"
+                        step.failure_reason = self._get_failure_details("FIND", query, perception, "Element not found")
 
                 elif instr.startswith("DO:"):
                     action_cmd = instr.replace("DO:", "").strip()
@@ -168,14 +169,25 @@ class Automator:
                     perception = await self.client.perceive(path, query=query)
                     step.perception_result = perception
 
-                    # MiniLM verification logic: found element with high salience or matches
-                    if perception.get("top_matches") or any(
-                        e.get("salience", 0) > 0.6 for e in perception.get("elements", [])
-                    ):
+                    match_found = False
+                    if perception.get("top_matches"):
+                        match_found = True
+                    else:
+                        # Semantic fallback: check element text content
+                        q = query.lower()
+                        for el in perception.get("elements", []):
+                            text = el.get("text", "").lower()
+                            if q in text or any(word in text for word in q.split() if len(word) > 3):
+                                match_found = True
+                                break
+
+                    if match_found:
                         step.status = StepStatus.PASSED
                     else:
                         step.status = StepStatus.FAILED
-                        step.failure_reason = f"Verification failed for query: '{query}'"
+                        step.failure_reason = self._get_failure_details(
+                            "VERIFY", query, perception, "Verification failed"
+                        )
 
                 else:
                     # Legacy execution for non-decomposed steps
@@ -202,16 +214,25 @@ class Automator:
                     if not await self._run_step_recursive(session, sub_step, on_step_update):
                         sub_failed = True
 
-                # If the container has an expectation, verify it now
-                if not sub_failed and step.expectation:
-                    step.status = await self._verify_expectation(session, step)
+                # Propagate failure details from child to parent
+                if sub_failed:
+                    step.status = StepStatus.FAILED
+                    # Find the first failed sub-step to propagate reason
+                    for sub_step in step.sub_steps:
+                        if sub_step.status == StepStatus.FAILED:
+                            step.failure_type = sub_step.failure_type
+                            step.failure_reason = sub_step.failure_reason
+                            break
                 else:
-                    step.status = StepStatus.FAILED if sub_failed else StepStatus.PASSED
+                    step.status = StepStatus.PASSED
 
             if step.status == StepStatus.FAILED:
                 success = False
 
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
             step.failure_reason = str(e)
@@ -224,6 +245,37 @@ class Automator:
 
         return success
 
+    def _get_failure_details(self, stage: str, query: str, perception: Dict[str, Any], base_message: str) -> str:
+        """Generates a detailed failure reason based on verbosity and perception results."""
+        reason = f"{base_message} for query: '{query}'"
+
+        if self.verbosity >= 1:
+            # Level 1: List detected elements to show context
+            elements = perception.get("elements", [])
+            if elements:
+                visible_texts = [el.get("text") for el in elements if el.get("text")]
+                visible_texts = list(set(visible_texts))[:10]  # Deduplicate and limit
+                if visible_texts:
+                    reason += f"\n[Context] Elements visible on screen: {visible_texts}"
+            else:
+                reason += "\n[Context] No readable elements detected on the page."
+
+        if self.verbosity >= 2:
+            # Level 2: Comparison/Assertion details
+            top_matches = perception.get("top_matches", [])
+            if top_matches:
+                matches_info = []
+                for m in top_matches[:3]:
+                    text = m.get("text", "unnamed")
+                    sim = m.get("similarity", 0.0)
+                    matches_info.append(f"'{text}' (similarity: {sim:.2f})")
+                reason += f"\n[Detail] Top candidates: {', '.join(matches_info)}"
+            elif perception.get("elements"):
+                # If no top_matches, maybe show why elements didn't match
+                reason += "\n[Detail] Semantic matching failed. No elements closely resembled the query."
+
+        return reason
+
     async def _execute_interaction(self, action: str, x: float, y: float, payload: str):
         """Performs actual Playwright interactions at the specified pixel coordinates."""
         if action == "click":
@@ -231,6 +283,12 @@ class Automator:
         elif "type" in action:
             # Click first to focus
             await self.page.mouse.click(x, y)
+            # Clear field: Ctrl+A -> Backspace
+            await self.page.keyboard.down("Control")
+            await self.page.keyboard.press("a")
+            await self.page.keyboard.up("Control")
+            await self.page.keyboard.press("Backspace")
+            # Type new content
             await self.page.keyboard.type(payload)
         elif action == "hover":
             await self.page.mouse.move(x, y)
@@ -314,8 +372,19 @@ class Automator:
             # Ask Perception API if expectation matches
             try:
                 result = await self.client.perceive(path, query=step.expectation)
-                # Success criteria: high salience or top matches found
+                # Success criteria: high salience or top matches found, or semantic match
+                match_found = False
                 if result.get("top_matches") or result.get("salience", 0) > 0.7:
+                    match_found = True
+                else:
+                    q = step.expectation.lower()
+                    for el in result.get("elements", []):
+                        text = el.get("text", "").lower()
+                        if q in text or any(word in text for word in q.split() if len(word) > 3):
+                            match_found = True
+                            break
+
+                if match_found:
                     step.screenshot_after = path
                     return StepStatus.PASSED
             except Exception:
@@ -325,5 +394,8 @@ class Automator:
             await asyncio.sleep(1)
 
         step.failure_type = FailureType.TIMEOUT
-        step.failure_reason = f"Expectation '{step.expectation}' not met visually within {timeout}s."
+        reason = f"Expectation '{step.expectation}' not met visually within {timeout}s."
+        if self.verbosity >= 1:
+            reason += " (Timed out while polling Perception API)"
+        step.failure_reason = reason
         return StepStatus.FAILED

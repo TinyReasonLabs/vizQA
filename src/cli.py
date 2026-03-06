@@ -89,14 +89,30 @@ class ModernReporter:
         if self.verbosity >= 2 and step.perception_result:
             # Adding perception data as a JSON snippet under the step
             perception_data = step.perception_result
+
+            # Request context
+            request_info = {
+                "request": {
+                    "image": step.screenshot_before or step.screenshot_after or step.action_screenshot,
+                    "query": step.instruction.replace("FIND:", "").replace("VERIFY:", "").strip(),
+                }
+            }
+
+            # Merge or display request info first
+            full_view = {**request_info, "response": perception_data}
+
+            dumped = yaml.dump(full_view, default_flow_style=False).splitlines()
+            if len(dumped) > 20:
+                dumped = dumped[:20] + ["... (truncated for brevity)"]
+
             perception_text = Syntax(
-                yaml.dump(perception_data, default_flow_style=False),
+                "\n".join(dumped),
                 "yaml",
                 theme="monokai",
                 line_numbers=False,
                 word_wrap=True,
             )
-            step_node.add(Panel(perception_text, title="Perception Data", border_style="dim"))
+            step_node.add(Panel(perception_text, title="Perception Details (v2)", border_style="dim"))
 
         # Recursively add sub-steps
         for sub_step in step.sub_steps:
@@ -123,8 +139,13 @@ class ModernReporter:
                         console.print(f"[dim]Action Snapshot:[/] {step.action_screenshot}")
 
                     if self.verbosity >= 2 and step.perception_result:
-                        console.print("[dim]Perception Data:[/]")
-                        console.print_json(data=step.perception_result)
+                        console.print("[dim]Perception Data (Truncated):[/]")
+                        import json
+
+                        perc_str = json.dumps(step.perception_result, indent=2).splitlines()
+                        if len(perc_str) > 20:
+                            perc_str = perc_str[:20] + ["  ... (truncated)"]
+                        console.print("\n".join(perc_str))
         console.print("[bold red]" + "=" * 50 + "[/]")
 
 
@@ -185,7 +206,7 @@ def run(path, headless, verbose):
 
     async def main():
         client = PerceptionClient()  # Defaults to localhost:8000
-        automator = Automator(client)
+        automator = Automator(client, verbosity=reporter.verbosity)
 
         try:
             with Live(reporter.get_renderable(), refresh_per_second=4, transient=False) as live:
