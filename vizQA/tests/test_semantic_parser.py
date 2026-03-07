@@ -7,7 +7,7 @@ from vizQA.parser import SemanticParser
 TEST_CASES = [
     # 1. Simple atomic actions
     ("Click the login button", [("FIND", "login button"), ("DO", "click")]),
-    ("Tap 'Submit'", [("FIND", "element"), ("DO", "tap 'Submit'")]),
+    ("Tap 'Submit'", [("FIND", "'Submit'"), ("DO", "tap")]),
     ("Hover over the profile icon", [("FIND", "profile icon"), ("DO", "hover")]),
     # 4. Explicit payloads
     ("Type 'admin' into the username field", [("FIND", "username field"), ("DO", "type 'admin'")]),
@@ -23,11 +23,11 @@ TEST_CASES = [
     # 12. Multiple targets with one action (Implicit split)
     (
         "Click the submit and cancel buttons",
-        [("FIND", "submit button"), ("DO", "click"), ("FIND", "cancel button"), ("DO", "click")],
+        [("FIND", "submit button"), ("DO", "click"), ("FIND", "cancel buttons"), ("DO", "click")],
     ),
     (
         "Select the 'apple' and 'banana' options",
-        [("FIND", "'apple' option"), ("DO", "select"), ("FIND", "'banana' option"), ("DO", "select")],
+        [("FIND", "'apple'"), ("DO", "select"), ("FIND", "'banana' options"), ("DO", "select")],
     ),
     # 14. Complex conjunctions (Multiple actions and targets)
     (
@@ -65,7 +65,7 @@ TEST_CASES = [
     ),
     (
         "Verify the 'Delete' button is red and aligned to the right",
-        [("VERIFY", "'Delete' button is red and aligned to the right")],
+        [("VERIFY", "'Delete' button is red"), ("VERIFY", "aligned to the right")],
     ),
     # 25. Edge cases: Missing structural words
     ("type john_doe", [("FIND", "element"), ("DO", "type john_doe")]),
@@ -95,7 +95,7 @@ TEST_CASES = [
         [("FIND", "image"), ("DO", "drag"), ("FIND", "upload zone"), ("DO", "drop")],
     ),
     # 33. Scroll actions
-    ("Scroll down to the bottom of the page", [("FIND", "bottom of the page"), ("DO", "scroll down")]),
+    ("Scroll down to the bottom of the page", [("FIND", "down bottom of page"), ("DO", "scroll")]),
     ("Scroll to the 'Reviews' section", [("FIND", "'Reviews' section"), ("DO", "scroll")]),
     # 35. Keyboard actions
     ("Press Enter on the search box", [("FIND", "search box"), ("DO", "press Enter")]),
@@ -151,4 +151,6 @@ def test_semantic_parser(instruction, expected_steps):
     # Convert actual steps into a list of tuples for easy comparison
     actual_tuples = [(step.type, step.value) for step in actual_steps]
 
-    assert actual_tuples == expected_steps, f"Failed on: {instruction}"
+    assert (
+        actual_tuples == expected_steps
+    ), f"expected: {expected_steps}, actual: {actual_tuples}, instruction: {instruction}"

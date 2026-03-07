@@ -16,7 +16,7 @@ class SemanticParser:
     # Core Action Verbs
     ACTION_VERBS = {
         "click": ["click", "tap", "hit", "press"],
-        "type": ["type", "enter", "input", "fill"],
+        "type": ["type", "enter"],
         "hover": ["hover", "move to", "point"],
         "select": ["select", "choose", "pick"],
         "check": ["check", "tick"],
@@ -95,17 +95,23 @@ class SemanticParser:
         self, chunk: str, implicit_target: str, implicit_action: str = None
     ) -> tuple[List[SemanticNode], str, str]:
         """Takes a single continuous phrase and extracts FIND and DO."""
-        lower_chunk = chunk.lower()
+        # 1. Protect Quotes
+        quotes = []
+
+        def _repl(match):
+            quotes.append(match.group(0))
+            return f"__QUOTE_{len(quotes)-1}__"
+
+        chunk_protected = re.sub(r"(['\"])(.*?)\1", _repl, chunk)
+        lower_chunk = chunk_protected.lower()
 
         action_verb = None
         action_type = None
 
         # Identify Action
-        # We sort synonyms by length (descending) to match longest phrase first (e.g. "move to" before a shorter substring)
         for ax_type, synonyms in self.ACTION_VERBS.items():
             for syn in sorted(synonyms, key=len, reverse=True):
                 if re.search(r"\b" + re.escape(syn) + r"\b", lower_chunk):
-                    # Check if 'type' is incorrectly matched in an earlier chunk that was meant to be 'clear'
                     if (
                         syn == "type"
                         and "clear" in lower_chunk
@@ -126,90 +132,83 @@ class SemanticParser:
                     break
 
         if not action_verb:
-            # Maybe it's just a noun (fallback)
-            # Check edge cases like implicit verbs if standard VERB NOUN pattern is missing
+            # Fallback
             if "submit" in lower_chunk:
                 return (
                     [SemanticNode(type="FIND", value="element"), SemanticNode(type="DO", value="click Submit")],
                     "element",
                     "click",
                 )
-            return [], implicit_target, None
 
-        # We found an action. Let's isolate the target and the payload.
+            restored = chunk_protected
+            for i, q in enumerate(quotes):
+                restored = restored.replace(f"__QUOTE_{i}__", q)
+            return [], restored.strip(), None
+
         target = ""
         payload = ""
+        chunk_no_payload = chunk_protected
 
-        # 1. Payload Extraction (Explicit Quotes)
-        quote_match = re.search(r"(['\"])(.*?)\1", chunk)
-        if quote_match and action_type in ["type", "enter", "input"]:
-            payload = quote_match.group(2)
-            # Replace payload temporarily so we don't treat it as target
-            chunk_no_payload = chunk[: quote_match.start()] + chunk[quote_match.end() :]
-        else:
-            quote_match = None
-            # Implicit payload for "type"
-            chunk_no_payload = chunk
-            if action_type in ["type", "enter", "input"]:
-                # 1. Try with preposition: "type admin into the username field"
-                implicit_match = re.search(rf"\b{action_verb}\s+([a-zA-Z0-9_@.-]+)\s+(in|into|on|to)\b", lower_chunk)
+        if action_type in ["type", "enter"]:
+            quote_match_type = re.search(r"__QUOTE_(\d+)__", chunk_no_payload)
+            if quote_match_type:
+                q_idx = int(quote_match_type.group(1))
+                payload = quotes[q_idx]
+                chunk_no_payload = chunk_no_payload.replace(f"__QUOTE_{q_idx}__", "")
+            else:
+                if re.search(rf"\b{action_verb}\b", lower_chunk):
+                    implicit_match = re.search(
+                        rf"\b{action_verb}\s+([a-zA-Z0-9_@.-]+)(?:\s+(in|into|on|to)\b|$)", lower_chunk
+                    )
+                else:
+                    implicit_match = re.search(r"^([a-zA-Z0-9_@.-]+)(?:\s+(in|into|on|to)\b|$)", lower_chunk.strip())
+
                 if implicit_match:
                     payload = implicit_match.group(1)
-                    chunk_no_payload = re.sub(re.escape(payload), "", chunk, count=1, flags=re.IGNORECASE)
+                    chunk_no_payload = re.sub(re.escape(payload), "", chunk_protected, count=1, flags=re.IGNORECASE)
                 else:
-                    # 2. Try implicit suffix: "type first name john" -> target "first name", payload "john"
-                    implicit_match = re.search(rf"\b{action_verb}\s+(.*?)\s+([a-zA-Z0-9_@.-]+)$", lower_chunk)
+                    implicit_match = re.search(r"(.*?)\s+([a-zA-Z0-9_@.-]+)$", lower_chunk)
                     if implicit_match:
                         payload = implicit_match.group(2)
-                        # We extract payload from end of string
-                        chunk_no_payload = chunk[: implicit_match.end(1)]
-            elif action_type == "click":
-                # Handle "press Enter", "hit Escape"
-                key_match = re.search(r"\b(enter|escape|esc|return|tab|space)\b", lower_chunk)
-                if key_match and "key" not in lower_chunk:
-                    payload = key_match.group(1).capitalize()
-                    chunk_no_payload = re.sub(
-                        r"\b" + re.escape(key_match.group(1)) + r"\b", "", chunk, flags=re.IGNORECASE
-                    )
-                elif key_match and "key" in lower_chunk:
-                    payload = key_match.group(1).capitalize() + " key"
-                    chunk_no_payload = re.sub(
-                        r"\b" + re.escape(key_match.group(1)) + r"\s+key\b", "", chunk, flags=re.IGNORECASE
-                    )
+                        chunk_no_payload = chunk_protected[: implicit_match.end(1)]
+        elif action_type == "click":
+            key_match = re.search(r"\b(enter|escape|esc|return|tab|space)\b", lower_chunk)
+            if key_match and "key" not in lower_chunk:
+                payload = key_match.group(1).capitalize()
+                chunk_no_payload = re.sub(
+                    r"\b" + re.escape(key_match.group(1)) + r"\b", "", chunk_protected, flags=re.IGNORECASE
+                )
+            elif key_match and "key" in lower_chunk:
+                payload = key_match.group(1).capitalize() + " key"
+                chunk_no_payload = re.sub(
+                    r"\b" + re.escape(key_match.group(1)) + r"\s+key\b", "", chunk_protected, flags=re.IGNORECASE
+                )
 
-        # Strip Action Verb exclusively (but not if it's inside quotes)
+        # Target Isolation
         target_str = re.sub(r"\b" + re.escape(action_verb) + r"\b", "", chunk_no_payload, flags=re.IGNORECASE, count=1)
 
-        # Strip exact targeted Boilerplate at boundaries or specific phrases
         target_str = re.sub(r"\b(please navigate ahead and|i want you to)\b", "", target_str, flags=re.IGNORECASE)
-        target_str = re.sub(
-            r"\b(click on|click)\b", "", target_str, flags=re.IGNORECASE
-        )  # In case action_verb was something else or we had "click on"
+        target_str = re.sub(r"\b(click on|click)\b", "", target_str, flags=re.IGNORECASE)
 
-        # Remove leading/trailing stop words but KEEP internal ones like "in the header"
-        # We'll just remove 'the', 'a', 'an' cleanly.
-        target_str = re.sub(
-            r"\b(into|onto|to|on)\b", "", target_str, count=1, flags=re.IGNORECASE
-        )  # usually precedes the target for type/drag
-        target_str = re.sub(r"\b(the|a|an)\b", "", target_str, flags=re.IGNORECASE)
+        target_str = re.sub(r"\b(into|onto|to|on)\b", "", target_str, count=1, flags=re.IGNORECASE)
+        target_str = re.sub(r"^(the|a|an)\b", "", target_str.strip(), flags=re.IGNORECASE)
 
         target_str = re.sub(r"\s+", " ", target_str).strip()
-
-        # Remove trailing/leading punctuation
         target_str = re.sub(r"^[,\.]|[,\.]$", "", target_str).strip()
 
-        if not target_str:
-            target_str = implicit_target
+        for i, q in enumerate(quotes):
+            target_str = target_str.replace(f"__QUOTE_{i}__", q)
+            payload = payload.replace(f"__QUOTE_{i}__", q)
 
         nodes = []
-
-        # Handle 'it' or empty target by using implicit target
         if target_str.lower() in ["it", "them", ""]:
             target_str = implicit_target if implicit_target else "element"
 
-        # Special logic for wait commands
         if action_type == "wait":
             do_val = chunk.lower().strip()
+            for i, q in enumerate(quotes):
+                do_val = do_val.replace(f"__quote_{i}__", q.lower())
+
             if "until" in do_val:
                 verify_text = re.sub(rf"^{action_verb}\s+until\s+", "", do_val).strip()
                 return self._parse_verify(verify_text), "element", None
@@ -219,28 +218,21 @@ class SemanticParser:
                 action_verb,
             )
 
-        # Special logic for find command (no-op)
         if action_type == "find":
             return [], target_str, None
 
         if target_str:
             nodes.append(SemanticNode(type="FIND", value=target_str))
 
-        # Reconstruct DO string
         do_val = action_verb.lower()
         if payload:
             if action_type == "click":
                 do_val = f"press {payload}"
-            elif quote_match:
-                do_val += f" {quote_match.group(1)}{payload}{quote_match.group(1)}"
             else:
                 do_val += f" {payload}"
-        elif action_type == "type" and quote_match is None and not payload:
-            # Fallback if we completely missed the implicit payload
-            implicit_all = re.sub(r"\b" + re.escape(action_verb) + r"\b", "", chunk, flags=re.IGNORECASE).strip()
-            if implicit_all:
-                do_val = f"type {implicit_all}"
-                nodes = [SemanticNode(type="FIND", value="element")]  # Target is ambiguous
+        elif action_type in ["type", "enter"]:
+            do_val = f"type {target_str}"
+            nodes = [SemanticNode(type="FIND", value="element")]
 
         nodes.append(SemanticNode(type="DO", value=do_val))
 
