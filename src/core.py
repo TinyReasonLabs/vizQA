@@ -176,8 +176,14 @@ class Automator:
                         # Semantic fallback: check element text content
                         q = query.lower()
                         for el in perception.get("elements", []):
-                            text = el.get("text", "").lower()
-                            if q in text or any(word in text for word in q.split() if len(word) > 3):
+                            text = (el.get("text") or "").lower()
+                            label = (el.get("label") or "").lower()
+                            name = (el.get("name") or "").lower()
+
+                            # Check if query matches any descriptive field
+                            if (q in text or q in label or q in name) or any(
+                                word in text or word in label or word in name for word in q.split() if len(word) > 3
+                            ):
                                 match_found = True
                                 break
 
@@ -230,9 +236,6 @@ class Automator:
                 success = False
 
         except Exception as e:
-            import traceback
-
-            traceback.print_exc()
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
             step.failure_reason = str(e)
@@ -380,7 +383,11 @@ class Automator:
                     q = step.expectation.lower()
                     for el in result.get("elements", []):
                         text = el.get("text", "").lower()
-                        if q in text or any(word in text for word in q.split() if len(word) > 3):
+                        label = el.get("label", "").lower()
+                        name = el.get("name", "").lower()
+                        if (q in text or q in label or q in name) or any(
+                            word in text or word in label or word in name for word in q.split() if len(word) > 3
+                        ):
                             match_found = True
                             break
 
