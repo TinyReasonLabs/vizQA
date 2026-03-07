@@ -6,7 +6,7 @@ import os
 from typing import Any, Dict, List
 
 from vizQA.memory import StepStatus, TestStep
-from vizQA.minilm import MiniLM
+from vizQA.parser import SemanticParser
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods
@@ -15,17 +15,9 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     """
 
     def __init__(self, model_name: str = "minilm"):
-        self.model_name = model_name
-        self.weights_path = os.path.join(os.path.dirname(__file__), "weights", model_name)
-
-        # Initialize MiniLM ONNX model
-        try:
-            self.model = MiniLM(self.weights_path)
-        except Exception as e:
-            # Fallback to regex or raise depending on production requirements.
-            # Given the user wants it production ready and solid, we should probably raise
-            # if the model fails to load, but for now we'll ensure we have a clear error.
-            raise RuntimeError(f"Failed to initialize StepPlanner model: {e}") from e
+        # model_name is kept for backwards compatibility but we now use the AST parser
+        self.model_name = "ast_parser"
+        self.parser = SemanticParser()
 
     def decompose(self, raw_steps: List[Dict[str, Any]]) -> List[TestStep]:
         """
@@ -55,22 +47,24 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
         return refined_steps
 
     def _decompose_instruction(self, instruction: str, parent_idx: int) -> List[TestStep]:
-        """Uses MiniLM to break down a high-level instruction into FIND and DO atoms."""
-        prompt = f"Decompose instruction into atomic FIND and DO steps: {instruction}"
-
+        """Uses SemanticParser to break down a high-level instruction into FIND and DO atoms."""
         try:
-            model_steps = self.model.predict(prompt)
-            return self._to_test_steps(model_steps, parent_idx, "instr")
+            nodes = self.parser.parse(instruction)
+            # Filter to only FIND and DO. If a user mixed verify here, we drop or keep it?
+            # The parser handles -> so we just take all nodes
+            dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
+            return self._to_test_steps(dict_steps, parent_idx, "instr")
         except Exception as e:
             raise RuntimeError(f"Semantic decomposition failed for instruction '{instruction}': {e}") from e
 
     def _decompose_expectation(self, expectation: str, parent_idx: int) -> List[TestStep]:
-        """Uses MiniLM to break down an expectation into VERIFY atoms."""
-        prompt = f"Decompose expectation into atomic VERIFY steps: {expectation}"
-
+        """Uses SemanticParser to break down an expectation into VERIFY atoms."""
         try:
-            model_steps = self.model.predict(prompt)
-            return self._to_test_steps(model_steps, parent_idx, "expect")
+            # Force verifications to be treated as such by prefixing slightly or just parsing
+            # The parser has a specific _parse_verify we could call, or we just prefix "Verify "
+            nodes = self.parser.parse(f"Verify {expectation}")
+            dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
+            return self._to_test_steps(dict_steps, parent_idx, "expect")
         except Exception as e:
             raise RuntimeError(f"Semantic decomposition failed for expectation '{expectation}': {e}") from e
 
