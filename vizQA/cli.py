@@ -17,10 +17,10 @@ from rich.syntax import Syntax
 from rich.text import Text
 from rich.tree import Tree
 
-from .client import PerceptionClient
-from .core import Automator
-from .memory import StepStatus, TestSession, TestStep
-from .planner import StepPlanner
+from vizQA.client import PerceptionClient
+from vizQA.core import Automator
+from vizQA.memory import StepStatus, TestSession, TestStep
+from vizQA.planner import StepPlanner
 
 console = Console()
 
@@ -174,9 +174,20 @@ async def run_single_test(test_path: Path, automator: Automator, on_step_update:
     await automator.run_session(session, on_step_update=on_step_update)
 
 
-@click.group()
-def cli():
+class DefaultGroup(click.Group):
+    def parse_args(self, ctx, args):
+        if args and args[0] not in self.commands and args[0] not in ("-h", "--help"):
+            # Route unknown commands (like paths) to 'run' implicitly
+            args.insert(0, "run")
+        return super().parse_args(ctx, args)
+
+
+@click.group(cls=DefaultGroup, invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
     """UI Testing Framework - Vision-Driven Automation"""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @cli.command()
@@ -209,7 +220,9 @@ def run(path, headless, verbose):
         automator = Automator(client, verbosity=reporter.verbosity)
 
         try:
-            with Live(reporter.get_renderable(), refresh_per_second=4, transient=False) as live:
+            with Live(
+                reporter.get_renderable(), refresh_per_second=4, transient=False, vertical_overflow="visible"
+            ) as live:
 
                 async def on_step_update(_):
                     live.update(reporter.get_renderable())

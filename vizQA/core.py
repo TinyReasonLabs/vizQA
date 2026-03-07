@@ -10,9 +10,9 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Browser, Page, async_playwright
 
-from .client import PerceptionClient
-from .memory import FailureType, StepStatus, TestSession, TestStep
-from .planner import StepPlanner
+from vizQA.client import PerceptionClient
+from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.planner import StepPlanner
 
 
 class Automator:
@@ -236,6 +236,9 @@ class Automator:
                 success = False
 
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
             step.failure_reason = str(e)

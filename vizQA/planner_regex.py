@@ -5,7 +5,7 @@ Planner module for decomposing high-level instructions into atomic steps.
 import re
 from typing import Any, Dict, List
 
-from .memory import StepStatus, TestStep
+from memory import StepStatus, TestStep
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods
