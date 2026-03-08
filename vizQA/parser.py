@@ -237,3 +237,49 @@ class SemanticParser:
         nodes.append(SemanticNode(type="DO", value=do_val))
 
         return nodes, target_str, action_verb
+
+    def parse_verify_intent(self, query: str) -> dict:
+        """Parses a verification query to extract specific intents like keyword, color, position, and state."""
+        intent = {
+            "keyword": None,
+            "color": None,
+            "position": None,
+            "state": None,
+            "subject": query
+        }
+        
+        # 1. Extract keyword (quotes)
+        quote_match = re.search(r"(['\"])(.*?)\1", query)
+        if quote_match:
+            intent["keyword"] = quote_match.group(2)
+            intent["subject"] = intent["subject"].replace(quote_match.group(0), "")
+            
+        # 2. Extract color (simple list)
+        lower_q = query.lower()
+        colors = ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
+        for c in colors:
+            if re.search(rf"\b{c}\b", lower_q):
+                intent["color"] = c
+                intent["subject"] = re.sub(rf"\b{c}\b", "", intent["subject"], flags=re.IGNORECASE)
+                break
+                
+        # 3. Extract position
+        pos_regex = r"\b(top left|top right|bottom left|bottom right|top|bottom|left|right|center|middle)\b"
+        pos_match = re.search(pos_regex, lower_q)
+        if pos_match:
+            intent["position"] = pos_match.group(1).replace(" ", "-")
+            intent["subject"] = re.sub(pos_regex, "", intent["subject"], flags=re.IGNORECASE)
+            
+        # 4. Extract state
+        states = ["disabled", "enabled", "checked", "unchecked", "visible", "invisible", "hidden", "displayed"]
+        for s in states:
+            if re.search(rf"\b{s}\b", lower_q):
+                intent["state"] = s
+                intent["subject"] = re.sub(rf"\b{s}\b", "", intent["subject"], flags=re.IGNORECASE)
+                break
+                
+        # Clean subject
+        intent["subject"] = re.sub(r"\b(should appear|should close|should occur|is|at the|in the|on the|the|a|an|located|aligned)\b", "", intent["subject"], flags=re.IGNORECASE)
+        intent["subject"] = re.sub(r'\s+', ' ', intent["subject"]).strip()
+        
+        return intent

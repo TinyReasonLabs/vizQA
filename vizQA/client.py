@@ -31,6 +31,6 @@ class PerceptionClient:
     async def search(self, session_id: str, query: str) -> Dict[str, Any]:
         """Perform a contextual search on an existing session."""
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{self.base_url}/v1/search", json={"session_id": session_id, "query": query})
+            response = await client.post(f"{self.base_url}/v1/search", json={"session_id": session_id, "query": query, "mode": "semantic"})
             response.raise_for_status()
             return response.json()

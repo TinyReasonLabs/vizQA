@@ -120,31 +120,50 @@ class ModernReporter:
 
     def print_failures(self):
         """Prints details of all failed steps to the console."""
+        # Find sessions with any failing top-level step
         failed_sessions = [s for s in self.sessions if any(step.status == StepStatus.FAILED for step in s.steps)]
         if not failed_sessions:
             return
 
         console.print("\n[bold red]" + "=" * 20 + " FAILURES " + "=" * 20 + "[/]")
         for session in failed_sessions:
-            for step in session.steps:
-                if step.status == StepStatus.FAILED:
-                    console.print(f"\n[bold red]FAILURE in {session.test_name} > {step.instruction}[/]")
-                    console.print(f"[dim]Type:[/] {step.failure_type}")
-                    console.print(f"[dim]Reason:[/] {step.failure_reason or step.error}")
-                    if step.screenshot_before:
-                        console.print(f"[dim]Before Screenshot:[/] {step.screenshot_before}")
-                    if step.screenshot_after:
-                        console.print(f"[dim]After Screenshot:[/] {step.screenshot_after}")
-                    if step.action_screenshot:
-                        console.print(f"[dim]Action Snapshot:[/] {step.action_screenshot}")
+            for top_step in session.steps:
+                if top_step.status == StepStatus.FAILED:
+                    
+                    # Find the deepest failed sub-step
+                    def _find_deepest_failed(step):
+                        for sub in step.sub_steps:
+                            if sub.status == StepStatus.FAILED:
+                                return _find_deepest_failed(sub)
+                        return step
+                    
+                    failed_step = _find_deepest_failed(top_step)
+                    
+                    console.print(f"\n[bold red]FAILURE in {session.test_name} > {top_step.instruction}[/]")
+                    if failed_step != top_step:
+                        console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
+                        
+                    if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
+                        console.print(f"  [dim]Type:[/] {failed_step.failure_type}")
+                        
+                    console.print(f"  [dim]Reason:[/] {failed_step.failure_reason or failed_step.error}")
+                    
+                    if failed_step.screenshot_before:
+                        console.print(f"  [dim]Before Screenshot:[/] {failed_step.screenshot_before}")
+                    if failed_step.screenshot_after:
+                        console.print(f"  [dim]After Screenshot:[/] {failed_step.screenshot_after}")
+                    if failed_step.action_screenshot:
+                        console.print(f"  [dim]Action Snapshot:[/] {failed_step.action_screenshot}")
 
-                    if self.verbosity >= 2 and step.perception_result:
-                        console.print("[dim]Perception Data (Truncated):[/]")
+                    if self.verbosity >= 2 and failed_step.perception_result:
+                        console.print("  [dim]Perception Data (Truncated):[/]")
                         import json
 
-                        perc_str = json.dumps(step.perception_result, indent=2).splitlines()
+                        perc_str = json.dumps(failed_step.perception_result, indent=2).splitlines()
                         if len(perc_str) > 20:
                             perc_str = perc_str[:20] + ["  ... (truncated)"]
+                        # Indent the perception string so it aligns
+                        perc_str = ["  " + line for line in perc_str]
                         console.print("\n".join(perc_str))
         console.print("[bold red]" + "=" * 50 + "[/]")
 

@@ -13,7 +13,8 @@ from playwright.async_api import Browser, Page, async_playwright
 from vizQA.client import PerceptionClient
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.planner import StepPlanner
-
+from vizQA.parser import SemanticParser
+from vizQA.minilm import MiniLM
 
 class Automator:
     """
@@ -27,6 +28,12 @@ class Automator:
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+
+        model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+        try:
+            self.minilm: Optional[MiniLM] = MiniLM(model_dir)
+        except (FileNotFoundError, RuntimeError):
+            self.minilm = None  # Gracefully degrade if model isn't present
 
     async def start(self):
         """Initializes the Playwright browser and page."""
@@ -161,26 +168,73 @@ class Automator:
 
                 elif instr.startswith("VERIFY:"):
                     query = instr.replace("VERIFY:", "").strip()
-                    # VERIFY requires a fresh screenshot
+                    # VERIFY requires a fresh screenshot after giving UI time to update
+                    await self.page.wait_for_timeout(1000)
+                    
                     path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
                     await self.page.screenshot(path=path, type="jpeg")
                     step.screenshot_after = path
 
-                    perception = await self.client.perceive(path, query=query)
+                    parser = SemanticParser()
+                    intent = parser.parse_verify_intent(query)
+
+                    perception = await self.client.perceive(path, query=intent.get("keyword") or intent.get("subject") or query)
                     step.perception_result = perception
 
                     match_found = False
-                    if perception.get("top_matches"):
+                    
+                    print("Verify processed intent", intent)
+
+                    filtered_elements = perception.get("elements", [])
+                    
+                    # if intent["keyword"]:
+                    kw = intent["keyword"] or intent["subject"] or query
+                    print("self.minilm", bool(self.minilm))
+                    if self.minilm:
+                        # Build candidate strings from element text/label/name
+                        candidates = [
+                            " ".join(filter(None, [
+                                el.get("text"), el.get("label"), el.get("name")
+                            ]))
+                            for el in filtered_elements
+                        ]
+                        print("candidates", candidates)
+                        matched_idxs = set(self.minilm.semantic_match(intent.get("keyword") or intent.get("subject") or query, candidates, threshold=0.7))
+                        filtered_elements = [el for i, el in enumerate(filtered_elements) if i in matched_idxs]
+                        print("filtered_elements", filtered_elements)
+                        # else:
+                        #     # Graceful fallback to substring
+                        #     q_kw = kw.lower()
+                        #     filtered_elements = [
+                        #         el for el in filtered_elements
+                        #         if q_kw in (el.get("text") or "").lower()
+                        #         or q_kw in (el.get("label") or "").lower()
+                        #         or q_kw in (el.get("name") or "").lower()
+                        #     ]
+
+                        
+                    if intent["color"]:
+                        c = intent["color"].lower()
+                        # Assuming the API will support 'color' or 'style' in the future
+                        color_filtered_elements = [
+                            el for el in filtered_elements
+                            if c in str(el.get("color", "")).lower() or c in str(el.get("style", "")).lower()
+                        ]
+                        filtered_elements = color_filtered_elements or filtered_elements
+                        
+                    if filtered_elements and (intent["keyword"] or intent["color"]):
                         match_found = True
-                    else:
-                        # Semantic fallback: check element text content
+                    elif perception.get("top_matches") and not intent["keyword"] and not intent["color"]:
+                        # Fallback to general semantic match if no strict filters were requested
+                        match_found = True
+                    elif not intent["keyword"] and not intent["color"]:
+                        # Absolute fallback: check element text content using raw query words
                         q = query.lower()
                         for el in perception.get("elements", []):
                             text = (el.get("text") or "").lower()
                             label = (el.get("label") or "").lower()
                             name = (el.get("name") or "").lower()
 
-                            # Check if query matches any descriptive field
                             if (q in text or q in label or q in name) or any(
                                 word in text or word in label or word in name for word in q.split() if len(word) > 3
                             ):

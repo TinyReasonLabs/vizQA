@@ -57,6 +57,37 @@ class MiniLM:
 
         return np.array(embeddings)  # shape: (num_anchors, 384)
 
+    def encode(self, text: str) -> np.ndarray:
+        """Embed a single string into a 384D vector (mean-pooled)."""
+        encoding = self.tokenizer.encode(text)
+        inputs = {"input_ids": [encoding.ids], "attention_mask": [encoding.attention_mask]}
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = [encoding.type_ids]
+        output = self.session.run(None, inputs)[0]  # (1, seq, 384)
+        return np.mean(output[0], axis=0)  # (384,)
+
+    def cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        """Returns cosine similarity between two 1D vectors."""
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(np.dot(a, b) / (norm_a * norm_b))
+
+    def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
+        """Returns indices of candidates whose similarity to query exceeds threshold."""
+        q_vec = self.encode(query)
+        matched = []
+        for i, cand in enumerate(candidates):
+            if not cand:
+                continue
+            c_vec = self.encode(cand)
+            sim = self.cosine_similarity(q_vec, c_vec)
+            if sim >= threshold:
+                matched.append(i)
+        return matched
+
+
     def predict(self, prompt: str) -> List[Dict[str, str]]:
         """
         Runs inference on the prompt and returns decomposed steps.
