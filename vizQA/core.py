@@ -6,15 +6,17 @@ Core execution engine for vision-driven UI automation.
 import asyncio
 import os
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from playwright.async_api import Browser, Page, async_playwright
 
 from vizQA.client import PerceptionClient
+from vizQA.logger import get_logger
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
-from vizQA.planner import StepPlanner
-from vizQA.parser import SemanticParser
 from vizQA.minilm import MiniLM
+from vizQA.parser import SemanticParser
+from vizQA.planner import StepPlanner
+
 
 class Automator:
     """
@@ -28,15 +30,24 @@ class Automator:
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self._logger = get_logger()
 
         model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
         try:
             self.minilm: Optional[MiniLM] = MiniLM(model_dir)
         except (FileNotFoundError, RuntimeError):
-            self.minilm = None  # Gracefully degrade if model isn't present
+            self.minilm = None
+            self._logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
+
+        # Single shared parser instance wired to the model
+        self.parser = SemanticParser(minilm=self.minilm)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def start(self):
-        """Initializes the Playwright browser and page."""
+        """Initialises the Playwright browser and page."""
         self.playwright_mgr = await async_playwright().start()
         self.browser = await self.playwright_mgr.chromium.launch(headless=True)
         self.page = await self.browser.new_page()
@@ -51,11 +62,16 @@ class Automator:
         if self.playwright_mgr:
             await self.playwright_mgr.stop()
 
+    # ------------------------------------------------------------------
+    # Session runner
+    # ------------------------------------------------------------------
+
     async def run_session(self, session: TestSession, on_step_update: Optional[Any] = None):
         """Main execution loop for a test session."""
         if not self.page:
             await self.start()
 
+        self._logger.log_session(session.id, "start", f"url={session.url!r}")
         await self.page.goto(session.url)
 
         failed = False
@@ -64,14 +80,18 @@ class Automator:
                 await self._skip_step_recursive(step, on_step_update)
                 continue
 
-            # Execute the main step and its sub-steps
             step_passed = await self._run_step_recursive(session, step, on_step_update)
             if not step_passed:
                 failed = True
 
         session.end_time = datetime.now()
+        self._logger.log_session(session.id, "end", f"duration={session.duration:.1f}s")
 
-    # pylint: disable=too-many-locals, too-many-branches, too-many-statements, too-many-nested-blocks, broad-exception-caught
+    # ------------------------------------------------------------------
+    # Step dispatcher
+    # ------------------------------------------------------------------
+
+    # pylint: disable=too-many-branches, broad-exception-caught
     async def _run_step_recursive(self, session: TestSession, step: TestStep, on_step_update: Optional[Any]) -> bool:
         """Executes a step and its sub-steps recursively."""
         step.status = StepStatus.RUNNING
@@ -83,188 +103,29 @@ class Automator:
 
         try:
             if not step.sub_steps:
-                # --- ATOMIC STEP EXECUTION ---
                 instr = step.instruction
-                test_slug = session.test_name.replace(" ", "_").replace(":", "_").lower()
 
                 if instr.startswith("FIND:"):
                     query = instr.replace("FIND:", "").strip()
-                    # 1. Capture Full-Page Screenshot for Perception
-                    path = f".vizQA/{test_slug}_{step.id}_before.jpg"
-                    await self.page.screenshot(path=path, type="jpeg")
-                    step.screenshot_before = path
-
-                    # 2. Perceive
-                    perception = await self.client.perceive(path, query=query)
-                    step.perception_result = perception
-
-                    # 3. Store match in session context
-                    target = None
-                    if perception.get("top_matches"):
-                        target = perception["top_matches"][0]
-                    elif perception.get("elements"):
-                        target = perception["elements"][0]
-
-                    if target:
-                        session.metadata["target"] = target
-                        session.metadata["last_perception"] = perception  # Cache for DO step
-                        step.status = StepStatus.PASSED
-                    else:
-                        step.status = StepStatus.FAILED
-                        step.failure_reason = self._get_failure_details("FIND", query, perception, "Element not found")
+                    success = await self._execute_find(session, step, query)
 
                 elif instr.startswith("DO:"):
                     action_cmd = instr.replace("DO:", "").strip()
-                    parts = action_cmd.split(" ", 1)
-                    action = parts[0]
-                    payload = parts[1] if len(parts) > 1 else ""
-
-                    target = session.metadata.get("target")
-                    if not target:
-                        step.status = StepStatus.FAILED
-                        step.failure_reason = "No target element found. FIND step must precede DO step."
-                    else:
-                        # 1. Capture Action Snapshot (Adaptive Crop)
-                        action_path = f".vizQA/{test_slug}_{step.id}_{action}.jpg"
-                        last_perc = session.metadata.get("last_perception", {})
-                        viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
-                        vw, vh = viewport.get("width", 1280), viewport.get("height", 720)
-
-                        # Get raw pixel coordinates
-                        px, py, pw, ph = 0, 0, 0, 0
-                        if "bounds" in target:
-                            # Assuming bounds are [x1, y1, x2, y2] in pixels
-                            x1, y1, x2, y2 = target["bounds"]
-                            px, py, pw, ph = x1, y1, x2 - x1, y2 - y1
-                        elif "location" in target:
-                            # Normalized [y, x, w, h]
-                            loc = target["location"]
-                            px = loc[1] * vw
-                            py = loc[0] * vh
-                            pw = loc[2] * vw
-                            ph = loc[3] * vh
-
-                        if pw > 0 and ph > 0:
-                            # 15% padding for width and height
-                            px_pad = pw * 0.15
-                            py_pad = ph * 0.15
-
-                            cx = max(0, px - px_pad)
-                            cy = max(0, py - py_pad)
-                            cw = min(vw - cx, pw + 2 * px_pad)
-                            ch = min(vh - cy, ph + 2 * py_pad)
-
-                            clip = {"x": cx, "y": cy, "width": cw, "height": ch}
-
-                            try:
-                                await self.page.screenshot(path=action_path, type="jpeg", clip=clip)
-                                step.action_screenshot = action_path
-                            except Exception:
-                                pass
-
-                        # 2. Execute Interaction
-                        await self._execute_interaction(action, px + pw / 2, py + ph / 2, payload)
-                        step.status = StepStatus.PASSED
+                    success = await self._execute_do(session, step, action_cmd)
 
                 elif instr.startswith("VERIFY:"):
                     query = instr.replace("VERIFY:", "").strip()
-                    # VERIFY requires a fresh screenshot after giving UI time to update
-                    await self.page.wait_for_timeout(1000)
-                    
-                    path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
-                    await self.page.screenshot(path=path, type="jpeg")
-                    step.screenshot_after = path
-
-                    parser = SemanticParser()
-                    intent = parser.parse_verify_intent(query)
-
-                    perception = await self.client.perceive(path, query=intent.get("keyword") or intent.get("subject") or query)
-                    step.perception_result = perception
-
-                    match_found = False
-                    
-                    print("Verify processed intent", intent)
-
-                    filtered_elements = perception.get("elements", [])
-                    
-                    # if intent["keyword"]:
-                    kw = intent["keyword"] or intent["subject"] or query
-                    print("self.minilm", bool(self.minilm))
-                    if self.minilm:
-                        # Build candidate strings from element text/label/name
-                        candidates = [
-                            " ".join(filter(None, [
-                                el.get("text"), el.get("label"), el.get("name")
-                            ]))
-                            for el in filtered_elements
-                        ]
-                        print("candidates", candidates)
-                        matched_idxs = set(self.minilm.semantic_match(intent.get("keyword") or intent.get("subject") or query, candidates, threshold=0.7))
-                        filtered_elements = [el for i, el in enumerate(filtered_elements) if i in matched_idxs]
-                        print("filtered_elements", filtered_elements)
-                        # else:
-                        #     # Graceful fallback to substring
-                        #     q_kw = kw.lower()
-                        #     filtered_elements = [
-                        #         el for el in filtered_elements
-                        #         if q_kw in (el.get("text") or "").lower()
-                        #         or q_kw in (el.get("label") or "").lower()
-                        #         or q_kw in (el.get("name") or "").lower()
-                        #     ]
-
-                        
-                    if intent["color"]:
-                        c = intent["color"].lower()
-                        # Assuming the API will support 'color' or 'style' in the future
-                        color_filtered_elements = [
-                            el for el in filtered_elements
-                            if c in str(el.get("color", "")).lower() or c in str(el.get("style", "")).lower()
-                        ]
-                        filtered_elements = color_filtered_elements or filtered_elements
-                        
-                    if filtered_elements and (intent["keyword"] or intent["color"]):
-                        match_found = True
-                    elif perception.get("top_matches") and not intent["keyword"] and not intent["color"]:
-                        # Fallback to general semantic match if no strict filters were requested
-                        match_found = True
-                    elif not intent["keyword"] and not intent["color"]:
-                        # Absolute fallback: check element text content using raw query words
-                        q = query.lower()
-                        for el in perception.get("elements", []):
-                            text = (el.get("text") or "").lower()
-                            label = (el.get("label") or "").lower()
-                            name = (el.get("name") or "").lower()
-
-                            if (q in text or q in label or q in name) or any(
-                                word in text or word in label or word in name for word in q.split() if len(word) > 3
-                            ):
-                                match_found = True
-                                break
-
-                    if match_found:
-                        step.status = StepStatus.PASSED
-                    else:
-                        step.status = StepStatus.FAILED
-                        step.failure_reason = self._get_failure_details(
-                            "VERIFY", query, perception, "Verification failed"
-                        )
+                    success = await self._execute_verify(session, step, query)
 
                 else:
-                    # Legacy execution for non-decomposed steps
-                    test_slug = session.test_name.replace(" ", "_").replace(":", "_").lower()
-                    before_path = f".vizQA/{test_slug}_{step.id}_before.jpg"
-                    await self.page.screenshot(path=before_path, type="jpeg")
-                    step.screenshot_before = before_path
-                    perception = await self.client.perceive(before_path, query=step.instruction)
-                    step.perception_result = perception
-                    await self._execute_action(session, step)
+                    # Legacy path for non-decomposed steps
+                    success = await self._execute_legacy(session, step)
 
-                    if step.expectation:
-                        step.status = await self._verify_expectation(session, step)
-                    else:
-                        step.status = StepStatus.PASSED
+                if step.status == StepStatus.FAILED:
+                    success = False
+
             else:
-                # --- CONTAINER STEP EXECUTION ---
+                # Container step — run sub-steps recursively
                 sub_failed = False
                 for sub_step in step.sub_steps:
                     if sub_failed:
@@ -274,86 +135,251 @@ class Automator:
                     if not await self._run_step_recursive(session, sub_step, on_step_update):
                         sub_failed = True
 
-                # Propagate failure details from child to parent
                 if sub_failed:
                     step.status = StepStatus.FAILED
-                    # Find the first failed sub-step to propagate reason
                     for sub_step in step.sub_steps:
                         if sub_step.status == StepStatus.FAILED:
                             step.failure_type = sub_step.failure_type
                             step.failure_reason = sub_step.failure_reason
                             break
+                    success = False
                 else:
                     step.status = StepStatus.PASSED
 
-            if step.status == StepStatus.FAILED:
-                success = False
-
-        except Exception as e:
-            import traceback
+        except Exception as exc:
+            import traceback  # pylint: disable=import-outside-toplevel
 
             traceback.print_exc()
+            self._logger.log_exception(step.id, exc)
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
-            step.failure_reason = str(e)
-            step.error = str(e)
+            step.failure_reason = str(exc)
+            step.error = str(exc)
             success = False
         finally:
             step.end_time = datetime.now()
+            self._logger.log_step(
+                step.id, instr.split(":")[0] if ":" in step.instruction else "STEP", step.status, step.failure_reason
+            )
             if on_step_update:
                 await on_step_update(step)
 
         return success
 
-    def _get_failure_details(self, stage: str, query: str, perception: Dict[str, Any], base_message: str) -> str:
-        """Generates a detailed failure reason based on verbosity and perception results."""
+    # ------------------------------------------------------------------
+    # Atomic step executors
+    # ------------------------------------------------------------------
+
+    async def _execute_find(self, session: TestSession, step: TestStep, query: str) -> bool:
+        """Handles a FIND: sub-step — perceives the page and stores the target."""
+        test_slug = _test_slug(session)
+        path = f".vizQA/{test_slug}_{step.id}_before.jpg"
+        await self.page.screenshot(path=path, type="jpeg")
+        step.screenshot_before = path
+
+        perception = await self.client.perceive(path, query=query)
+        step.perception_result = perception
+        self._logger.log_perception(step.id, query, perception)
+
+        target = None
+        if perception.get("top_matches"):
+            target = perception["top_matches"][0]
+        elif perception.get("elements"):
+            target = perception["elements"][0]
+
+        if target:
+            session.metadata["target"] = target
+            session.metadata["last_perception"] = perception
+            step.status = StepStatus.PASSED
+            return True
+
+        step.status = StepStatus.FAILED
+        step.failure_reason = self._failure_details("FIND", query, perception, "Element not found")
+        return False
+
+    async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
+        """Handles a DO: sub-step — resolves coords and fires the interaction."""
+        parts = action_cmd.split(" ", 1)
+        action = parts[0]
+        payload = parts[1] if len(parts) > 1 else ""
+
+        target = session.metadata.get("target")
+        if not target:
+            step.status = StepStatus.FAILED
+            step.failure_reason = "No target element found. FIND step must precede DO step."
+            return False
+
+        last_perc = session.metadata.get("last_perception", {})
+        viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
+        px, py, pw, ph = _resolve_coords(target, viewport)
+
+        # Capture adaptive-crop action snapshot
+        test_slug = _test_slug(session)
+        action_path = f".vizQA/{test_slug}_{step.id}_{action}.jpg"
+        vw = viewport.get("width", 1280)
+        vh = viewport.get("height", 720)
+
+        if pw > 0 and ph > 0:
+            px_pad = pw * 0.15
+            py_pad = ph * 0.15
+            cx = max(0, px - px_pad)
+            cy = max(0, py - py_pad)
+            cw = min(vw - cx, pw + 2 * px_pad)
+            ch = min(vh - cy, ph + 2 * py_pad)
+            try:
+                await self.page.screenshot(
+                    path=action_path, type="jpeg", clip={"x": cx, "y": cy, "width": cw, "height": ch}
+                )
+                step.action_screenshot = action_path
+            except Exception:  # pylint: disable=broad-exception-caught
+                # Fallback to full page screenshot if clipping fails
+                await self.page.screenshot(path=action_path, type="jpeg")
+                step.action_screenshot = action_path
+        else:
+            # No target, but we still want a screenshot of where we thought we'd act
+            await self.page.screenshot(path=action_path, type="jpeg")
+            step.action_screenshot = action_path
+
+        await self._execute_interaction(action, px + pw / 2, py + ph / 2, payload)
+        step.status = StepStatus.PASSED
+        return True
+
+    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 10) -> bool:
+        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
+        start_wait = datetime.now()
+        test_slug = _test_slug(session)
+
+        # Parse intent once at the beginning
+        intent = self.parser.parse_verify_intent(query)
+        self._logger.log_debug(step.id, f"verify intent={intent}")
+        # (The parser already prints a [DEBUG] message to the console)
+
+        perception_query = intent.get("keyword") or intent.get("subject") or query
+
+        while (datetime.now() - start_wait).total_seconds() < timeout:
+            path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
+            await self.page.screenshot(path=path, type="jpeg")
+            step.screenshot_after = path
+
+            perception = await self.client.perceive(path, query=perception_query)
+            step.perception_result = perception
+            all_elements = perception.get("elements", [])
+
+            match_found = False
+            if intent.get("negated"):
+                # Negation path — check element was present before, gone now
+                before_perc = session.metadata.get("last_perception", {})
+                before_elements = before_perc.get("elements", [])
+                match_found = self.parser.verify_negation(before_elements, all_elements, intent)
+            else:
+                filtered = self.parser.filter_elements_by_intent(intent, all_elements)
+
+                # Success criteria:
+                # 1. Intent markers (keyword/color/position) matched in filtered list
+                # 2. Or high-confidence top_match from the API
+                if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
+                    match_found = True
+                elif (
+                    perception.get("top_matches")
+                    and not intent.get("keyword")
+                    and not intent.get("color")
+                    and not intent.get("position")
+                ):
+                    match_found = True
+                elif not intent.get("keyword") and not intent.get("color") and not intent.get("position"):
+                    # Word-overlap fallback
+                    q = query.lower()
+                    for el in all_elements:
+                        text = (el.get("text") or "").lower()
+                        label = (el.get("label") or "").lower()
+                        name = (el.get("name") or "").lower()
+                        if (q in text or q in label or q in name) or any(
+                            word in text or word in label or word in name for word in q.split() if len(word) > 3
+                        ):
+                            match_found = True
+                            break
+
+            if match_found:
+                step.status = StepStatus.PASSED
+                return True
+
+            await asyncio.sleep(1.0)
+
+        step.status = StepStatus.FAILED
+        wait_time = (datetime.now() - start_wait).total_seconds()
+        step.failure_reason = self._failure_details(
+            "VERIFY", query, perception, f"Verification failed after {wait_time:.1f}s"
+        )
+        return False
+
+    async def _execute_legacy(self, session: TestSession, step: TestStep) -> bool:
+        """Legacy execution path for non-decomposed steps."""
+        test_slug = _test_slug(session)
+        before_path = f".vizQA/{test_slug}_{step.id}_before.jpg"
+        await self.page.screenshot(path=before_path, type="jpeg")
+        step.screenshot_before = before_path
+
+        perception = await self.client.perceive(before_path, query=step.instruction)
+        step.perception_result = perception
+        self._logger.log_perception(step.id, step.instruction, perception)
+
+        await self._execute_action(session, step)
+
+        if step.expectation:
+            step.status = await self._verify_expectation(session, step)
+        else:
+            step.status = StepStatus.PASSED
+
+        return step.status == StepStatus.PASSED
+
+    # ------------------------------------------------------------------
+    # Failure reporting
+    # ------------------------------------------------------------------
+
+    def _failure_details(self, stage: str, query: str, perception: Dict[str, Any], base_message: str) -> str:
+        """Generates a concise failure reason string for CLI display."""
         reason = f"{base_message} for query: '{query}'"
 
         if self.verbosity >= 1:
-            # Level 1: List detected elements to show context
             elements = perception.get("elements", [])
             if elements:
-                visible_texts = [el.get("text") for el in elements if el.get("text")]
-                visible_texts = list(set(visible_texts))[:10]  # Deduplicate and limit
+                visible_texts = list({el.get("text") for el in elements if el.get("text")})[:10]
                 if visible_texts:
                     reason += f"\n[Context] Elements visible on screen: {visible_texts}"
             else:
                 reason += "\n[Context] No readable elements detected on the page."
 
         if self.verbosity >= 2:
-            # Level 2: Comparison/Assertion details
             top_matches = perception.get("top_matches", [])
             if top_matches:
-                matches_info = []
-                for m in top_matches[:3]:
-                    text = m.get("text", "unnamed")
-                    sim = m.get("similarity", 0.0)
-                    matches_info.append(f"'{text}' (similarity: {sim:.2f})")
+                matches_info = [
+                    f"'{m.get('text', 'unnamed')}' (similarity: {m.get('similarity', 0.0):.2f})"
+                    for m in top_matches[:3]
+                ]
                 reason += f"\n[Detail] Top candidates: {', '.join(matches_info)}"
             elif perception.get("elements"):
-                # If no top_matches, maybe show why elements didn't match
                 reason += "\n[Detail] Semantic matching failed. No elements closely resembled the query."
 
         return reason
+
+    # ------------------------------------------------------------------
+    # Playwright interaction helpers
+    # ------------------------------------------------------------------
 
     async def _execute_interaction(self, action: str, x: float, y: float, payload: str):
         """Performs actual Playwright interactions at the specified pixel coordinates."""
         if action == "click":
             await self.page.mouse.click(x, y)
         elif "type" in action:
-            # Click first to focus
             await self.page.mouse.click(x, y)
-            # Clear field: Ctrl+A -> Backspace
             await self.page.keyboard.down("Control")
             await self.page.keyboard.press("a")
             await self.page.keyboard.up("Control")
             await self.page.keyboard.press("Backspace")
-            # Type new content
             await self.page.keyboard.type(payload)
         elif action == "hover":
             await self.page.mouse.move(x, y)
 
-        # Small wait for animation or state change
         await asyncio.sleep(0.5)
 
     async def _skip_step_recursive(self, step: TestStep, on_step_update: Optional[Any]):
@@ -366,11 +392,10 @@ class Automator:
 
     # pylint: disable=too-many-locals, broad-exception-caught
     async def _execute_action(self, session: TestSession, step: TestStep):
-        """Simulates finding an element and interacting with it."""
+        """Legacy: simulates finding an element and interacting with it."""
         action = self._parse_action(step.instruction)
-        test_slug = session.test_name.replace(" ", "_").replace(":", "_").lower()
+        test_slug = _test_slug(session)
 
-        # Try to get bounds from perception result
         clip = None
         if step.perception_result:
             result = step.perception_result
@@ -379,34 +404,29 @@ class Automator:
 
             if result.get("top_matches"):
                 match = result["top_matches"][0]
-                bounds = match.get("bounds")  # [x1, y1, x2, y2] in pixels
+                bounds = match.get("bounds")
                 if bounds:
                     x1, y1, x2, y2 = bounds
                     clip = {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1}
-
             elif result.get("elements"):
-                # Fallback to the most salient/first element if no top_matches
                 el = result["elements"][0]
-                loc = el.get("location")  # [nx, ny, nw, nh] normalized
+                loc = el.get("location")
                 if loc and len(loc) == 4:
                     nx, ny, nw, nh = loc
                     clip = {"x": nx * vw, "y": ny * vh, "width": nw * vw, "height": nh * vh}
 
         if clip:
-            # Capture action screenshot (cropped to element)
             action_path = f".vizQA/{test_slug}_{step.id}_{action}.jpg"
             try:
                 await self.page.screenshot(path=action_path, type="jpeg", clip=clip)
                 step.action_screenshot = action_path
             except Exception:
-                # Fallback if clip is out of bounds or other error
                 pass
 
-        # Simulate interaction
         await asyncio.sleep(0.5)
 
     def _parse_action(self, instruction: str) -> str:
-        """Heuristic to determine the action type from instruction."""
+        """Heuristic to determine the action type from an instruction string."""
         instr = instruction.lower()
         if "click" in instr or "tap" in instr:
             return "click"
@@ -420,19 +440,18 @@ class Automator:
 
     # pylint: disable=broad-exception-caught
     async def _verify_expectation(self, session: TestSession, step: TestStep, timeout: int = 10) -> StepStatus:
-        """Polls the Perception API until the expectation is met or timeout."""
+        """Polls the Perception API until the expectation is met or timed out."""
         start_wait = datetime.now()
-        test_slug = session.test_name.replace(" ", "_").lower()
+        test_slug = _test_slug(session)
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
-            # Capture snapshot for verification (Deterministic 'after' name)
             path = f".vizQA/{test_slug}_{step.id}_after.jpg"
             await self.page.screenshot(path=path, type="jpeg")
 
-            # Ask Perception API if expectation matches
             try:
                 result = await self.client.perceive(path, query=step.expectation)
-                # Success criteria: high salience or top matches found, or semantic match
+                self._logger.log_perception(step.id, step.expectation, result)
+
                 match_found = False
                 if result.get("top_matches") or result.get("salience", 0) > 0.7:
                     match_found = True
@@ -452,7 +471,6 @@ class Automator:
                     step.screenshot_after = path
                     return StepStatus.PASSED
             except Exception:
-                # Keep polling even if perception call fails briefly
                 pass
 
             await asyncio.sleep(1)
@@ -463,3 +481,36 @@ class Automator:
             reason += " (Timed out while polling Perception API)"
         step.failure_reason = reason
         return StepStatus.FAILED
+
+
+# ------------------------------------------------------------------
+# Module-level pure helpers
+# ------------------------------------------------------------------
+
+
+def _test_slug(session: TestSession) -> str:
+    """Returns a filesystem-safe slug for the test session."""
+    base = session.file_stem if session.file_stem else session.test_name
+    return base.replace(" ", "_").replace(":", "_").lower()
+
+
+def _resolve_coords(target: Dict[str, Any], viewport: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """
+    Extracts pixel coordinates from a perception target dict.
+
+    Returns ``(x, y, width, height)`` in pixels.  Returns ``(0, 0, 0, 0)``
+    when no usable coordinate data is found.
+    """
+    vw = viewport.get("width", 1280)
+    vh = viewport.get("height", 720)
+
+    if "bounds" in target:
+        x1, y1, x2, y2 = target["bounds"]
+        return float(x1), float(y1), float(x2 - x1), float(y2 - y1)
+
+    if "location" in target:
+        loc = target["location"]
+        # Normalised [y, x, w, h] convention from the perception API
+        return float(loc[1] * vw), float(loc[0] * vh), float(loc[2] * vw), float(loc[3] * vh)
+
+    return 0.0, 0.0, 0.0, 0.0

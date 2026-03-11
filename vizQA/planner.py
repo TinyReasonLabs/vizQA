@@ -15,9 +15,21 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     """
 
     def __init__(self, model_name: str = "minilm"):
-        # model_name is kept for backwards compatibility but we now use the AST parser
-        self.model_name = "ast_parser"
+        self.model_name = model_name
         self.parser = SemanticParser()
+
+        # Load MiniLM if possible
+        self.minilm = None
+        if model_name == "minilm":
+            model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+            try:
+                from vizQA.minilm import MiniLM
+
+                self.minilm = MiniLM(model_dir)
+                # Synergize with parser
+                self.parser.minilm = self.minilm
+            except (FileNotFoundError, RuntimeError, ImportError):
+                pass
 
     def decompose(self, raw_steps: List[Dict[str, Any]]) -> List[TestStep]:
         """
@@ -37,7 +49,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
             refined_steps.append(
                 TestStep(
-                    id=f"step_{i}",
+                    id=f"step_{i:02d}",
                     instruction=instruction,
                     expectation=expectation,
                     status=StepStatus.PENDING,
@@ -47,14 +59,18 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
         return refined_steps
 
     def _decompose_instruction(self, instruction: str, parent_idx: int) -> List[TestStep]:
-        """Uses SemanticParser to break down a high-level instruction into FIND and DO atoms."""
+        """Uses SemanticParser or MiniLM to break down a high-level instruction."""
         try:
-            nodes = self.parser.parse(instruction)
-            # Filter to only FIND and DO. If a user mixed verify here, we drop or keep it?
-            # The parser handles -> so we just take all nodes
-            dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
+            if self.model_name == "minilm" and self.minilm:
+                dict_steps = self.minilm.predict(instruction)
+            else:
+                nodes = self.parser.parse(instruction)
+                dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
+
             return self._to_test_steps(dict_steps, parent_idx, "instr")
         except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise
             raise RuntimeError(f"Semantic decomposition failed for instruction '{instruction}': {e}") from e
 
     def _decompose_expectation(self, expectation: str, parent_idx: int) -> List[TestStep]:
@@ -79,5 +95,6 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             if step_type not in ("FIND", "DO", "VERIFY"):
                 raise ValueError(f"Invalid step type from model: {step_type}")
 
-            test_steps.append(TestStep(id=f"step_{parent_idx}_{prefix}_{j}", instruction=f"{step_type}: {value}"))
+            p_idx = parent_idx if parent_idx is not None else 0
+            test_steps.append(TestStep(id=f"step_{p_idx:02d}.{(j+1):02d}", instruction=f"{step_type}: {value}"))
         return test_steps

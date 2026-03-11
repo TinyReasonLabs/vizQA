@@ -3,6 +3,7 @@ Command-line interface for the UI testing framework.
 """
 
 import asyncio
+import shutil
 import traceback
 import uuid
 from pathlib import Path
@@ -11,23 +12,203 @@ from typing import Any, List, Optional
 import click
 import yaml
 from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.text import Text
 from rich.tree import Tree
 
 from vizQA.client import PerceptionClient
 from vizQA.core import Automator
+from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestSession, TestStep
 from vizQA.planner import StepPlanner
 
-console = Console()
+console = Console(highlight=False)
+
+# ---------------------------------------------------------------------------
+# Status icon / color helpers
+# ---------------------------------------------------------------------------
+
+_STATUS_ICON = {
+    StepStatus.RUNNING: ("▶", "yellow"),
+    StepStatus.PASSED: ("✔", "green"),
+    StepStatus.FAILED: ("✘", "red"),
+    StepStatus.SKIPPED: ("○", "dim"),
+    StepStatus.PENDING: ("○", "white"),
+}
+
+
+def _step_prefix(instr: str) -> Text:
+    """Returns a coloured prefix Text for a step instruction string."""
+    if instr.startswith("FIND:"):
+        return Text.assemble(("FIND ", "bold cyan"), (instr[5:].strip(), "white"))
+    if instr.startswith("DO:"):
+        return Text.assemble(("DO ", "bold magenta"), (instr[3:].strip(), "white"))
+    if instr.startswith("VERIFY:"):
+        return Text.assemble(("VERIFY ", "bold green"), (instr[7:].strip(), "white"))
+    return Text(instr, "white")
+
+
+# ---------------------------------------------------------------------------
+# Progressive renderer
+# ---------------------------------------------------------------------------
+
+
+class ProgressiveReporter:
+    """
+    Prints each step to the console as it completes, one line at a time.
+    Uses rich.Live to allow in-place updates for parent steps.
+    """
+
+    def __init__(self, verbosity: int = 0):
+        self.verbosity = verbosity
+        self.sessions: List[TestSession] = []
+        self._total_sub_steps = 0
+        self._completed_sub_steps = 0
+        self._live: Optional[rich.live.Live] = None
+        self._renderable_lines: List[Any] = []
+        self._parent_map: Dict[str, int] = {}  # maps step.id to line index
+
+    def register_session(self, session: TestSession) -> None:
+        """Register a session so the reporter can count total sub-steps."""
+        self.sessions.append(session)
+        for step in session.steps:
+            self._total_sub_steps += self._count_atomic(step)
+
+    def _count_atomic(self, step: TestStep) -> int:
+        if step.sub_steps:
+            return sum(self._count_atomic(s) for s in step.sub_steps)
+        return 1
+
+    def _remaining(self) -> int:
+        return max(0, self._total_sub_steps - self._completed_sub_steps)
+
+    def _get_footer(self) -> Text:
+        remaining = self._remaining()
+        if remaining > 0:
+            return Text(f"  ▶ {remaining} step{'s' if remaining != 1 else ''} remaining", style="dim")
+        return Text("")
+
+    def _update_live(self):
+        if not self._live:
+            from rich.console import Group
+            from rich.live import Live
+
+            self._live = Live(
+                Group(*self._get_visible_lines(), self._get_footer()),
+                console=console,
+                refresh_per_second=4,
+                transient=False,
+            )
+            self._live.start()
+        else:
+            from rich.console import Group
+
+            self._live.update(Group(*self._get_visible_lines(), self._get_footer()))
+
+    def _get_visible_lines(self) -> List[Any]:
+        """Returns a subset of lines if they exceed terminal height to simulate scrolling."""
+        term_height = shutil.get_terminal_size().lines
+        # Reserve ~4 lines for header, footer, and padding
+        max_lines = max(5, term_height - 6)
+
+        if len(self._renderable_lines) > max_lines:
+            return self._renderable_lines[-max_lines:]
+        return self._renderable_lines
+
+    def on_step_done(self, step: TestStep, depth: int = 0) -> None:
+        """Called when an atomic step finishes."""
+        if step.status == StepStatus.RUNNING or step.status == StepStatus.PENDING:
+            return
+
+        self._completed_sub_steps += 1
+        icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
+        indent = "  " * depth
+        prefix_text = _step_prefix(step.instruction)
+
+        line = Text()
+        line.append(f"{indent}{icon} ", style=color)
+        line.append_text(prefix_text)
+        if step.expectation:
+            line.append(f" → {step.expectation}", style="dim")
+
+        if self.verbosity >= 1 and step.status == StepStatus.FAILED and step.failure_reason:
+            line.append(f"\n{indent}  ↳ {step.failure_reason}", style="red dim")
+
+        self._renderable_lines.append(line)
+        self._update_live()
+
+    def on_parent_step_start(self, step: TestStep) -> None:
+        """Called when a container step starts."""
+        line = Text()
+        line.append("● ", style="white")
+        line.append(step.instruction, style="bold white")
+        if step.expectation:
+            line.append(f" → {step.expectation}", style="dim")
+
+        self._parent_map[step.id] = len(self._renderable_lines)
+        self._renderable_lines.append(line)
+        self._update_live()
+
+    def on_parent_step_done(self, step: TestStep) -> None:
+        """Called when a container step finishes — updates its line color in-place."""
+        if step.id in self._parent_map:
+            idx = self._parent_map[step.id]
+            icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
+
+            line = Text()
+            line.append("● ", style=color)
+            line.append(step.instruction, style=f"bold {color}")
+            if step.expectation:
+                line.append(f" → {step.expectation}", style=f"bold {color}")
+
+            self._renderable_lines[idx] = line
+            self._update_live()
+
+    def finalize(self) -> None:
+        """Stops the Live display and clears any trailing footer."""
+        if self._live:
+            self._live.stop()
+            self._live = None
+
+    def print_failures(self) -> None:
+        """Prints detailed failure block after all sessions complete."""
+        failed_sessions = [s for s in self.sessions if any(st.status == StepStatus.FAILED for st in s.steps)]
+        if not failed_sessions:
+            return
+
+        console.print("\n[bold red]" + "=" * 20 + " FAILURES " + "=" * 20 + "[/]")
+        for session in failed_sessions:
+            for top_step in session.steps:
+                if top_step.status == StepStatus.FAILED:
+                    failed_step = _deepest_failed(top_step)
+
+                    console.print(f"\n[bold red]FAILURE in {session.test_name} › {top_step.instruction}[/]")
+                    if failed_step != top_step:
+                        console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
+
+                    if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
+                        console.print(f"  [dim]Type:[/] {failed_step.failure_type}")
+
+                    console.print(f"  [dim]Reason:[/] {failed_step.failure_reason or failed_step.error}")
+
+                    if failed_step.screenshot_before:
+                        console.print(f"  [dim]Before screenshot:[/] {failed_step.screenshot_before}")
+                    if failed_step.screenshot_after:
+                        console.print(f"  [dim]After screenshot:[/] {failed_step.screenshot_after}")
+                    if failed_step.action_screenshot:
+                        console.print(f"  [dim]Action snapshot:[/] {failed_step.action_screenshot}")
+
+        console.print("[bold red]" + "=" * 50 + "[/]")
+
+
+# ---------------------------------------------------------------------------
+# Shared render tree (kept for potential future use / --report flag)
+# ---------------------------------------------------------------------------
 
 
 class ModernReporter:
     """
-    Handles pretty printing of test execution results to the console.
+    Hierarchical Rich Tree reporter (not used in the default run path; kept as
+    an alternative for batch report generation).
     """
 
     def __init__(self, verbosity: int = 0):
@@ -46,132 +227,43 @@ class ModernReporter:
 
             if self.verbosity >= 1:
                 for step in session.steps:
-                    self._add_step_node(session_node, step)
+                    _add_step_node(session_node, step, self.verbosity)
 
         return root
 
-    def _add_step_node(self, parent_node: Tree, step: TestStep):
-        """Helper to recursively add step nodes to the tree."""
-        icon = "○"
-        color = "white"
-        if step.status == StepStatus.RUNNING:
-            icon = "▶"
-            color = "yellow"
-        elif step.status == StepStatus.PASSED:
-            icon = "✔"
-            color = "green"
-        elif step.status == StepStatus.FAILED:
-            icon = "✘"
-            color = "red"
-        elif step.status == StepStatus.SKIPPED:
-            icon = "○"
-            color = "dim"
 
-        instr = step.instruction
-        if instr.startswith("FIND:"):
-            instr_text = Text.assemble(("FIND: ", "bold cyan"), (instr.replace("FIND:", "").strip(), "white"))
-        elif instr.startswith("DO:"):
-            instr_text = Text.assemble(("DO: ", "bold magenta"), (instr.replace("DO:", "").strip(), "white"))
-        elif instr.startswith("VERIFY:"):
-            instr_text = Text.assemble(("VERIFY: ", "bold green"), (instr.replace("VERIFY:", "").strip(), "white"))
-        else:
-            instr_text = Text(instr, "white")
-
-        step_text = Text.assemble(
-            (f"{icon} ", color), instr_text, (f" -> {step.expectation}" if step.expectation else "", "dim")
-        )
-
-        if step.action_screenshot and self.verbosity >= 1:
-            step_text.append(f" [dim][Action Snapshot: {Path(step.action_screenshot).name}][/]")
-
-        step_node = parent_node.add(step_text)
-
-        if self.verbosity >= 2 and step.perception_result:
-            # Adding perception data as a JSON snippet under the step
-            perception_data = step.perception_result
-
-            # Request context
-            request_info = {
-                "request": {
-                    "image": step.screenshot_before or step.screenshot_after or step.action_screenshot,
-                    "query": step.instruction.replace("FIND:", "").replace("VERIFY:", "").strip(),
-                }
-            }
-
-            # Merge or display request info first
-            full_view = {**request_info, "response": perception_data}
-
-            dumped = yaml.dump(full_view, default_flow_style=False).splitlines()
-            if len(dumped) > 20:
-                dumped = dumped[:20] + ["... (truncated for brevity)"]
-
-            perception_text = Syntax(
-                "\n".join(dumped),
-                "yaml",
-                theme="monokai",
-                line_numbers=False,
-                word_wrap=True,
-            )
-            step_node.add(Panel(perception_text, title="Perception Details (v2)", border_style="dim"))
-
-        # Recursively add sub-steps
-        for sub_step in step.sub_steps:
-            self._add_step_node(step_node, sub_step)
-
-    def print_failures(self):
-        """Prints details of all failed steps to the console."""
-        # Find sessions with any failing top-level step
-        failed_sessions = [s for s in self.sessions if any(step.status == StepStatus.FAILED for step in s.steps)]
-        if not failed_sessions:
-            return
-
-        console.print("\n[bold red]" + "=" * 20 + " FAILURES " + "=" * 20 + "[/]")
-        for session in failed_sessions:
-            for top_step in session.steps:
-                if top_step.status == StepStatus.FAILED:
-                    
-                    # Find the deepest failed sub-step
-                    def _find_deepest_failed(step):
-                        for sub in step.sub_steps:
-                            if sub.status == StepStatus.FAILED:
-                                return _find_deepest_failed(sub)
-                        return step
-                    
-                    failed_step = _find_deepest_failed(top_step)
-                    
-                    console.print(f"\n[bold red]FAILURE in {session.test_name} > {top_step.instruction}[/]")
-                    if failed_step != top_step:
-                        console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
-                        
-                    if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
-                        console.print(f"  [dim]Type:[/] {failed_step.failure_type}")
-                        
-                    console.print(f"  [dim]Reason:[/] {failed_step.failure_reason or failed_step.error}")
-                    
-                    if failed_step.screenshot_before:
-                        console.print(f"  [dim]Before Screenshot:[/] {failed_step.screenshot_before}")
-                    if failed_step.screenshot_after:
-                        console.print(f"  [dim]After Screenshot:[/] {failed_step.screenshot_after}")
-                    if failed_step.action_screenshot:
-                        console.print(f"  [dim]Action Snapshot:[/] {failed_step.action_screenshot}")
-
-                    if self.verbosity >= 2 and failed_step.perception_result:
-                        console.print("  [dim]Perception Data (Truncated):[/]")
-                        import json
-
-                        perc_str = json.dumps(failed_step.perception_result, indent=2).splitlines()
-                        if len(perc_str) > 20:
-                            perc_str = perc_str[:20] + ["  ... (truncated)"]
-                        # Indent the perception string so it aligns
-                        perc_str = ["  " + line for line in perc_str]
-                        console.print("\n".join(perc_str))
-        console.print("[bold red]" + "=" * 50 + "[/]")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-reporter = ModernReporter()
+def _deepest_failed(step: TestStep) -> TestStep:
+    for sub in step.sub_steps:
+        if sub.status == StepStatus.FAILED:
+            return _deepest_failed(sub)
+    return step
 
 
-async def run_single_test(test_path: Path, automator: Automator, on_step_update: Optional[Any] = None):
+def _add_step_node(parent_node: Tree, step: TestStep, verbosity: int):
+    icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
+    instr_text = _step_prefix(step.instruction)
+    step_text = Text.assemble((f"{icon} ", color), instr_text)
+    step_node = parent_node.add(step_text)
+    for sub_step in step.sub_steps:
+        _add_step_node(step_node, sub_step, verbosity)
+
+
+# ---------------------------------------------------------------------------
+# Session runner
+# ---------------------------------------------------------------------------
+
+
+async def run_single_test(
+    test_path: Path,
+    automator: Automator,
+    reporter: ProgressiveReporter,
+    on_step_update: Optional[Any] = None,
+):
     """Runs a single test file and updates the reporter."""
     try:
         test_data = yaml.safe_load(test_path.read_text())
@@ -185,18 +277,28 @@ async def run_single_test(test_path: Path, automator: Automator, on_step_update:
     session = TestSession(
         id=str(uuid.uuid4())[:8],
         test_name=test_data.get("name", test_path.stem),
+        file_stem=test_path.stem,
         url=test_data.get("url", ""),
         steps=steps,
     )
-    reporter.sessions.append(session)
+    reporter.register_session(session)
+
+    # Print session header
+    console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
 
     await automator.run_session(session, on_step_update=on_step_update)
 
 
+# ---------------------------------------------------------------------------
+# CLI plumbing
+# ---------------------------------------------------------------------------
+
+
 class DefaultGroup(click.Group):
+    """Routes bare paths to the 'run' sub-command automatically."""
+
     def parse_args(self, ctx, args):
         if args and args[0] not in self.commands and args[0] not in ("-h", "--help"):
-            # Route unknown commands (like paths) to 'run' implicitly
             args.insert(0, "run")
         return super().parse_args(ctx, args)
 
@@ -212,7 +314,7 @@ def cli(ctx):
 @cli.command()
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--headless", is_flag=True, default=True, help="Run browser in headless mode")
-@click.option("-v", "--verbose", count=True, help="Verbosity level (-v for steps, -vv for perception data)")
+@click.option("-v", "--verbose", count=True, help="Verbosity (-v steps, -vv timing/detail)")
 def run(path, headless, verbose):
     """
     Run UI tests from a file or directory.
@@ -221,9 +323,8 @@ def run(path, headless, verbose):
     :param headless: Whether to run the browser in headless mode.
     :param verbose: Verbosity level for output.
     """
-    reporter.verbosity = verbose
+    reporter = ProgressiveReporter(verbosity=verbose)
     target_path = Path(path)
-    test_files = []
 
     if target_path.is_file():
         test_files = [target_path]
@@ -235,31 +336,39 @@ def run(path, headless, verbose):
         return
 
     async def main():
-        client = PerceptionClient()  # Defaults to localhost:8000
-        automator = Automator(client, verbosity=reporter.verbosity)
+        client = PerceptionClient()
+        automator = Automator(client, verbosity=verbose)
+        logger = get_logger()
 
         try:
-            with Live(
-                reporter.get_renderable(), refresh_per_second=4, transient=False, vertical_overflow="visible"
-            ) as live:
+            await automator.start()
 
-                async def on_step_update(_):
-                    live.update(reporter.get_renderable())
+            for test_file in test_files:
 
-                await automator.start()
-                try:
-                    for test_file in test_files:
-                        await run_single_test(test_file, automator, on_step_update=on_step_update)
-                        live.update(reporter.get_renderable())
-                finally:
-                    await automator.stop()
-        except Exception as err:
+                async def on_step_update(step: TestStep):
+                    """Called by core after every status change."""
+                    if step.sub_steps:
+                        # Container step
+                        if step.status == StepStatus.RUNNING:
+                            reporter.on_parent_step_start(step)
+                        elif step.status not in (StepStatus.RUNNING, StepStatus.PENDING):
+                            reporter.on_parent_step_done(step)
+                    else:
+                        reporter.on_step_done(step, depth=1)
+
+                await run_single_test(test_file, automator, reporter, on_step_update=on_step_update)
+
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            reporter.finalize()
             console.print(f"[red]Error during execution: {err}[/]")
             traceback.print_exc()
+        finally:
+            reporter.finalize()
+            await automator.stop()
 
         reporter.print_failures()
 
-        # Final Summary
+        # Summary line
         total = len(reporter.sessions)
         passed = sum(1 for s in reporter.sessions if all(st.status == StepStatus.PASSED for st in s.steps))
         failed = total - passed
@@ -269,9 +378,10 @@ def run(path, headless, verbose):
             (f"{passed} passed", "green") if passed else "",
             (", " if passed and failed else ""),
             (f"{failed} failed", "red") if failed else "",
-            (f" in {total} tests", "dim"),
+            (f" in {total} test{'s' if total != 1 else ''}", "dim"),
         )
         console.print(summary)
+        console.print(f"[dim]Full log: {logger.log_path}[/]")
 
     asyncio.run(main())
 

@@ -12,13 +12,13 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
     def test_get_failure_details_v0(self):
         self.automator.verbosity = 0
         perception = {"elements": [{"text": "Login"}], "top_matches": []}
-        reason = self.automator._get_failure_details("VERIFY", "Submit", perception, "Verification failed")
+        reason = self.automator._failure_details("VERIFY", "Submit", perception, "Verification failed")
         self.assertEqual(reason, "Verification failed for query: 'Submit'")
 
     def test_get_failure_details_v1(self):
         self.automator.verbosity = 1
         perception = {"elements": [{"text": "Login"}, {"text": "Cancel"}], "top_matches": []}
-        reason = self.automator._get_failure_details("VERIFY", "Submit", perception, "Verification failed")
+        reason = self.automator._failure_details("VERIFY", "Submit", perception, "Verification failed")
         self.assertIn("Elements visible on screen:", reason)
         self.assertIn("'Login'", reason)
         self.assertIn("'Cancel'", reason)
@@ -56,5 +56,5 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
     def test_get_failure_details_v2(self):
         self.automator.verbosity = 2
         perception = {"elements": [{"text": "Login"}], "top_matches": [{"text": "Subtitle", "similarity": 0.45}]}
-        reason = self.automator._get_failure_details("VERIFY", "Submit", perception, "Verification failed")
+        reason = self.automator._failure_details("VERIFY", "Submit", perception, "Verification failed")
         self.assertIn("Top candidates: 'Subtitle' (similarity: 0.45)", reason)

@@ -73,6 +73,7 @@ class TestSession(BaseModel):
 
     id: str
     test_name: str
+    file_stem: Optional[str] = None
     url: str
     steps: List[TestStep] = []
     start_time: datetime = Field(default_factory=datetime.now)

@@ -2,9 +2,8 @@
 ONNX inference module for MiniLM model.
 """
 
-import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import onnxruntime as ort
@@ -13,8 +12,49 @@ from tokenizers import Tokenizer
 
 class MiniLM:
     """
-    Handles MiniLM ONNX inference for semantic step decomposition.
+    Handles MiniLM ONNX inference for semantic similarity and intent classification.
     """
+
+    # Anchor word lists — used to build pre-computed embedding groups
+    _COLOR_ANCHORS = ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray"]
+    _STATE_ANCHORS = ["disabled", "enabled", "visible", "invisible", "hidden", "checked", "unchecked", "active"]
+    _POSITION_ANCHORS = [
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "center",
+        "middle",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    ]
+    _NEGATION_ANCHORS = [
+        "the element should disappear",
+        "the element is gone",
+        "the element is no longer present",
+        "the element vanished",
+        "the element is hidden",
+        "the element was removed",
+        "the element is absent",
+        "the element is not visible",
+        "the element is done",
+        "the spinner is done",
+        "the loading is finished",
+        "the modal is closed",
+    ]
+    _POSITIVE_ANCHORS = [
+        "the element should appear",
+        "the element is visible",
+        "the element is present",
+        "the element shows up",
+        "the element is active",
+        "the element exists",
+        "the element is displayed",
+        "the element is running",
+        "the button appeared",
+    ]
 
     def __init__(self, model_dir: str):
         self.model_path = os.path.join(model_dir, "model.onnx")
@@ -32,7 +72,7 @@ class MiniLM:
         self.session = ort.InferenceSession(self.model_path)
         self.input_names = [i.name for i in self.session.get_inputs()]
 
-        # Pre-compute semantic anchors
+        # Pre-compute semantic anchors for step decomposition
         self._action_anchors = self._compute_anchor_embeddings(
             ["click", "type", "enter", "press", "hover", "verify", "check", "ensure", "assert"]
         )
@@ -40,6 +80,15 @@ class MiniLM:
             ["button", "field", "input", "link", "icon", "text", "element", "box", "modal", "toast", "alert", "menu"]
         )
         self._conjunction_anchors = self._compute_anchor_embeddings(["and", "then", "after", "next", ",", "also"])
+
+        # Pre-compute intent classification anchor groups
+        self._intent_anchor_groups: Dict[str, np.ndarray] = {
+            "color": self._compute_anchor_embeddings(self._COLOR_ANCHORS),
+            "state": self._compute_anchor_embeddings(self._STATE_ANCHORS),
+            "position": self._compute_anchor_embeddings(self._POSITION_ANCHORS),
+            "negation": self._compute_anchor_embeddings(self._NEGATION_ANCHORS),
+            "positive": self._compute_anchor_embeddings(self._POSITIVE_ANCHORS),
+        }
 
     def _compute_anchor_embeddings(self, anchors: List[str]) -> np.ndarray:
         """Runs the anchor words through the model to get their 384D representations."""
@@ -74,6 +123,59 @@ class MiniLM:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
+    def best_anchor_similarity(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
+        """Returns the highest cosine similarity between vec and any row in anchor_matrix."""
+        norms_a = np.linalg.norm(anchor_matrix, axis=-1, keepdims=True)
+        norms_a = np.where(norms_a == 0, 1e-10, norms_a)
+        norm_v = np.linalg.norm(vec)
+        if norm_v == 0:
+            return 0.0
+        sims = np.dot(anchor_matrix / norms_a, vec / norm_v)
+        return float(np.max(sims))
+
+    def classify_anchor_group(
+        self,
+        text: str,
+        groups: Optional[Dict[str, np.ndarray]] = None,
+        threshold: float = 0.50,
+    ) -> Optional[str]:
+        """
+        Classifies text into one of the named anchor groups by cosine similarity.
+
+        Returns the name of the best-matching group if its similarity exceeds *threshold*,
+        otherwise returns None.  Uses the pre-computed intent anchor groups when *groups*
+        is not provided.
+        """
+        if groups is None:
+            groups = self._intent_anchor_groups
+
+        vec = self.encode(text)
+        best_group: Optional[str] = None
+        best_sim = -1.0
+
+        for group_name, anchor_matrix in groups.items():
+            sim = self.best_anchor_similarity(vec, anchor_matrix)
+            if sim > best_sim:
+                best_sim = sim
+                best_group = group_name
+
+        if best_sim >= threshold:
+            return best_group
+        return None
+
+    def is_negation(self, text: str, threshold: float = 0.45) -> bool:
+        """
+        Returns True if *text* semantically resembles a negation intent.
+
+        This compares similarity against negation anchors and ensures the
+        negation match is stronger than the positive match to avoid false positives.
+        """
+        vec = self.encode(text)
+        sim_neg = self.best_anchor_similarity(vec, self._intent_anchor_groups["negation"])
+        sim_pos = self.best_anchor_similarity(vec, self._intent_anchor_groups["positive"])
+
+        return sim_neg >= threshold and sim_neg > sim_pos
+
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
         q_vec = self.encode(query)
@@ -87,56 +189,45 @@ class MiniLM:
                 matched.append(i)
         return matched
 
+    def rank_candidates(self, query: str, candidates: List[str], threshold: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Returns all candidates with their similarity score, sorted descending.
+        Only candidates at or above *threshold* are included.
+
+        Each entry is ``{"index": int, "text": str, "score": float}``.
+        """
+        q_vec = self.encode(query)
+        results = []
+        for i, cand in enumerate(candidates):
+            if not cand:
+                continue
+            c_vec = self.encode(cand)
+            sim = self.cosine_similarity(q_vec, c_vec)
+            if sim >= threshold:
+                results.append({"index": i, "text": cand, "score": sim})
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results
+
+    # ------------------------------------------------------------------
+    # Low-level / generative path (kept for completeness, not primary path)
+    # ------------------------------------------------------------------
 
     def predict(self, prompt: str) -> List[Dict[str, str]]:
         """
         Runs inference on the prompt and returns decomposed steps.
         Expected output format: [{"type": "FIND", "value": "..."}, ...]
         """
-        # Encode prompt
+        import json  # pylint: disable=import-outside-toplevel
+
         encoding = self.tokenizer.encode(prompt)
         input_ids = encoding.ids
         attention_mask = encoding.attention_mask
 
-        # Prepare inputs for ONNX
         inputs = {"input_ids": [input_ids], "attention_mask": [attention_mask]}
-
-        # Only include token_type_ids if required by the model
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = [encoding.type_ids]
 
-        # Run inference
         outputs = self.session.run(None, inputs)
-
-        # Assuming the model returns logits or direct scores that need parsing.
-        # For a "production ready" step planner, we might be using a seq2seq or
-        # a classification model that outputs a specific structure.
-        # Given the instruction "deserialization is solid", I'll implement
-        # a mock-like parser assuming the model output is token-based or similar,
-        # but in a real scenario, this would be model-specific.
-
-        # Since I don't have the exact model architecture's output head details,
-        # I'll implement the logic to parse a JSON-like string if the model is
-        # trained for that, or a structured sequence.
-
-        # For the sake of this task, I'll assume the model outputs or is expected
-        # to generate a sequence that can be parsed into FIND/DO/VERIFY atoms.
-
-        # Let's assume the model returns a sequence of tokens that represent the JSON.
-        # (This is a common pattern for small SLMs/Embeddings used for structured tasks).
-
-        # If the model is an embedding model (like MiniLM-L6-v2 usually is),
-        # it might be used for similarity search instead of direct generation.
-        # However, the user said "instructions to the model are concise... and that the deserialization is solid".
-        # This implies a generative or structured output.
-
-        # Given "MiniLM", it's usually an encoder. If it's being used as a planner,
-        # it might be a fine-tuned version for step decomposition.
-
-        # I'll implement a robust "deserializer" that expects a certain format
-        # from the model's output (represented here as a result from the inference session).
-
-        # For now, I'll simulate the "solid deserialization" with an exception if it fails.
         result = self._parse_outputs(outputs, prompt)
 
         if not isinstance(result, list):
@@ -153,30 +244,22 @@ class MiniLM:
         Parses raw ONNX outputs into structured steps.
         Handles both generative models (logits/token IDs) and encoder models (embeddings).
         """
+        import json  # pylint: disable=import-outside-toplevel
+
         try:
             output_tensor = outputs[0]
 
-            # 1. Handle Generative/Logit Outputs (2D: [batch, seq] or 3D: [batch, seq, vocab])
             if len(output_tensor.shape) == 2:
-                # Direct token IDs
                 token_ids = output_tensor[0]
                 decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
             elif len(output_tensor.shape) == 3 and output_tensor.shape[-1] > 1000:
-                # Logits [batch, seq, vocab] -> take argmax
-                import numpy as np
-
                 token_ids = np.argmax(output_tensor[0], axis=-1)
                 decoded_text = self.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
-
-            # 2. Handle Encoder/Embedding Outputs (3D: [batch, seq, hidden_dim] e.g. 384)
-            # Standard MiniLM models are encoders and cannot generate text.
             elif len(output_tensor.shape) == 3:
-                # Use zero-shot semantic token classification based on the 384D embeddings
                 return self._semantic_dissection(output_tensor[0], prompt)
             else:
                 raise ValueError(f"Unexpected output tensor shape: {output_tensor.shape}")
 
-            # 3. Strict Deserialization for Generative/Logit Outputs
             if not decoded_text:
                 raise ValueError("Model produced an empty response")
 
@@ -188,7 +271,6 @@ class MiniLM:
             if not isinstance(steps, list):
                 raise ValueError(f"Model output must be a list of steps, got: {type(steps).__name__}")
 
-            # Validate each step
             for i, step in enumerate(steps):
                 if not isinstance(step, dict) or "type" not in step or "value" not in step:
                     raise ValueError(f"Step {i} is malformed or missing keys: {step}")
@@ -196,148 +278,143 @@ class MiniLM:
             return steps
 
         except Exception as e:
-            # Re-raise as RuntimeError for the planner to catch
             if isinstance(e, (ValueError, RuntimeError)):
                 raise
             raise RuntimeError(f"MiniLM Deserialization Error: {e}") from e
 
     def _semantic_dissection(self, token_embeddings: np.ndarray, prompt: str) -> List[Dict[str, str]]:
         """
-        Uses the 384D token embeddings to perform zero-shot classification
-        into Actions, Targets, and Payloads based on cosine similarity logic.
+        Uses embeddings and rule-based chunking to decompose a prompt into steps.
+        Leverages MiniLM for robust intent classification of clauses.
         """
         import re
 
-        # Calculate Cosine Similarity against all anchor groups
-        # token_embeddings shape: (seq_len, 384)
-        def cosine_sim(vectors, anchors):
-            # Normalization
-            v_norm = np.linalg.norm(vectors, axis=-1, keepdims=True)
-            a_norm = np.linalg.norm(anchors, axis=-1, keepdims=True)
-            v_norm = np.where(v_norm == 0, 1e-10, v_norm)
-            a_norm = np.where(a_norm == 0, 1e-10, a_norm)
+        # 1. Protect quotes to keep them as atomic units
+        quotes: List[str] = []
 
-            # Dot product (seq_len, 384) @ (num_anchors, 384).T -> (seq_len, num_anchors)
-            sims = np.dot(vectors / v_norm, (anchors / a_norm).T)
-            # Max similarity for each token to *any* anchor in the group
-            return np.max(sims, axis=-1)
+        def _repl(match):
+            quotes.append(match.group(0))
+            return f" __QUOTE_{len(quotes)-1}__ "
 
-        sim_to_actions = cosine_sim(token_embeddings, self._action_anchors)
-        sim_to_targets = cosine_sim(token_embeddings, self._target_anchors)
-        sim_to_conjunctions = cosine_sim(token_embeddings, self._conjunction_anchors)
+        protected = re.sub(r"(['\"])(.*?)\1", _repl, prompt)
 
-        encoding = self.tokenizer.encode(prompt)
-        tokens = [self.tokenizer.decode([t]) for t in encoding.ids]
+        # 2. Split into clauses using standard conjunctions
+        split_pattern = re.compile(r"\b(?:and|then|after|while|also)\b|,|->|=>", re.I)
+        clauses = [c.strip() for c in split_pattern.split(protected) if c.strip()]
 
-        # 1. Identify Split Points (conjunctions)
-        # We find peaks in the conjunction similarity to split the sentence
-        split_points = []
-        for i in range(1, len(tokens) - 1):
-            # If the token functions primarily as a conjunction, split it.
-            # We lower the strict threshold slightly but require it to dominate actions/targets.
-            if sim_to_conjunctions[i] > 0.35 and (
-                sim_to_conjunctions[i] >= sim_to_actions[i] or sim_to_conjunctions[i] >= sim_to_targets[i]
-            ):
-                # Make sure it's actually an "and" or similar stopword, and not just a weird noun
-                token_word = tokens[i].strip().replace("##", "")
-                if token_word in ["and", "then", "after", "while", ",", "&"]:
-                    split_points.append(i)
-
-        # Helper to process a chunk of tokens into FIND/DO or VERIFY
-        def process_chunk(start_idx, end_idx):
-            chunk_tokens = tokens[start_idx:end_idx]
-            chunk_embeddings = token_embeddings[start_idx:end_idx]
-
-            # Remove special tokens and empty strings
-            valid_mask = [i for i, t in enumerate(chunk_tokens) if t.strip() and not t.startswith("[")]
-            if not valid_mask:
-                return []
-
-            chunk_tokens = [chunk_tokens[i] for i in valid_mask]
-            chunk_embeddings = chunk_embeddings[valid_mask]
-
-            # Recalculate similarities for the clean chunk
-            c_actions = cosine_sim(chunk_embeddings, self._action_anchors)
-            c_targets = cosine_sim(chunk_embeddings, self._target_anchors)
-
-            # Identify the strongest action token and target token
-            best_action_idx = int(np.argmax(c_actions))
-            best_target_idx = int(np.argmax(c_targets))
-
-            action_word = chunk_tokens[best_action_idx].strip()
-
-            # Extract Target phrase. Collect tokens that semantically relate to the target,
-            # or simply grab adjacent tokens that describe the target (e.g. "primary login button")
-            # We define a "target region" around the best_target_idx and include tokens that aren't actions
-            target_phrase = []
-
-            # Simple heuristic: include tokens starting from 1-2 words before the target
-            # up to the target, as long as they aren't verbs/payloads.
-            # A more robust approach evaluates the semantic cluster.
-            for i, (t, sim) in enumerate(zip(chunk_tokens, c_targets)):
-                clean_t = t.strip().replace("##", "")
-                if not clean_t:
-                    continue
-                # If it scores even mildly as a target (e.g. adjectives describing UI)
-                # or is near the primary target, include it.
-                if (
-                    (sim > 0.15 or i == best_target_idx)
-                    and c_actions[i] < 0.25
-                    and clean_t not in ["into", "the", "a", "an"]
-                ):
-                    target_phrase.append(clean_t)
-
-            # Join and clean up artifacts from WordPiece tokenizer
-            target_str = " ".join(target_phrase) if target_phrase else "element"
-            target_str = target_str.replace(" ##", "").replace("##", "")
-
-            # Payload Extraction: Find explicit quotes, or words far from UI grammar
-            payload = ""
-            chunk_str = " ".join(chunk_tokens)
-            m = re.search(r"['\"](.+?)['\"]", prompt)  # Check original prompt for exact quotes
-            if m and m.group(1).lower() in chunk_str.lower():
-                payload = m.group(1)
-            else:
-                # Find the token least similar to BOTH actions and targets
-                # (e.g. a random domain noun like 'admin' or 'jane@doe.com')
-                # but only if it's a "type" action.
-                if c_actions[best_action_idx] > 0.4 and action_word.replace("##", "") in ["type", "enter"]:
-                    c_sum = c_actions + c_targets
-                    least_ui_idx = int(np.argmin(c_sum))
-                    if c_sum[least_ui_idx] < 0.6:  # It's quite far from UI terms
-                        payload = chunk_tokens[least_ui_idx].strip().replace("##", "")
-
-            steps = []
-            if "verify expectation" in prompt.lower() or "verify" in action_word.lower():
-                # If the entire prompt was an expectation, or the dominant action is verify
-                steps.append({"type": "VERIFY", "value": target_str + (f" {payload}" if payload else "")})
-                return steps
-
-            # Otherwise it's a structural instruction
-            if target_phrase or (c_targets[best_target_idx] > 0.35):
-                steps.append({"type": "FIND", "value": target_str})
-
-            # DO action
-            if c_actions[best_action_idx] > 0.35:
-                # Clean up action (e.g. if the action word is 'type', construct the command)
-                cmd = action_word.replace("##", "")
-                if payload:
-                    cmd += f" {payload}"
-                steps.append({"type": "DO", "value": cmd})
-
-            return steps
-
-        # Process chunks separated by conjunctions
         all_steps = []
-        last_idx = 0
-        for sp in split_points:
-            all_steps.extend(process_chunk(last_idx, sp))
-            last_idx = sp + 1
 
-        # Process Final Chunk
-        all_steps.extend(process_chunk(last_idx, len(tokens)))
+        for clause in clauses:
+            # Restore quotes for this specific clause to get better embedding
+            real_clause = clause
+            for i, q in enumerate(quotes):
+                real_clause = real_clause.replace(f"__QUOTE_{i}__", q.strip())
 
-        # Fallback if semantic parsing yields nothing
+            # 3. Determine intent of this chunk
+            chunk_vec = self.encode(real_clause)
+
+            # Compare against action vs verify anchors
+            # Action anchors: click, type, hover, check, select, drag, scroll
+            # Verify anchors: verify, ensure, assert, should, shows
+            sim_action = self.best_anchor_similarity(chunk_vec, self._action_anchors)
+
+            is_verify = (
+                "verify" in real_clause.lower()
+                or "ensure" in real_clause.lower()
+                or "should" in real_clause.lower()
+                or "assert" in real_clause.lower()
+            )
+
+            if is_verify:
+                # VERIFY path
+                val = re.sub(r"\b(verify|ensure|assert|that|the|a|an)\b", "", real_clause, flags=re.I).strip()
+                all_steps.append({"type": "VERIFY", "value": val})
+                continue
+
+            # 4. ACTION path (FIND + DO)
+            # Find the best action word via similarity
+            best_verb = "interact"
+            best_sim = -1.0
+
+            action_words = [
+                "click",
+                "tap",
+                "press",
+                "type",
+                "enter",
+                "hover",
+                "select",
+                "choose",
+                "check",
+                "drag",
+                "scroll",
+                "clear",
+            ]
+            for v in action_words:
+                v_vec = self.encode(v)
+                s = self.cosine_similarity(chunk_vec, v_vec)
+                if s > best_sim:
+                    best_sim = s
+                    best_verb = v
+
+            # Clean the chunk to find target/payload
+            # Note: We use the protected version for easier regexing then restore
+            target_area = clause
+            # Remove ALL action words from target if they appear
+            for v in action_words:
+                target_area = re.sub(rf"\b{v}\b", "", target_area, flags=re.I).strip()
+
+            # Remove common instruction noise
+            target_area = re.sub(
+                r"\b(please navigate ahead and|i want you to|also|then)\b", "", target_area, flags=re.I
+            ).strip()
+
+            # Preposition stripping (can be anywhere if verb was removed)
+            target_area = re.sub(
+                r"\b(into|onto|to|on|over|in|at|from|with|inside)\b", "", target_area, flags=re.I
+            ).strip()
+            target_area = re.sub(r"\b(the|a|an)\b", "", target_area, flags=re.I).strip()
+
+            # Restore quotes for target_area
+            restored_target = target_area
+            for i, q in enumerate(quotes):
+                restored_target = restored_target.replace(f"__QUOTE_{i}__", q.strip())
+
+            # Determine payload for 'type'/'enter'
+            payload = ""
+            if best_verb in ["type", "enter"]:
+                # If there's a quoted string, it's the payload
+                q_match = re.search(r"(['\"])(.*?)\1", restored_target)
+                if q_match:
+                    payload = q_match.group(0)
+                    # Remove payload from target to isolate the element description
+                    restored_target = restored_target.replace(payload, "").strip()
+                else:
+                    # heuristic: maybe the whole remainder is the payload if no locator logic?
+                    # But for now let's stick to quotes
+                    pass
+
+            target_val = restored_target if restored_target else "element"
+            # Final touch: remove extra spaces and characters
+            target_val = re.sub(r"\s+", " ", target_val).strip()
+            target_val = re.sub(r"^[,\.]|[,\.]$", "", target_val).strip()
+
+            # Map specialized verbs
+            final_verb = best_verb
+            if best_verb in ["type", "enter"] and payload:
+                final_verb = f"{best_verb} {payload}"
+
+            if best_verb in ["type", "enter"] and not payload:
+                # If no payload found in quotes, maybe the whole target IS the payload?
+                # e.g. "type admin" -> FIND element, DO type admin
+                if restored_target and restored_target != "element":
+                    all_steps.append({"type": "FIND", "value": "element"})
+                    all_steps.append({"type": "DO", "value": f"{best_verb} {restored_target}"})
+                    continue
+
+            all_steps.append({"type": "FIND", "value": target_val})
+            all_steps.append({"type": "DO", "value": final_verb})
+
         if not all_steps:
             return [{"type": "FIND", "value": "element"}, {"type": "DO", "value": "interact"}]
 

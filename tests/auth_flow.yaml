@@ -9,4 +9,4 @@ steps:
     expect: "A red error toast 'Invalid credentials' should appear at the bottom right"
   - action: "Type 'admin' into the username field and 'password' into the password field"
   - action: "Click the Submit button"
-    expect: "The modal should close and a 'Login Successful' alert or state change should occur"
+    expect: "The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur"
