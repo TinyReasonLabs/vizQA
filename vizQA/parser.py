@@ -273,7 +273,8 @@ class SemanticParser:
             return []
 
         # Build candidate strings for semantic / substring matching
-        candidates = [" ".join(filter(None, [el.get("text"), el.get("label"), el.get("name")])) for el in elements]
+        # prioritize "placeholder" especially for input fields
+        candidates = [" ".join(filter(None, [el.get("placeholder") or el.get("text"), el.get("label"), el.get("name")])) for el in elements]
 
         query = intent.get("keyword") or intent.get("subject") or ""
 
@@ -292,7 +293,8 @@ class SemanticParser:
                 base_filtered = [
                     el
                     for el in elements
-                    if q_lower in (el.get("text") or "").lower()
+                    if q_lower in (el.get("placeholder") or "").lower()
+                    or q_lower in (el.get("text") or "").lower()
                     or q_lower in (el.get("label") or "").lower()
                     or q_lower in (el.get("name") or "").lower()
                 ]

@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from vizQA.memory import StepStatus, TestStep
 from vizQA.parser import SemanticParser
+from vizQA.logger import get_logger
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods
@@ -17,7 +18,8 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     def __init__(self, model_name: str = "minilm"):
         self.model_name = model_name
         self.parser = SemanticParser()
-
+        self._logger = get_logger()
+        self._logger.log_debug(0, message="ALOOOOO")
         # Load MiniLM if possible
         self.minilm = None
         if model_name == "minilm":
@@ -45,7 +47,9 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             sub_steps = self._decompose_instruction(instruction, i)
 
             if expectation:
-                sub_steps.extend(self._decompose_expectation(expectation, i))
+                sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
+            self._logger.log_debug(0, f"step num: {i}")
+            self._logger.log_debug(0, f"sub steps: {[x.id for x in sub_steps]}")
 
             refined_steps.append(
                 TestStep(
@@ -73,18 +77,18 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                 raise
             raise RuntimeError(f"Semantic decomposition failed for instruction '{instruction}': {e}") from e
 
-    def _decompose_expectation(self, expectation: str, parent_idx: int) -> List[TestStep]:
+    def _decompose_expectation(self, expectation: str, parent_idx: int, start_idx: int) -> List[TestStep]:
         """Uses SemanticParser to break down an expectation into VERIFY atoms."""
         try:
             # Force verifications to be treated as such by prefixing slightly or just parsing
             # The parser has a specific _parse_verify we could call, or we just prefix "Verify "
             nodes = self.parser.parse(f"Verify {expectation}")
             dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
-            return self._to_test_steps(dict_steps, parent_idx, "expect")
+            return self._to_test_steps(dict_steps, parent_idx, "expect", start_idx)
         except Exception as e:
             raise RuntimeError(f"Semantic decomposition failed for expectation '{expectation}': {e}") from e
 
-    def _to_test_steps(self, model_steps: List[Dict[str, str]], parent_idx: int, prefix: str) -> List[TestStep]:
+    def _to_test_steps(self, model_steps: List[Dict[str, str]], parent_idx: int, prefix: str, start_idx: int = 0) -> List[TestStep]:
         """Converts model output steps into TestStep objects."""
         test_steps = []
         for j, step in enumerate(model_steps):
@@ -96,5 +100,5 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                 raise ValueError(f"Invalid step type from model: {step_type}")
 
             p_idx = parent_idx if parent_idx is not None else 0
-            test_steps.append(TestStep(id=f"step_{p_idx:02d}.{(j+1):02d}", instruction=f"{step_type}: {value}"))
+            test_steps.append(TestStep(id=f"step_{p_idx:02d}.{(j+start_idx+1):02d}", instruction=f"{step_type}: {value}"))
         return test_steps

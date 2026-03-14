@@ -15,7 +15,6 @@ from vizQA.logger import get_logger
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.minilm import MiniLM
 from vizQA.parser import SemanticParser
-from vizQA.planner import StepPlanner
 
 
 class Automator:
@@ -25,7 +24,6 @@ class Automator:
 
     def __init__(self, perception_client: PerceptionClient, verbosity: int = 0):
         self.client = perception_client
-        self.planner = StepPlanner()
         self.verbosity = verbosity
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
@@ -290,11 +288,15 @@ class Automator:
                     # Word-overlap fallback
                     q = query.lower()
                     for el in all_elements:
-                        text = (el.get("text") or "").lower()
+                        text = el.get("text", "").lower()
+                        placeholder = el.get("placeholder", "").lower()
                         label = (el.get("label") or "").lower()
                         name = (el.get("name") or "").lower()
-                        if (q in text or q in label or q in name) or any(
-                            word in text or word in label or word in name for word in q.split() if len(word) > 3
+                        if (q in placeholder or q in text or q in label or q in name) or any(
+                            word in placeholder
+                            or word in text 
+                            or word in label
+                            or word in name for word in q.split() if len(word) > 3
                         ):
                             match_found = True
                             break
@@ -343,7 +345,9 @@ class Automator:
         if self.verbosity >= 1:
             elements = perception.get("elements", [])
             if elements:
-                visible_texts = list({el.get("text") for el in elements if el.get("text")})[:10]
+                visible_texts = list({
+                    (el.get("placeholder") or el.get("label")) for el in elements if (el.get("placeholder") or el.get("label"))
+                })[:10]
                 if visible_texts:
                     reason += f"\n[Context] Elements visible on screen: {visible_texts}"
             else:
@@ -368,15 +372,29 @@ class Automator:
 
     async def _execute_interaction(self, action: str, x: float, y: float, payload: str):
         """Performs actual Playwright interactions at the specified pixel coordinates."""
+        # Strip quotes if present
+        clean_payload = payload.strip("'\"")
+        
+        if self.verbosity >= 1:
+            print(f"  [DO] {action} {clean_payload!r} at ({x:.1f}, {y:.1f})")
+
         if action == "click":
             await self.page.mouse.click(x, y)
-        elif "type" in action:
+        elif any(verb in action for verb in ["type", "enter", "input"]):
+            # Focus and clear
             await self.page.mouse.click(x, y)
             await self.page.keyboard.down("Control")
             await self.page.keyboard.press("a")
             await self.page.keyboard.up("Control")
             await self.page.keyboard.press("Backspace")
-            await self.page.keyboard.type(payload)
+            
+            # Type the actual text
+            await self.page.keyboard.type(clean_payload)
+            
+            # If it was "enter", maybe press Enter key? 
+            # In many CLI flows, "enter 'admin'" implies submitting the field, 
+            # but usually we follow with a "Click Submit". 
+            # Let's just stick to typing for now to avoid side effects.
         elif action == "hover":
             await self.page.mouse.move(x, y)
 
@@ -458,7 +476,7 @@ class Automator:
                 else:
                     q = step.expectation.lower()
                     for el in result.get("elements", []):
-                        text = el.get("text", "").lower()
+                        text = (el.get("placeholder") or el.get("text", "")).lower()
                         label = el.get("label", "").lower()
                         name = el.get("name", "").lower()
                         if (q in text or q in label or q in name) or any(

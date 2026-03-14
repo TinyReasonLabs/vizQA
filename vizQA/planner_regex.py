@@ -5,6 +5,7 @@ Planner module for decomposing high-level instructions into atomic steps.
 import re
 from typing import Any, Dict, List
 
+from vizQA.logger import get_logger
 from memory import StepStatus, TestStep
 
 
@@ -15,6 +16,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
     def __init__(self, model_name: str = "minilm"):
         self.model_name = model_name
+        self._logger = get_logger()
 
     def decompose(self, raw_steps: List[Dict[str, Any]]) -> List[TestStep]:
         """
@@ -31,6 +33,8 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
             if expectation:
                 sub_steps.extend(self._decompose_expectation(expectation, i))
+            self._logger.log_debug("step num: %s", i)
+            self._logger.log_debug("sub steps: %s", [x.id for x in sub_steps])
 
             refined_steps.append(
                 TestStep(

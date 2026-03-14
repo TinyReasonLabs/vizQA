@@ -48,7 +48,7 @@ class TestSubstringFallback:
         parser = SemanticParser()
         result = parser.filter_elements_by_intent(_intent(keyword="Error"), ELEMENTS)
         # "Error: invalid credentials" contains "error" case-insensitively
-        assert any("Error" in el.get("text", "") for el in result)
+        assert any("Error" in (el.get("placeholder") or el.get("text", "")) for el in result)
 
     def test_no_keyword_returns_all(self):
         parser = SemanticParser()
