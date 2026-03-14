@@ -9,6 +9,8 @@ for verification queries.
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional
 
+from vizQA.logger import get_logger
+
 if TYPE_CHECKING:
     from vizQA.minilm import MiniLM
 
@@ -85,6 +87,7 @@ class SemanticParser:
             similarity instead of plain keyword lists.
         """
         self.minilm = minilm
+        self._logger = get_logger()
 
     # ------------------------------------------------------------------
     # Public API
@@ -274,7 +277,10 @@ class SemanticParser:
 
         # Build candidate strings for semantic / substring matching
         # prioritize "placeholder" especially for input fields
-        candidates = [" ".join(filter(None, [el.get("placeholder") or el.get("text"), el.get("label"), el.get("name")])) for el in elements]
+        candidates = [
+            " ".join(filter(None, [el.get("placeholder") or el.get("text"), el.get("label"), el.get("name")]))
+            for el in elements
+        ]
 
         query = intent.get("keyword") or intent.get("subject") or ""
 
@@ -362,27 +368,111 @@ class SemanticParser:
 
         return current
 
+    def normalize_subject(self, subject: str) -> str:
+        """
+        Normalizes a subject string for consistent historical lookup.
+
+        Uses the internal intent parser's 'subject' extraction.
+        """
+        if not subject:
+            return ""
+        return self.parse_verify_intent(subject)["subject"].lower().strip()
+
+    def resolve_historical_target(
+        self, intent: Dict[str, Any], history_metadata: Dict[str, Any]
+    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+        """
+        Resolves a historical target and its associated perception elements
+        by matching the current intent against history.
+
+        Returns (target, before_elements).
+        """
+        subj = intent.get("subject") or intent.get("keyword") or ""
+        if not subj:
+            return None, []
+
+        norm_subj = self.normalize_subject(subj)
+
+        # 1. Direct match first (optimisation)
+        history = history_metadata.get("history", {})
+        if norm_subj in history:
+            entry = history[norm_subj]
+            return entry.get("target"), entry.get("elements", [])
+
+        # 2. Semantic lookup if direct match fails
+        # history["history"] is expected to be Dict[norm_subj, {target, elements}]
+        if history and self.minilm:
+            history_keys = list(history.keys())
+            matched_idxs = self.minilm.semantic_match(norm_subj, history_keys, threshold=0.75)
+            if matched_idxs:
+                best_key = history_keys[matched_idxs[0]]
+                self._logger.log_debug("parser", f"Resolved historical subject '{norm_subj}' -> '{best_key}'")
+                entry = history[best_key]
+                return entry.get("target"), entry.get("elements", [])
+
+        return None, []
+
     def verify_negation(
         self,
-        before_elements: List[Dict[str, Any]],
         after_elements: List[Dict[str, Any]],
-        intent: Dict[str, Any],
+        intent_or_subject: Any,
+        before_elements: Optional[List[Dict[str, Any]]] = None,
+        target: Optional[Dict[str, Any]] = None,
+        history_metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Checks whether an element that was present before an action has
         disappeared afterwards.
+
+        If a 'target' is provided, it attempts to find that specific element
+        in 'after_elements' by comparing semantic attributes.
+
+        If 'history_metadata' is provided, it attempts to resolve the target
+        from history if not explicitly passed.
         """
-        # Create a non-negated version of the intent to find the element
+        # 1. Normalize intent
+        if isinstance(intent_or_subject, dict):
+            intent = intent_or_subject
+        else:
+            intent = self.parse_verify_intent(str(intent_or_subject))
+
+        if not intent.get("keyword") and not intent.get("subject"):
+            return False
+
+        # 2. Resolve target from history if needed
+        if not target and history_metadata:
+            target, before_elements = self.resolve_historical_target(intent, history_metadata)
+
+        # 3. Identity-based check if target is provided
+        if target:
+            # Does the target actually match the intent?
+            pos_intent = intent.copy()
+            pos_intent["negated"] = False
+            matches_intent = self.filter_elements_by_intent(pos_intent, [target])
+
+            if matches_intent:
+                target_text = (target.get("text") or "").lower().strip()
+                target_label = (target.get("label") or "").lower().strip()
+                target_name = (target.get("name") or "").lower().strip()
+                target_placeholder = (target.get("placeholder") or "").lower().strip()
+                self._logger.log_debug("verify_negation", f"target={target}")
+
+                for el in after_elements:
+                    if (
+                        (el.get("text") or "").lower().strip() == target_text
+                        and (el.get("label") or "").lower().strip() == target_label
+                        and (el.get("name") or "").lower().strip() == target_name
+                        and (el.get("placeholder") or "").lower().strip() == target_placeholder
+                    ):
+                        return False
+                return True
+
+        # 4. Fallback: Collective check
         pos_intent = intent.copy()
         pos_intent["negated"] = False
-
-        before_matches = self.filter_elements_by_intent(pos_intent, before_elements)
         after_matches = self.filter_elements_by_intent(pos_intent, after_elements)
-
-        was_present = len(before_matches) > 0
-        is_gone = len(after_matches) == 0
-
-        return was_present and is_gone
+        self._logger.log_debug("verify_negation", f"after_matches={after_matches}")
+        return len(after_matches) == 0
 
     # ------------------------------------------------------------------
     # Internal parsing helpers (unchanged from original)

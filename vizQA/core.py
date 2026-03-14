@@ -188,6 +188,14 @@ class Automator:
         if target:
             session.metadata["target"] = target
             session.metadata["last_perception"] = perception
+
+            # Decoupled history update: just store raw data under normalized subject
+            norm_subj = self.parser.normalize_subject(query)
+            history = session.metadata.setdefault("history", {})
+            if norm_subj not in history:
+                history[norm_subj] = {"target": target, "elements": perception.get("elements", [])}
+                self._logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
+
             step.status = StepStatus.PASSED
             return True
 
@@ -265,10 +273,8 @@ class Automator:
 
             match_found = False
             if intent.get("negated"):
-                # Negation path — check element was present before, gone now
-                before_perc = session.metadata.get("last_perception", {})
-                before_elements = before_perc.get("elements", [])
-                match_found = self.parser.verify_negation(before_elements, all_elements, intent)
+                # Delegated negation path — uses history_metadata for match
+                match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
             else:
                 filtered = self.parser.filter_elements_by_intent(intent, all_elements)
 
@@ -293,15 +299,32 @@ class Automator:
                         label = (el.get("label") or "").lower()
                         name = (el.get("name") or "").lower()
                         if (q in placeholder or q in text or q in label or q in name) or any(
-                            word in placeholder
-                            or word in text 
-                            or word in label
-                            or word in name for word in q.split() if len(word) > 3
+                            word in placeholder or word in text or word in label or word in name
+                            for word in q.split()
+                            if len(word) > 3
                         ):
                             match_found = True
                             break
 
             if match_found:
+                # Update perception history for subsequent steps/negations
+                self._logger.log_debug(step.id, f"match_found={match_found}")
+                if not intent.get("negated"):
+                    session.metadata["last_perception"] = perception
+
+                    # Update history if not already set (maintains "first" appearance)
+                    subj = (intent.get("subject") or intent.get("keyword") or query).lower().strip()
+                    norm_subj = self.parser.normalize_subject(subj)
+                    history = session.metadata.setdefault("history", {})
+
+                    # If we matched something specific, update target
+                    matches = self.parser.filter_elements_by_intent(intent, all_elements)
+                    if matches:
+                        session.metadata["target"] = matches[0]
+                        if norm_subj not in history:
+                            history[norm_subj] = {"target": matches[0], "elements": all_elements}
+                            self._logger.log_debug(step.id, f"identified target for {subj}: {matches[0]}")
+
                 step.status = StepStatus.PASSED
                 return True
 
@@ -345,9 +368,13 @@ class Automator:
         if self.verbosity >= 1:
             elements = perception.get("elements", [])
             if elements:
-                visible_texts = list({
-                    (el.get("placeholder") or el.get("label")) for el in elements if (el.get("placeholder") or el.get("label"))
-                })[:10]
+                visible_texts = list(
+                    {
+                        (el.get("placeholder") or el.get("label"))
+                        for el in elements
+                        if (el.get("placeholder") or el.get("label"))
+                    }
+                )[:10]
                 if visible_texts:
                     reason += f"\n[Context] Elements visible on screen: {visible_texts}"
             else:
@@ -374,7 +401,7 @@ class Automator:
         """Performs actual Playwright interactions at the specified pixel coordinates."""
         # Strip quotes if present
         clean_payload = payload.strip("'\"")
-        
+
         if self.verbosity >= 1:
             print(f"  [DO] {action} {clean_payload!r} at ({x:.1f}, {y:.1f})")
 
@@ -387,13 +414,13 @@ class Automator:
             await self.page.keyboard.press("a")
             await self.page.keyboard.up("Control")
             await self.page.keyboard.press("Backspace")
-            
+
             # Type the actual text
             await self.page.keyboard.type(clean_payload)
-            
-            # If it was "enter", maybe press Enter key? 
-            # In many CLI flows, "enter 'admin'" implies submitting the field, 
-            # but usually we follow with a "Click Submit". 
+
+            # If it was "enter", maybe press Enter key?
+            # In many CLI flows, "enter 'admin'" implies submitting the field,
+            # but usually we follow with a "Click Submit".
             # Let's just stick to typing for now to avoid side effects.
         elif action == "hover":
             await self.page.mouse.move(x, y)

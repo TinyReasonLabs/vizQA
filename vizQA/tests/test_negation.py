@@ -28,10 +28,10 @@ NEGATION_CASES = [
     ("error message", [ERROR_ELEMENT, MODAL_ELEMENT], [MODAL_ELEMENT], True),
     # 3. Spinner present before AND after → False
     ("spinner", [SPINNER, OTHER], [SPINNER, OTHER], False),
-    # 4. Modal absent in both → False (cannot confirm it disappeared)
-    ("modal", [OTHER, SPINNER], [OTHER], False),
-    # 5. Empty before list → False
-    ("modal", [], [OTHER], False),
+    # 4. Modal absent in both → True (satisfied because it's not there)
+    ("modal", [OTHER, SPINNER], [OTHER], True),
+    # 5. Empty before list → True (regular verification: is it gone now?)
+    ("modal", [], [OTHER], True),
     # 6. Empty after list (everything gone) → True when element was before
     ("modal", [MODAL_ELEMENT], [], True),
     # 7. Empty subject → False (nothing to look for)
@@ -42,7 +42,7 @@ NEGATION_CASES = [
 @pytest.mark.parametrize("subject,before,after,expected", NEGATION_CASES)
 def test_verify_negation(subject, before, after, expected):
     parser = SemanticParser()  # No MiniLM — uses substring fallback
-    result = parser.verify_negation(before, after, subject)
+    result = parser.verify_negation(after, subject, before_elements=before)
     assert result == expected, (
         f"verify_negation({subject!r}, before={[e['text'] for e in before]}, "
         f"after={[e['text'] for e in after]}) → expected {expected}, got {result}"
