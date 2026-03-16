@@ -244,6 +244,38 @@ def _deepest_failed(step: TestStep) -> TestStep:
     return step
 
 
+def discover_test_files(paths: List[str]) -> List[Path]:
+    """
+    Discovers test files (YAML/YML) from a list of paths.
+    Recursively searches directories.
+    """
+    test_files = []
+    for p in paths:
+        path = Path(p)
+        if not path.exists():
+            console.print(f"[yellow]Warning: Path does not exist: {p}[/]")
+            continue
+
+        if path.is_file():
+            if path.suffix.lower() in (".yaml", ".yml"):
+                test_files.append(path)
+            else:
+                console.print(f"[yellow]Warning: Skipping non-YAML file: {p}[/]")
+        elif path.is_dir():
+            # Recursive discovery
+            test_files.extend(list(path.rglob("*.yaml")) + list(path.rglob("*.yml")))
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_files = []
+    for f in test_files:
+        if f.absolute() not in seen:
+            unique_files.append(f)
+            seen.add(f.absolute())
+
+    return unique_files
+
+
 def _add_step_node(parent_node: Tree, step: TestStep, verbosity: int):
     icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
     instr_text = _step_prefix(step.instruction)
@@ -294,42 +326,27 @@ async def run_single_test(
 # ---------------------------------------------------------------------------
 
 
-class DefaultGroup(click.Group):
-    """Routes bare paths to the 'run' sub-command automatically."""
-
-    def parse_args(self, ctx, args):
-        if args and args[0] not in self.commands and args[0] not in ("-h", "--help"):
-            args.insert(0, "run")
-        return super().parse_args(ctx, args)
-
-
-@click.group(cls=DefaultGroup, invoke_without_command=True)
-@click.pass_context
-def cli(ctx):
-    """UI Testing Framework - Vision-Driven Automation"""
-    if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
-
-
-@cli.command()
-@click.argument("path", type=click.Path(exists=True))
-@click.option("--headless", is_flag=True, default=True, help="Run browser in headless mode")
+@click.command()
+@click.argument("paths", type=click.Path(exists=True), nargs=-1)
+@click.option("--headless/--no-headless", default=True, help="Run browser in headless mode (default: True)")
 @click.option("-v", "--verbose", count=True, help="Verbosity (-v steps, -vv timing/detail)")
-def run(path, headless, verbose):
+def cli(paths, headless, verbose):
     """
-    Run UI tests from a file or directory.
+    UI Testing Framework - Vision-Driven Automation
 
-    :param path: Path to the test file or directory.
+    Run UI tests from files or directories.
+
+    :param paths: Paths to the test files or directories.
     :param headless: Whether to run the browser in headless mode.
     :param verbose: Verbosity level for output.
     """
-    reporter = ProgressiveReporter(verbosity=verbose)
-    target_path = Path(path)
+    if not paths:
+        ctx = click.get_current_context()
+        click.echo(ctx.get_help())
+        return
 
-    if target_path.is_file():
-        test_files = [target_path]
-    else:
-        test_files = list(target_path.glob("*.yaml")) + list(target_path.glob("*.yml"))
+    reporter = ProgressiveReporter(verbosity=verbose)
+    test_files = discover_test_files(paths)
 
     if not test_files:
         console.print("[yellow]No test files found.[/]")
@@ -337,7 +354,7 @@ def run(path, headless, verbose):
 
     async def main():
         client = PerceptionClient()
-        automator = Automator(client, verbosity=verbose)
+        automator = Automator(client, verbosity=verbose, headless=headless)
         logger = get_logger()
 
         try:

@@ -22,9 +22,10 @@ class Automator:
     Main controller for browser automation and perception-integrated execution.
     """
 
-    def __init__(self, perception_client: PerceptionClient, verbosity: int = 0):
+    def __init__(self, perception_client: PerceptionClient, verbosity: int = 0, headless: bool = True):
         self.client = perception_client
         self.verbosity = verbosity
+        self.headless = headless
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -47,7 +48,7 @@ class Automator:
     async def start(self):
         """Initialises the Playwright browser and page."""
         self.playwright_mgr = await async_playwright().start()
-        self.browser = await self.playwright_mgr.chromium.launch(headless=True)
+        self.browser = await self.playwright_mgr.chromium.launch(headless=self.headless)
         self.page = await self.browser.new_page()
         os.makedirs(".vizQA", exist_ok=True)
 

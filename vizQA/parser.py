@@ -240,10 +240,6 @@ class SemanticParser:
         )
         subject = re.sub(r"\s+", " ", subject).strip()
         intent["subject"] = subject
-
-        # Debugging message for user clarity
-        print(f"  [DEBUG] Verification Intent: {intent}")
-
         return intent
 
     def filter_elements_by_intent(
