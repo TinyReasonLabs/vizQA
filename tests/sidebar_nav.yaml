@@ -3,8 +3,8 @@ url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/inde
 description: "Verifies that clicking sidebar items updates the view state."
 steps:
   - action: "Click on 'Customers' in the sidebar"
-    expect: "The main page header should change to 'Customers' and the sidebar item became active"
+    expect: "Main page header 'Customers' and the sidebar item becomes active"
   - action: "Click on 'Settings' in the sidebar"
-    expect: "The main page header should change to 'Settings'"
+    expect: "Main page header 'Settings'"
   - action: "Click on 'Overview' in the sidebar"
     expect: "Should return to the 'Dashboard Overview'"

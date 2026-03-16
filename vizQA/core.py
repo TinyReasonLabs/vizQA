@@ -259,9 +259,7 @@ class Automator:
         # Parse intent once at the beginning
         intent = self.parser.parse_verify_intent(query)
         self._logger.log_debug(step.id, f"verify intent={intent}")
-        # (The parser already prints a [DEBUG] message to the console)
-
-        perception_query = intent.get("keyword") or intent.get("subject") or query
+        perception_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
             path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
@@ -270,6 +268,7 @@ class Automator:
 
             perception = await self.client.perceive(path, query=perception_query)
             step.perception_result = perception
+            self._logger.log_debug(step.id, f"perception_result={perception}")
             all_elements = perception.get("elements", [])
 
             match_found = False
@@ -278,22 +277,26 @@ class Automator:
                 match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
             else:
                 filtered = self.parser.filter_elements_by_intent(intent, all_elements)
+                self._logger.log_debug(step.id, f"filtered by intent={filtered}")
 
                 # Success criteria:
                 # 1. Intent markers (keyword/color/position) matched in filtered list
                 # 2. Or high-confidence top_match from the API
                 if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
                     match_found = True
+                    self._logger.log_debug(step.id, f"match found from keyword/color/position")
                 elif (
-                    perception.get("top_matches")
+                    perception.get("elements")
                     and not intent.get("keyword")
                     and not intent.get("color")
                     and not intent.get("position")
                 ):
                     match_found = True
+                    self._logger.log_debug(step.id, f"match found from elements")
                 elif not intent.get("keyword") and not intent.get("color") and not intent.get("position"):
                     # Word-overlap fallback
                     q = query.lower()
+                    self._logger.log_debug(step.id, f"doing word-overlap fallback")
                     for el in all_elements:
                         text = el.get("text", "").lower()
                         placeholder = el.get("placeholder", "").lower()
@@ -408,6 +411,8 @@ class Automator:
 
         if action == "click":
             await self.page.mouse.click(x, y)
+        elif action == "right-click" or action == "right_click":
+            await self.page.mouse.click(x, y, button="right")
         elif any(verb in action for verb in ["type", "enter", "input"]):
             # Focus and clear
             await self.page.mouse.click(x, y)
@@ -425,6 +430,11 @@ class Automator:
             # Let's just stick to typing for now to avoid side effects.
         elif action == "hover":
             await self.page.mouse.move(x, y)
+        elif action == "scroll":
+            # Move mouse to target first to ensure it's grounded on the right element
+            await self.page.mouse.move(x, y)
+            # Basic scroll - we could use mouse.wheel if payload specified delta
+            await self.page.evaluate(f"window.scrollTo({{top: {y}, behavior: 'smooth'}})")
 
         await asyncio.sleep(0.5)
 

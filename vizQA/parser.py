@@ -57,6 +57,7 @@ class SemanticParser:
     # Core Action Verbs
     ACTION_VERBS = {
         "click": ["click", "tap", "hit", "press"],
+        "right-click": ["right-click", "context-click", "right click"],
         "type": ["type", "enter"],
         "hover": ["hover", "move to", "point"],
         "select": ["select", "choose", "pick"],

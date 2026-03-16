@@ -56,6 +56,37 @@ class MiniLM:
         "the button appeared",
     ]
 
+    _ACTION_ANCHOR_GROUPS = {
+        "click": [
+            "click the button",
+            "click on the link",
+            "tap the icon",
+            "press the button",
+            "hit submit",
+            "click navigation item",
+            "click sidebar link",
+            "navigate to page",
+            "go to section",
+            "click on the menu item",
+        ],
+        "right-click": [
+            "right-click the element",
+            "right-click on the image",
+            "context-click",
+            "open context menu",
+            "right click the link",
+            "perform right-click",
+        ],
+        "type": ["type into the field", "enter text", "input the password", "fill in the form"],
+        "hover": ["hover over the element", "move mouse to", "point at the icon"],
+        "scroll": ["scroll down", "scroll to the bottom", "scroll the list", "drag scrollbar"],
+        "select": ["select from the dropdown", "choose an option", "pick from the list"],
+        "check": ["check the box", "tick the checkbox", "mark as done"],
+        "drag": ["drag the element", "drag and drop", "pull the slider"],
+        "clear": ["clear the field", "empty the input", "erase the text"],
+        "wait": ["wait for the element", "pause for 2 seconds", "sleep", "wait until visible"],
+    }
+
     def __init__(self, model_dir: str):
         self.model_path = os.path.join(model_dir, "model.onnx")
         self.tokenizer_path = os.path.join(model_dir, "tokenizer.json")
@@ -88,6 +119,11 @@ class MiniLM:
             "position": self._compute_anchor_embeddings(self._POSITION_ANCHORS),
             "negation": self._compute_anchor_embeddings(self._NEGATION_ANCHORS),
             "positive": self._compute_anchor_embeddings(self._POSITIVE_ANCHORS),
+        }
+
+        # Pre-compute action anchors
+        self._action_groups: Dict[str, np.ndarray] = {
+            name: self._compute_anchor_embeddings(anchors) for name, anchors in self._ACTION_ANCHOR_GROUPS.items()
         }
 
     def _compute_anchor_embeddings(self, anchors: List[str]) -> np.ndarray:
@@ -313,11 +349,6 @@ class MiniLM:
             # 3. Determine intent of this chunk
             chunk_vec = self.encode(real_clause)
 
-            # Compare against action vs verify anchors
-            # Action anchors: click, type, hover, check, select, drag, scroll
-            # Verify anchors: verify, ensure, assert, should, shows
-            sim_action = self.best_anchor_similarity(chunk_vec, self._action_anchors)
-
             is_verify = (
                 "verify" in real_clause.lower()
                 or "ensure" in real_clause.lower()
@@ -332,35 +363,27 @@ class MiniLM:
                 continue
 
             # 4. ACTION path (FIND + DO)
-            # Find the best action word via similarity
-            best_verb = "interact"
-            best_sim = -1.0
+            # Use semantic grounding via anchor groups
+            best_verb = self.classify_anchor_group(real_clause, groups=self._action_groups, threshold=0.45)
+            if not best_verb:
+                # Fallback to single verb similarity if group classification fails
+                best_sim = -1.0
+                action_words = list(self._ACTION_ANCHOR_GROUPS.keys())
+                for v in action_words:
+                    v_vec = self.encode(v)
+                    s = self.cosine_similarity(chunk_vec, v_vec)
+                    if s > best_sim:
+                        best_sim = s
+                        best_verb = v
 
-            action_words = [
-                "click",
-                "tap",
-                "press",
-                "type",
-                "enter",
-                "hover",
-                "select",
-                "choose",
-                "check",
-                "drag",
-                "scroll",
-                "clear",
-            ]
-            for v in action_words:
-                v_vec = self.encode(v)
-                s = self.cosine_similarity(chunk_vec, v_vec)
-                if s > best_sim:
-                    best_sim = s
-                    best_verb = v
+            if not best_verb:
+                best_verb = "interact"
 
             # Clean the chunk to find target/payload
             # Note: We use the protected version for easier regexing then restore
             target_area = clause
             # Remove ALL action words from target if they appear
+            action_words = list(self._ACTION_ANCHOR_GROUPS.keys())
             for v in action_words:
                 target_area = re.sub(rf"\b{v}\b", "", target_area, flags=re.I).strip()
 
