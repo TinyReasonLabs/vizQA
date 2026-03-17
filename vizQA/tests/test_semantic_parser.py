@@ -1,7 +1,8 @@
 import re
+
 import pytest
 
-from vizQA.parser import SemanticParser
+from vizQA.planner import StepPlanner
 
 # A comprehensive suite of 50 diverse UI testing instructions to test the AST parser's ability
 # to extract relations (actions -> subjects, states -> subjects) and clean descriptions.
@@ -179,15 +180,23 @@ def normalize_text(text: str) -> str:
     return " ".join(text.split())
 
 
+@pytest.fixture(scope="module")
+def planner():
+    return StepPlanner(model_name="minilm")
+
+
 @pytest.mark.parametrize("instruction, expected_steps", TEST_CASES)
-def test_semantic_parser(instruction, expected_steps):
-    parser = SemanticParser()
+def test_semantic_parser(planner, instruction, expected_steps):
+    raw_steps = [{"action": instruction}]
+    test_steps = planner.decompose(raw_steps)
 
-    # Parse the instruction into atomic steps
-    actual_steps = parser.parse(instruction)
+    actual_tuples = []
+    if test_steps and test_steps[0].sub_steps:
+        for sub in test_steps[0].sub_steps:
+            parts = sub.instruction.split(": ", 1)
+            if len(parts) == 2:
+                actual_tuples.append((parts[0], normalize_text(parts[1])))
 
-    # Convert actual steps into a list of tuples for easy comparison
-    actual_tuples = [(step.type, normalize_text(step.value)) for step in actual_steps]
     expected_tuples = [(t, normalize_text(v)) for t, v in expected_steps]
 
     print(f"Instruction: {instruction}")

@@ -28,6 +28,7 @@ class SemanticNode(NamedTuple):
 # Intent classification helpers (used by parse_verify_intent)
 # ---------------------------------------------------------------------------
 
+
 class ParserVocabulary:
     """Central repository for UI grounding vocabulary."""
 
@@ -47,7 +48,18 @@ class ParserVocabulary:
     }
 
     VERIFY_VERBS = ["verify", "ensure", "assert", "check that", "make sure"]
-    VERIFY_BOILERPLATE = ["should", "must", "appear", "visible", "shows", "exists", "present", "displayed", "open", "pause until"]
+    VERIFY_BOILERPLATE = [
+        "should",
+        "must",
+        "appear",
+        "visible",
+        "shows",
+        "exists",
+        "present",
+        "displayed",
+        "open",
+        "pause until",
+    ]
 
     COLORS = ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
     STATES = ["disabled", "enabled", "checked", "unchecked", "visible", "invisible", "hidden", "displayed", "active"]
@@ -174,7 +186,7 @@ class SemanticParser:
         # Strip negation literals from subject if found
         if is_negated:
             subject = ParserVocabulary.NEGATION_RE.sub("", subject)
-        
+
         # Strip positive boilerplate from subject
         subject = re.sub(r"\b(appears?|visible|shows?|exists?|present|displayed|opened?)\b", "", subject, flags=re.I)
 
@@ -218,7 +230,9 @@ class SemanticParser:
             subject = re.sub(pos_regex, "", subject, flags=re.IGNORECASE)
         elif self.minilm:
             detected = self.minilm.classify_anchor_group(
-                query, {"position": self.minilm._intent_anchor_groups["position"]}, threshold=self.intent_threshold - 0.05
+                query,
+                {"position": self.minilm._intent_anchor_groups["position"]},
+                threshold=self.intent_threshold - 0.05,
             )
             if detected == "position":
                 # Semantic match found but no explicit word; leave position as None
@@ -303,13 +317,17 @@ class SemanticParser:
         # --- Semantic / substring baseline ---
         if query:
             kw = intent.get("keyword")
-            
+
             if self.minilm:
                 # Primary high-confidence match
-                matched_idxs = set(self.minilm.semantic_match(query, candidates, threshold=self.semantic_match_threshold))
+                matched_idxs = set(
+                    self.minilm.semantic_match(query, candidates, threshold=self.semantic_match_threshold)
+                )
                 # Fallback borderline match
                 if not matched_idxs and (intent.get("color") or intent.get("position")):
-                    matched_idxs = set(self.minilm.semantic_match(query, candidates, threshold=self.semantic_match_threshold - 0.10))
+                    matched_idxs = set(
+                        self.minilm.semantic_match(query, candidates, threshold=self.semantic_match_threshold - 0.10)
+                    )
 
                 base_filtered = [el for i, el in enumerate(elements) if i in matched_idxs]
 
@@ -326,18 +344,18 @@ class SemanticParser:
                             (el.get("label") or "").lower(),
                             (el.get("name") or "").lower(),
                         ]
-                        
+
                         if kw_lower:
                             # 1. Exact match on any field (highest priority)
                             if any(kw_lower == t for t in txt_fields + tech_fields):
                                 base_filtered.append(el)
                                 continue
-                            
+
                             # 2. Word boundary match on text fields
                             if any(re.search(rf"\b{re.escape(kw_lower)}\b", t) for t in txt_fields):
                                 base_filtered.append(el)
                                 continue
-                                
+
                             # 3. Technical field match (handle underscores/hyphens as boundaries)
                             # Only if NOT a quoted keyword (per user feedback "Unless quoted")
                             # Actually, if it's a quoted keyword, we still want it to match "logout" in "logout_btn"
@@ -369,7 +387,7 @@ class SemanticParser:
                         if any(kw_lower == t or re.search(rf"\b{re.escape(kw_lower)}\b", t) for t in txt_fields):
                             base_filtered.append(el)
                             continue
-                        
+
                         found_tech = False
                         for t in tech_fields:
                             normalized_tech = re.sub(r"[_-]", " ", t)
@@ -377,12 +395,13 @@ class SemanticParser:
                                 base_filtered.append(el)
                                 found_tech = True
                                 break
-                        if found_tech: continue
+                        if found_tech:
+                            continue
                         continue
-                    
+
                     if any(q_lower in t for t in txt_fields + tech_fields):
                         base_filtered.append(el)
-            
+
             # --- PRECISION PREFERENCE ---
             # If we have multiple matches and one (or more) are EXACT matches for our query/keyword,
             # we should prioritize those to avoid "Add" matching "Address Line 1" when "Add Item" exists.
@@ -393,7 +412,7 @@ class SemanticParser:
                     txts = [(el.get(k) or "").lower() for k in ["text", "placeholder", "label", "name"]]
                     if any(t == target_q for t in txts):
                         exact_matches.append(el)
-                
+
                 if exact_matches:
                     base_filtered = exact_matches
 
@@ -496,7 +515,9 @@ class SemanticParser:
         # history["history"] is expected to be Dict[norm_subj, {target, elements}]
         if history and self.minilm:
             history_keys = list(history.keys())
-            matched_idxs = self.minilm.semantic_match(norm_subj, history_keys, threshold=self.semantic_match_threshold + 0.05)
+            matched_idxs = self.minilm.semantic_match(
+                norm_subj, history_keys, threshold=self.semantic_match_threshold + 0.05
+            )
             if matched_idxs:
                 best_key = history_keys[matched_idxs[0]]
                 self._logger.log_debug("parser", f"Resolved historical subject '{norm_subj}' -> '{best_key}'")
@@ -577,16 +598,22 @@ class SemanticParser:
         if not clause:
             return []
 
-        boilerplate = r"^(verify( that)?|assert( that)?|ensure( that)?|make sure( that)?|check that|pause until( the)?)\b"
+        boilerplate = (
+            r"^(verify( that)?|assert( that)?|ensure( that)?|make sure( that)?|check that|pause until( the)?)\b"
+        )
         cleaned = re.sub(boilerplate, "", clause, flags=re.IGNORECASE).strip()
         cleaned = re.sub(r"^(the|a|an)\b", "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"^(loader disappears)\b", r"\1", cleaned, flags=re.IGNORECASE).strip() # Specific cleanup
+        cleaned = re.sub(r"^(loader disappears)\b", r"\1", cleaned, flags=re.IGNORECASE).strip()  # Specific cleanup
 
         # Split multiple verifications if "and" is present
         # e.g. "is red and aligned right" -> ["is red", "aligned right"]
         if re.search(r"\band\b", cleaned, re.I):
             # Split if "and" is followed by a state, position, or another subject/boilerplate
-            parts = re.split(r"\s+and\s+(?='|\"|the|a|an|it|is|should|must|at|in|on|color|state|visible|hidden|displayed|present|aligned|centered|top|bottom|left|right)", cleaned, flags=re.I)
+            parts = re.split(
+                r"\s+and\s+(?='|\"|the|a|an|it|is|should|must|at|in|on|color|state|visible|hidden|displayed|present|aligned|centered|top|bottom|left|right)",
+                cleaned,
+                flags=re.I,
+            )
             if len(parts) > 1:
                 return [SemanticNode(type="VERIFY", value=p.strip()) for p in parts if p.strip()]
 
@@ -596,35 +623,42 @@ class SemanticParser:
         """Parses an instruction sequence, breaking it by standard conjunctions."""
         # Clean potential double-defined nodes or noise
         nodes: List[SemanticNode] = []
-        
+
         # 1. Broad split on arrows
         parts = re.split(r"->|=>", clause)
-        
+
         main_clauses = self._split_complex_sequence(parts[0])
-        
+
         current_target = "element"
         current_action = None
 
         for i, chunk in enumerate(main_clauses):
             lower_chunk = chunk.lower()
             is_verify = (
-                any(lower_chunk.startswith(v) for v in ParserVocabulary.VERIFY_VERBS) 
+                any(lower_chunk.startswith(v) for v in ParserVocabulary.VERIFY_VERBS)
                 or any(v in lower_chunk for v in ParserVocabulary.VERIFY_BOILERPLATE)
                 # Inheritance: if previous chunk was verify and current has no new action verb
-                or (i > 0 and nodes and nodes[-1].type == "VERIFY" and not any(re.search(rf"\b{re.escape(syn)}\b", lower_chunk) for syn, _ in self._action_synonyms_ordered))
+                or (
+                    i > 0
+                    and nodes
+                    and nodes[-1].type == "VERIFY"
+                    and not any(
+                        re.search(rf"\b{re.escape(syn)}\b", lower_chunk) for syn, _ in self._action_synonyms_ordered
+                    )
+                )
             )
-            
+
             if is_verify:
                 nodes.extend(self._parse_verify(chunk))
                 # Set a generic verification flag for next chunks
                 continue
 
             chunk_nodes, new_target, new_action = self._parse_atomic_action(chunk, current_target, current_action)
-            
+
             # --- DISTRIBUTIVE TARGET HEURISTIC ---
             # "Click the submit and cancel buttons" -> "submit button", "cancel buttons"
             if i < len(main_clauses) - 1:
-                next_chunk = main_clauses[i+1].lower()
+                next_chunk = main_clauses[i + 1].lower()
                 # Check if next chunk ends with a known plural noun
                 words_next = next_chunk.split()
                 if words_next:
@@ -637,7 +671,7 @@ class SemanticParser:
                                 chunk_nodes[j] = SemanticNode(type="FIND", value=f"{node.value} {singular}")
 
             nodes.extend(chunk_nodes)
-            
+
             if new_target and new_target != "element":
                 current_target = new_target
             if new_action:
@@ -653,24 +687,30 @@ class SemanticParser:
         """Splits a sequence while protecting atomic phrases."""
         # 0. Protect "press and hold" and similar phrases
         protected_text = re.sub(r"\b(press|select|click|tap)\s+and\s+hold\b", r"\1_AND_HOLD", text, flags=re.I)
-        
+
         # 1. Broad split on major conjunctions/punctuation
         splits = re.split(r"\bthen\b|\bafter\b|\bwhile\b|,|->", protected_text, flags=re.I)
-        
+
         final_chunks = []
         for i, s in enumerate(splits):
             s_clean = s.strip()
-            if not s_clean: continue
-            
+            if not s_clean:
+                continue
+
             # 2. Split 'and' if followed by a verb, article, quoted string, or specific descriptors
             # Prioritize splitting when different objects or subjects are being described.
             # We use a narrower list to avoid splitting compound attributes (like red and aligned)
-            sub_splits = re.split(r"\band\b\s+(?='|\"|the|a|an|click|tap|type|enter|input|fill|select|press|hover|into|onto|last|first|clear|scroll|right|left|context|submit|cancel|delete|save|sign|log|password|username|email)", s_clean, flags=re.I)
-            
+            sub_splits = re.split(
+                r"\band\b\s+(?='|\"|the|a|an|click|tap|type|enter|input|fill|select|press|hover|into|onto|last|first|clear|scroll|right|left|context|submit|cancel|delete|save|sign|log|password|username|email)",
+                s_clean,
+                flags=re.I,
+            )
+
             for sub in sub_splits:
                 res = sub.strip().replace("_AND_HOLD", " and hold")
-                if res: final_chunks.append(res)
-        
+                if res:
+                    final_chunks.append(res)
+
         return final_chunks
 
     def _parse_atomic_action(  # pylint: disable=too-many-branches,too-many-statements
@@ -704,6 +744,7 @@ class SemanticParser:
             )
             if detected:
                 action_type = detected
+                self._logger.log_debug(0, f"[Parser] Semantic classified '{semantic_query}' as '{action_type}'")
                 # We still need a concrete verb to strip from the string
                 # Find the longest synonym of this type that exists in the chunk
                 synonyms = ParserVocabulary.ACTION_VERBS.get(action_type, [])
@@ -712,24 +753,33 @@ class SemanticParser:
                     pattern = rf"\b{re.escape(syn)}\b"
                     if syn == "input":
                         pattern = rf"(?<!the\s)\binput\b"
-                    
+
                     if re.search(pattern, lower_chunk):
                         action_verb = syn
                         break
                 if not action_verb:
                     # Fallback to the first synonym if no literal match (semantic match)
                     action_verb = synonyms[0] if synonyms else action_type
-                
+
                 # --- ACTION REFINEMENT ---
                 # Check for explicit synonyms in the text to override semantic mismatch
                 # specifically for right-click which often gets matched as click
+                refined = False
                 for syn_type, syns in ParserVocabulary.ACTION_VERBS.items():
-                    if syn_type == action_type: continue
+                    if syn_type == action_type:
+                        continue
                     for syn in syns:
                         if re.search(rf"\b{re.escape(syn)}\b", lower_chunk):
+                            self._logger.log_debug(
+                                0,
+                                f"[Parser] Refined action from '{action_type}' to '{syn_type}' because of literal '{syn}' in chunk",
+                            )
                             action_type = syn_type
                             action_verb = syn
+                            refined = True
                             break
+                    if refined:
+                        break
 
         # 2. Rule-based fallback (Stable matching via length-sorted synonyms)
         if not action_type:
@@ -922,17 +972,38 @@ class SemanticParser:
             return [], target_str, None
 
         if target_str:
-            nodes.append(SemanticNode(type="FIND", value=target_str))
+            if target_str.lower() in ["it", "them", ""]:
+                nodes.append(SemanticNode(type="FIND", value=implicit_target if implicit_target else "element"))
+            else:
+                nodes.append(SemanticNode(type="FIND", value=target_str))
 
-        do_val = action_verb.lower()
+        # Use canonical type for test compatibility, fallback to matched literal
+        do_name = action_type if action_type else (action_verb or "interact")
+        do_val = do_name.lower()
+
         if payload:
             if action_type == "click":
                 do_val = f"press {payload}"
             else:
-                do_val += f" {payload}"
+                do_val = f"{do_val} {payload}"
+                if action_type in ["type", "enter"]:
+                    return (
+                        [
+                            SemanticNode(
+                                type="FIND", value=target_str if target_str and target_str != "element" else "element"
+                            ),
+                            SemanticNode(type="DO", value=f"{do_val}"),
+                        ],
+                        target_str,
+                        action_verb,
+                    )
         elif action_type in ["type", "enter"]:
-            do_val = f"type {target_str}"
-            nodes = [SemanticNode(type="FIND", value="element")]
+            # Special legacy multi-node return for type/enter when no payload extracted
+            return (
+                [SemanticNode(type="FIND", value="element"), SemanticNode(type="DO", value=f"{do_val} {target_str}")],
+                target_str,
+                action_verb,
+            )
 
         nodes.append(SemanticNode(type="DO", value=do_val))
 

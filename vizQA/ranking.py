@@ -233,8 +233,9 @@ class RankingEngine:
 
         scored_elements.sort(key=lambda x: x["_ranking_score"], reverse=True)
 
-        # Pruning: only remove if score is strictly non-positive
-        # (meaning absolutely no semantic or keyword overlap)
-        final_elements = [el for el in scored_elements if el["_ranking_score"] > 0]
+        # Pruning: use a stricter threshold than just > 0 to avoid false positives
+        # especially in verification tasks where we want high confidence.
+        min_prune_threshold = intent.get("threshold", 0.4)
+        final_elements = [el for el in scored_elements if el["_ranking_score"] > min_prune_threshold]
 
         return final_elements

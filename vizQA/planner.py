@@ -5,9 +5,9 @@ Planner module for decomposing high-level instructions into atomic steps.
 import os
 from typing import Any, Dict, List
 
+from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestStep
 from vizQA.parser import SemanticParser
-from vizQA.logger import get_logger
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods
@@ -17,7 +17,17 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
     def __init__(self, model_name: str = "minilm"):
         self.model_name = model_name
-        self.parser = SemanticParser()
+        use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
+        intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
+        action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.52"))
+        semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
+
+        self.parser = SemanticParser(
+            use_advanced_ranking=use_adv,
+            intent_threshold=intent_threq,
+            action_threshold=action_threq,
+            semantic_match_threshold=semantic_threq,
+        )
         self._logger = get_logger()
         self._logger.log_debug(0, message="ALOOOOO")
         # Load MiniLM if possible
@@ -49,7 +59,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             if expectation:
                 sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
             self._logger.log_debug(0, f"step num: {i}")
-            self._logger.log_debug(0, f"sub steps: {[x.id for x in sub_steps]}")
+            self._logger.log_debug(0, f"sub steps: {sub_steps}")
 
             refined_steps.append(
                 TestStep(
@@ -88,7 +98,9 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
         except Exception as e:
             raise RuntimeError(f"Semantic decomposition failed for expectation '{expectation}': {e}") from e
 
-    def _to_test_steps(self, model_steps: List[Dict[str, str]], parent_idx: int, prefix: str, start_idx: int = 0) -> List[TestStep]:
+    def _to_test_steps(
+        self, model_steps: List[Dict[str, str]], parent_idx: int, prefix: str, start_idx: int = 0
+    ) -> List[TestStep]:
         """Converts model output steps into TestStep objects."""
         test_steps = []
         for j, step in enumerate(model_steps):
@@ -100,5 +112,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                 raise ValueError(f"Invalid step type from model: {step_type}")
 
             p_idx = parent_idx if parent_idx is not None else 0
-            test_steps.append(TestStep(id=f"step_{p_idx:02d}.{(j+start_idx+1):02d}", instruction=f"{step_type}: {value}"))
+            test_steps.append(
+                TestStep(id=f"step_{p_idx:02d}.{(j+start_idx+1):02d}", instruction=f"{step_type}: {value}")
+            )
         return test_steps

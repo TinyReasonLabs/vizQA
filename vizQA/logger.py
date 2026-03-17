@@ -64,7 +64,7 @@ class SessionLogger:
             payload = json.dumps(response, ensure_ascii=False)
         except (TypeError, ValueError):
             payload = str(response)
-        self._logger.debug("[%s] PERCEPTION query=%r  response=%s", step_id, query, payload)
+        # self._logger.debug("[%s] PERCEPTION query=%r  response=%s", step_id, query, payload)
 
     def log_step(
         self,

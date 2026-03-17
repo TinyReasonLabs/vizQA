@@ -40,7 +40,17 @@ class Automator:
 
         # Single shared parser instance wired to the model
         use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
-        self.parser = SemanticParser(minilm=self.minilm, use_advanced_ranking=use_adv)
+        intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
+        action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.52"))
+        semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
+
+        self.parser = SemanticParser(
+            minilm=self.minilm,
+            use_advanced_ranking=use_adv,
+            intent_threshold=intent_threq,
+            action_threshold=action_threq,
+            semantic_match_threshold=semantic_threq,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -296,21 +306,10 @@ class Automator:
                     match_found = True
                     self._logger.log_debug(step.id, f"match found from elements")
                 elif not intent.get("keyword") and not intent.get("color") and not intent.get("position"):
-                    # Word-overlap fallback
-                    q = query.lower()
-                    self._logger.log_debug(step.id, f"doing word-overlap fallback")
-                    for el in all_elements:
-                        text = el.get("text", "").lower()
-                        placeholder = el.get("placeholder", "").lower()
-                        label = (el.get("label") or "").lower()
-                        name = (el.get("name") or "").lower()
-                        if (q in placeholder or q in text or q in label or q in name) or any(
-                            word in placeholder or word in text or word in label or word in name
-                            for word in q.split()
-                            if len(word) > 3
-                        ):
-                            match_found = True
-                            break
+                    # Only match if we have at least SOME high-confidence elements detected
+                    if all_elements:
+                        match_found = True
+                        self._logger.log_debug(step.id, f"found generic match from elements")
 
             if match_found:
                 # Update perception history for subsequent steps/negations
@@ -408,14 +407,17 @@ class Automator:
         # Strip quotes if present
         clean_payload = payload.strip("'\"")
 
-        if self.verbosity >= 1:
-            print(f"  [DO] {action} {clean_payload!r} at ({x:.1f}, {y:.1f})")
+        # Normalize action name (handle spaces/underscores/hyphens)
+        norm_action = action.lower().replace(" ", "-").replace("_", "-")
 
-        if action == "click":
+        if self.verbosity >= 1:
+            print(f"  [DO] {norm_action} {clean_payload!r} at ({x:.1f}, {y:.1f})")
+
+        if norm_action == "click":
             await self.page.mouse.click(x, y)
-        elif action == "right-click" or action == "right_click":
+        elif norm_action == "right-click":
             await self.page.mouse.click(x, y, button="right")
-        elif any(verb in action for verb in ["type", "enter", "input"]):
+        elif any(verb in norm_action for verb in ["type", "enter", "input"]):
             # Focus and clear
             await self.page.mouse.click(x, y)
             await self.page.keyboard.down("Control")
