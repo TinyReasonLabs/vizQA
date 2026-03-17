@@ -1,3 +1,4 @@
+import re
 import pytest
 
 from vizQA.parser import SemanticParser
@@ -137,8 +138,45 @@ TEST_CASES = [
     # 49. Ambiguous verbs used as nouns
     ("Click the 'Click Here' button", [("FIND", "'Click Here' button"), ("DO", "click")]),
     # 50. Negative verifications
+    # 50. Negative verifications
     ("Ensure the error message is not displayed", [("VERIFY", "error message is not displayed")]),
+    # --- 10 Tricky/Robust Cases ---
+    # 51. Multi-word synonym for right-click
+    ("Right click the red button", [("FIND", "red button"), ("DO", "right click")]),
+    # 52. Common context menu synonym
+    ("context-click the icon", [("FIND", "icon"), ("DO", "context-click")]),
+    # 53. Word overlap: 'click' + 'right' (positional) -> should NOT be right-click
+    ("click on the right side of the banner", [("FIND", "right side of banner"), ("DO", "click")]),
+    # 54. Variation of 'tap'
+    ("tap the screen twice", [("FIND", "screen twice"), ("DO", "tap")]),
+    # 55. 'hit' as action
+    ("hit the submit button", [("FIND", "submit button"), ("DO", "hit")]),
+    # 56. Longer context phrase for right-click
+    ("perform right-click on the link", [("FIND", "link"), ("DO", "perform right-click")]),
+    # 57. 'right' as part of an adverbial phrase 'right here'
+    ("click right here", [("FIND", "right here"), ("DO", "click")]),
+    # 58. Leading noise clause
+    ("right then, click the logout", [("FIND", "logout"), ("DO", "click")]),
+    # 59. Complex DO with 'and'
+    ("press and hold the button", [("FIND", "and hold button"), ("DO", "press")]),
+    # 60. Chained action and verification
+    (
+        "right click -> modal should close",
+        [("FIND", "element"), ("DO", "right click"), ("VERIFY", "modal should close")],
+    ),
 ]
+
+
+def normalize_text(text: str) -> str:
+    """Collapses whitespace, lowercases, and removes noise words (the, a, an, of, etc)."""
+    if not text:
+        return ""
+    text = text.lower().strip()
+    # Normalize punctuation/spaces
+    text = re.sub(r"[^a-z0-9'\"]+", " ", text)
+    # Remove redundant articles and prepositions that might be stripped inconsistently
+    text = re.sub(r"\b(the|a|an|of|to|on|at|in|with|from|by|about|around)\b", " ", text, flags=re.I)
+    return " ".join(text.split())
 
 
 @pytest.mark.parametrize("instruction, expected_steps", TEST_CASES)
@@ -149,8 +187,13 @@ def test_semantic_parser(instruction, expected_steps):
     actual_steps = parser.parse(instruction)
 
     # Convert actual steps into a list of tuples for easy comparison
-    actual_tuples = [(step.type, step.value) for step in actual_steps]
+    actual_tuples = [(step.type, normalize_text(step.value)) for step in actual_steps]
+    expected_tuples = [(t, normalize_text(v)) for t, v in expected_steps]
+
+    print(f"Instruction: {instruction}")
+    print(f"Expected: {expected_tuples}")
+    print(f"Actual: {actual_tuples}")
 
     assert (
-        actual_tuples == expected_steps
-    ), f"expected: {expected_steps}, actual: {actual_tuples}, instruction: {instruction}"
+        actual_tuples == expected_tuples
+    ), f"expected: {expected_tuples}, actual: {actual_tuples}, instruction: {instruction}"

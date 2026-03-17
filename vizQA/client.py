@@ -21,7 +21,9 @@ class PerceptionClient:
         async with httpx.AsyncClient() as client:
             with open(image_path, "rb") as file:
                 files = {"file": file}
-                data = {}
+                data = {
+                    "similarity_threshold": 0.5,
+                }
                 if query:
                     data["query"] = query
                 if self.session_id:
