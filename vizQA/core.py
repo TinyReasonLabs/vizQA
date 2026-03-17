@@ -39,7 +39,8 @@ class Automator:
             self._logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        self.parser = SemanticParser(minilm=self.minilm)
+        use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
+        self.parser = SemanticParser(minilm=self.minilm, use_advanced_ranking=use_adv)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -251,7 +252,7 @@ class Automator:
         step.status = StepStatus.PASSED
         return True
 
-    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 10) -> bool:
+    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 0.2) -> bool:
         """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
         start_wait = datetime.now()
         test_slug = _test_slug(session)
@@ -260,6 +261,7 @@ class Automator:
         intent = self.parser.parse_verify_intent(query)
         self._logger.log_debug(step.id, f"verify intent={intent}")
         perception_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
+        self._logger.log_debug(step.id, f"perception_query={perception_query}")
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
             path = f".vizQA/{test_slug}_{step.id}_verify.jpg"

@@ -14,6 +14,8 @@ from vizQA.logger import get_logger
 if TYPE_CHECKING:
     from vizQA.minilm import MiniLM
 
+from vizQA.ranking import RankingEngine
+
 
 class SemanticNode(NamedTuple):
     """Atomic semantic unit produced by the parser."""
@@ -76,7 +78,7 @@ class SemanticParser:
     # Conjunctions (Split Points)
     SPLIT_PATTERN = re.compile(r"\b(?:and|then|after|while)\b|,|->")
 
-    def __init__(self, minilm: Optional["MiniLM"] = None):
+    def __init__(self, minilm: Optional["MiniLM"] = None, use_advanced_ranking: bool = False):
         """
         Initialise the parser.
 
@@ -86,8 +88,12 @@ class SemanticParser:
             Optional pre-loaded MiniLM instance.  When provided, intent
             classification (color, state, position, negation) uses semantic
             similarity instead of plain keyword lists.
+        use_advanced_ranking:
+            If True, uses the dual-vector RankingEngine in filter_elements_by_intent.
         """
         self.minilm = minilm
+        self.use_advanced_ranking = use_advanced_ranking
+        self._ranking_engine = RankingEngine(minilm) if minilm else None
         self._logger = get_logger()
 
     # ------------------------------------------------------------------
@@ -272,6 +278,11 @@ class SemanticParser:
         if not elements:
             return []
 
+        # --- Advanced Ranking Pipeline (Phase 1-3) ---
+        if self.use_advanced_ranking and self._ranking_engine:
+            query = intent.get("keyword") or intent.get("subject") or ""
+            return self._ranking_engine.rank(query, intent, elements)
+
         # Build candidate strings for semantic / substring matching
         # prioritize "placeholder" especially for input fields
         candidates = [
@@ -291,6 +302,18 @@ class SemanticParser:
                     matched_idxs = set(self.minilm.semantic_match(query, candidates, threshold=0.55))
 
                 base_filtered = [el for i, el in enumerate(elements) if i in matched_idxs]
+
+                # Robustness fallback: If semantic matches give nothing but we have substring hits, use them
+                if not base_filtered:
+                    q_lower = query.lower()
+                    base_filtered = [
+                        el
+                        for el in elements
+                        if q_lower in (el.get("placeholder") or "").lower()
+                        or q_lower in (el.get("text") or "").lower()
+                        or q_lower in (el.get("label") or "").lower()
+                        or q_lower in (el.get("name") or "").lower()
+                    ]
             else:
                 q_lower = query.lower()
                 base_filtered = [
