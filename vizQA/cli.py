@@ -11,9 +11,11 @@ from typing import Any, List, Optional
 
 import click
 import yaml
-from rich.console import Console
+from rich.console import Console, Group
 from rich.text import Text
 from rich.tree import Tree
+from rich.live import Live
+
 
 from vizQA.client import PerceptionClient
 from vizQA.core import Automator
@@ -89,9 +91,6 @@ class ProgressiveReporter:
 
     def _update_live(self):
         if not self._live:
-            from rich.console import Group
-            from rich.live import Live
-
             self._live = Live(
                 Group(*self._get_visible_lines(), self._get_footer()),
                 console=console,
@@ -100,8 +99,6 @@ class ProgressiveReporter:
             )
             self._live.start()
         else:
-            from rich.console import Group
-
             self._live.update(Group(*self._get_visible_lines(), self._get_footer()))
 
     def _get_visible_lines(self) -> List[Any]:
@@ -186,50 +183,19 @@ class ProgressiveReporter:
                         console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
 
                     if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
-                        console.print(f"  [dim]Type:[/] {failed_step.failure_type}")
+                        console.print(f"  [bold]Type:[/] {failed_step.failure_type}")
 
-                    console.print(f"  [dim]Reason:[/] {failed_step.failure_reason or failed_step.error}")
+                    console.print(f"  [bold]Reason:[/] {failed_step.failure_reason or failed_step.error}")
 
-                    if failed_step.screenshot_before:
-                        console.print(f"  [dim]Before screenshot:[/] {failed_step.screenshot_before}")
-                    if failed_step.screenshot_after:
-                        console.print(f"  [dim]After screenshot:[/] {failed_step.screenshot_after}")
-                    if failed_step.action_screenshot:
-                        console.print(f"  [dim]Action snapshot:[/] {failed_step.action_screenshot}")
+                    # if failed_step.screenshot_before:
+                    #     console.print(f"  [dim]Before screenshot:[/] {failed_step.screenshot_before}")
+                    # if failed_step.screenshot_after:
+                    #     console.print(f"  [dim]After screenshot:[/] {failed_step.screenshot_after}")
+                    # if failed_step.action_screenshot:
+                    #     console.print(f"  [dim]Action snapshot:[/] {failed_step.action_screenshot}")
 
         console.print("[bold red]" + "=" * 50 + "[/]")
 
-
-# ---------------------------------------------------------------------------
-# Shared render tree (kept for potential future use / --report flag)
-# ---------------------------------------------------------------------------
-
-
-class ModernReporter:
-    """
-    Hierarchical Rich Tree reporter (not used in the default run path; kept as
-    an alternative for batch report generation).
-    """
-
-    def __init__(self, verbosity: int = 0):
-        self.sessions: List[TestSession] = []
-        self.verbosity = verbosity
-
-    def get_renderable(self):
-        """Generates a rich Tree representing the current test sessions."""
-        root = Tree("[bold]UI Testing Framework[/]")
-        for session in self.sessions:
-            steps_passed = all(s.status == StepStatus.PASSED for s in session.steps)
-            steps_failed = any(s.status == StepStatus.FAILED for s in session.steps)
-
-            status_color = "green" if steps_passed else "red" if steps_failed else "yellow"
-            session_node = root.add(f"[{status_color}]●[/] [bold]{session.test_name}[/] [dim]({session.id})[/]")
-
-            if self.verbosity >= 1:
-                for step in session.steps:
-                    _add_step_node(session_node, step, self.verbosity)
-
-        return root
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +261,7 @@ async def run_single_test(
     automator: Automator,
     reporter: ProgressiveReporter,
     on_step_update: Optional[Any] = None,
+    interactive: bool = False,
 ):
     """Runs a single test file and updates the reporter."""
     try:
@@ -318,7 +285,10 @@ async def run_single_test(
     # Print session header
     console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
 
-    await automator.run_session(session, on_step_update=on_step_update)
+    result = await automator.run_session(session, on_step_update=on_step_update)
+    if interactive and not result:
+        reporter.finalize()
+        raise click.Abort()
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +300,8 @@ async def run_single_test(
 @click.argument("paths", type=click.Path(exists=True), nargs=-1)
 @click.option("--headless/--no-headless", default=True, help="Run browser in headless mode (default: True)")
 @click.option("-v", "--verbose", count=True, help="Verbosity (-v steps, -vv timing/detail)")
-def cli(paths, headless, verbose):
+@click.option("-x", "--interactive", is_flag=True, default=False, help="Run in interactive mode, stops at the first failing test (default: False)")
+def cli(paths, headless, verbose, interactive):
     """
     UI Testing Framework - Vision-Driven Automation
 
@@ -373,7 +344,7 @@ def cli(paths, headless, verbose):
                     else:
                         reporter.on_step_done(step, depth=1)
 
-                await run_single_test(test_file, automator, reporter, on_step_update=on_step_update)
+                await run_single_test(test_file, automator, reporter, on_step_update=on_step_update, interactive=interactive)
 
         except Exception as err:  # pylint: disable=broad-exception-caught
             reporter.finalize()
@@ -386,9 +357,9 @@ def cli(paths, headless, verbose):
         reporter.print_failures()
 
         # Summary line
-        total = len(reporter.sessions)
+        total = len(paths)
         passed = sum(1 for s in reporter.sessions if all(st.status == StepStatus.PASSED for st in s.steps))
-        failed = total - passed
+        failed = total - passed if not interactive else 1
 
         summary = Text.assemble(
             ("\nResults: ", "bold"),

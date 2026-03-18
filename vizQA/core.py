@@ -76,7 +76,7 @@ class Automator:
     # Session runner
     # ------------------------------------------------------------------
 
-    async def run_session(self, session: TestSession, on_step_update: Optional[Any] = None):
+    async def run_session(self, session: TestSession, on_step_update: Optional[Any] = None) -> bool:
         """Main execution loop for a test session."""
         if not self.page:
             await self.start()
@@ -96,6 +96,7 @@ class Automator:
 
         session.end_time = datetime.now()
         self._logger.log_session(session.id, "end", f"duration={session.duration:.1f}s")
+        return not failed
 
     # ------------------------------------------------------------------
     # Step dispatcher
@@ -163,7 +164,7 @@ class Automator:
             self._logger.log_exception(step.id, exc)
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
-            step.failure_reason = str(exc)
+            # step.failure_reason = str(exc)
             step.error = str(exc)
             success = False
         finally:
@@ -284,9 +285,12 @@ class Automator:
             all_elements = perception.get("elements", [])
 
             match_found = False
+            reasoning = ""
             if intent.get("negated"):
                 # Delegated negation path — uses history_metadata for match
                 match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
+                if not match_found: # if the negation is not met
+                    reasoning = "Negation failure: Element remains in the view"
             else:
                 filtered = self.parser.filter_elements_by_intent(intent, all_elements)
                 self._logger.log_debug(step.id, f"filtered by intent={filtered}")
@@ -329,16 +333,19 @@ class Automator:
                         if norm_subj not in history:
                             history[norm_subj] = {"target": matches[0], "elements": all_elements}
                             self._logger.log_debug(step.id, f"identified target for {subj}: {matches[0]}")
+                else:
+                    reasoning = "Negation failure: Element remains in the view"
 
                 step.status = StepStatus.PASSED
                 return True
-
             await asyncio.sleep(1.0)
 
         step.status = StepStatus.FAILED
         wait_time = (datetime.now() - start_wait).total_seconds()
+        if not reasoning:
+            reasoning = f"Verification failed after {wait_time:.1f}s"
         step.failure_reason = self._failure_details(
-            "VERIFY", query, perception, f"Verification failed after {wait_time:.1f}s"
+            "VERIFY", query, perception, reasoning
         )
         return False
 
