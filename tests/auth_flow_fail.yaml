@@ -1,0 +1,12 @@
+name: "Nexus CRM: Auth Flow"
+url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+description: "Verifies the login modal and error handling."
+steps:
+  - action: "Click the primary Login button in the header"
+    expect: "A 'Sign In' modal should appear in the center of the screen"
+  - action: "Type 'wrong_user' into the username field"
+  - action: "Click the Submit button"
+    expect: "The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur"
+  - action: "Type 'admin' into the username field and 'password' into the password field"
+  - action: "Click the Submit button"
+    expect: "The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur"
