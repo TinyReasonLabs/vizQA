@@ -48,8 +48,8 @@ def test_planner_decomposition_with_minilm_fallback(mock_minilm):
 
     # 2 sub-steps from instruction fallback
     assert len(steps[0].sub_steps) == 2
-    assert steps[0].sub_steps[0].instruction == "FIND: element"
-    assert steps[0].sub_steps[1].instruction == "DO: interact"
+    assert steps[0].sub_steps[0].instruction == "FIND: Login"
+    assert steps[0].sub_steps[1].instruction == "DO: click"
 
 
 def test_planner_decomposition_with_minilm_generative(mock_minilm):
