@@ -5,11 +5,13 @@ ONNX inference module for MiniLM model.
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
+
+from vizQA.parser import ParserVocabulary
 
 
 class MiniLM:
@@ -88,6 +90,7 @@ class MiniLM:
         "clear": ["clear the field", "empty the input", "erase the text"],
         "wait": ["wait for the element", "pause for 2 seconds", "sleep", "wait until visible"],
     }
+    _KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
 
     def __init__(self, model_dir: str):
         self.model_path = os.path.join(model_dir, "model.onnx")
@@ -127,6 +130,14 @@ class MiniLM:
         self._action_groups: Dict[str, np.ndarray] = {
             name: self._compute_anchor_embeddings(anchors) for name, anchors in self._ACTION_ANCHOR_GROUPS.items()
         }
+
+        # Pre-compute action synonyms for semantic dissection
+        all_syns = []
+        for ct, syn_list in ParserVocabulary.ACTION_VERBS.items():
+            for s in syn_list:
+                all_syns.append((s.lower(), ct))
+        self._all_syns_sorted = sorted(all_syns, key=lambda x: len(x[0]), reverse=True)
+        self._action_syn_set = set(s for s, _ in self._all_syns_sorted)
 
     def _compute_anchor_embeddings(self, anchors: List[str]) -> np.ndarray:
         """Runs the anchor words through the model to get their 384D representations."""
@@ -317,27 +328,17 @@ class MiniLM:
                 raise
             raise RuntimeError(f"MiniLM Deserialization Error: {e}") from e
 
-    def _semantic_dissection(self, prompt: str) -> List[Dict[str, str]]:
-        """
-        Vocabulary-grounded decomposition of a UI instruction into atomic FIND/DO/VERIFY steps.
-        Uses ParserVocabulary for canonical action grounding and handles special sentence patterns.
-        """
-        from vizQA.parser import ParserVocabulary
+    # ── Semantic Dissection Helpers ──────────────────────────────────────────
 
-        KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
-
+    def _sd_protect(self, prompt: str) -> Tuple[str, List[str]]:
+        """Quotes remain unchanged, but their contents are protected from regex splits."""
         quotes: List[str] = []
 
-        def _protect(match):
+        def _repl(match):
             quotes.append(match.group(0))
             return f" __QUOTE_{len(quotes)-1}__ "
 
-        def _restore(text: str) -> str:
-            for i, q in enumerate(quotes):
-                text = text.replace(f"__QUOTE_{i}__", q.strip())
-            return text
-
-        protected = re.sub(r"(['\"])(.*?)\1", _protect, prompt)
+        protected = re.sub(r"(['\"])(.*?)\1", _repl, prompt)
         # Upfront noise stripping
         protected = re.sub(r"\bright\s+then\b", "then", protected, flags=re.I)
         protected = re.sub(
@@ -346,34 +347,40 @@ class MiniLM:
             protected,
             flags=re.I,
         )
+        # Protect "press and hold" from 'and' splitting
+        protected = re.sub(r"\bpress\s+and\s+hold\b", "press_and_hold", protected, flags=re.I)
+        return protected, quotes
 
-        # Build verb lookup: sorted by length descending so multi-word verbs match first
-        all_syns_sorted: List[tuple] = []
-        for ct, syns in ParserVocabulary.ACTION_VERBS.items():
-            for s in syns:
-                all_syns_sorted.append((s.lower(), ct))
-        all_syns_sorted.sort(key=lambda x: len(x[0]), reverse=True)
-        action_syn_set = set(s for s, _ in all_syns_sorted)
+    def _sd_restore(self, text: str, quotes: List[str]) -> str:
+        """Restores protected quote contents."""
+        for i, q in enumerate(quotes):
+            text = text.replace(f"__QUOTE_{i}__", q.strip())
+        text = text.replace("press_and_hold", "press and hold")
+        return text
 
-        def find_verb(text: str):
-            """Returns (literal_syn, canonical_type) or (None, None). Protects 'the input' from matching 'input' verb."""
-            t = text.lower()
-            for s, ct in all_syns_sorted:
-                if s == "input" and re.search(r"\bthe\s+input\b", t):
-                    continue
-                if re.search(rf"\b{re.escape(s)}\b", t):
-                    return s, ct
-            return None, None
+    def _sd_clean_target(self, text: str) -> str:
+        """Removes leading articles and prepositions (the, a, an, over, at, on, in, into, from, of)."""
+        clean = re.sub(r"^(the|a|an|over|at|on|in|into|from|of)\s+", "", text, flags=re.I).strip()
+        # Also strip trailing 'key' if after a recognized key name
+        return clean
 
-        def rhs_starts_with_verb(text: str) -> bool:
-            """True if text starts with a recognized action verb (ignoring leading articles)."""
-            t = re.sub(r"^\s*(the|a|an|please)\s+", "", text.lower()).strip()
-            return any(re.match(rf"{re.escape(v)}\b", t) for v in action_syn_set)
+    def _sd_find_verb(self, text: str) -> Tuple[Optional[str], Optional[str]]:
+        """Returns (literal_syn, canonical_type) or (None, None)."""
+        t = text.lower()
+        for s, ct in self._all_syns_sorted:
+            if s == "input" and re.search(r"\bthe\s+input\b", t):
+                continue
+            if re.search(rf"\b{re.escape(s)}\b", t):
+                return s, ct
+        return None, None
 
-        def strip_articles(text: str) -> str:
-            text = re.sub(r"^(the|a|an)\s+", "", text, flags=re.I).strip()
-            return text
+    def _sd_rhs_starts_with_verb(self, text: str) -> bool:
+        """True if text starts with a recognized action verb."""
+        t = re.sub(r"^\s*(the|a|an|please|over)\s+", "", text.lower()).strip()
+        return any(re.match(rf"{re.escape(v)}\b", t) for v in self._action_syn_set)
 
+    def _sd_get_clauses(self, protected: str) -> List[str]:
+        """Splits the protected prompt into logical instruction clauses."""
         # High-level split: 'until' handling for VERIFY
         until_split = re.split(r"\buntil\b", protected, maxsplit=1, flags=re.I)
         if len(until_split) == 2:
@@ -400,7 +407,7 @@ class MiniLM:
             current = tokens[0]
             for i in range(1, len(tokens), 2):
                 rhs = tokens[i + 1]
-                if rhs_starts_with_verb(rhs):
+                if self._sd_rhs_starts_with_verb(rhs):
                     if current.strip():
                         clauses.append(current.strip())
                     current = rhs
@@ -408,329 +415,369 @@ class MiniLM:
                     current += tokens[i] + rhs
             if current.strip():
                 clauses.append(current.strip())
+        return clauses
+
+    def _sd_handle_verify(
+        self, clause: str, real_clause: str, all_steps: List[Dict[str, str]]
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles VERIFY patterns. Returns (handled, next_prev_target)."""
+        lower_real = real_clause.lower()
+        is_verify = (
+            clause.startswith("VERIFY_FLAG ")
+            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_real)
+            or re.search(r"\bshould\b", lower_real)
+        )
+        if not is_verify:
+            return False, None
+
+        val = re.sub(r"^(VERIFY_FLAG\s+)", "", real_clause)
+        val = re.sub(r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", val, flags=re.I).strip()
+        # Split VERIFY on 'and' to emit separate VERIFY steps
+        for vp in re.split(r"\band\b", val, flags=re.I):
+            vp = re.sub(r"\s+", " ", vp).strip()
+            if vp:
+                all_steps.append({"type": "VERIFY", "value": vp})
+        return True, None
+
+    def _sd_handle_bare_noun(
+        self, real_clause: str, quotes: List[str], all_steps: List[Dict[str, str]]
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles pattern where only a noun is provided (defaults to click). Returns (handled, next_prev_target)."""
+        # This is called if no verb was found by find_verb
+        noun = self._sd_clean_target(real_clause.lower())
+        noun = self._sd_restore(noun, quotes)
+        if not noun or noun.lower() in ["it", "them"]:
+            raise ValueError(f"Could not identify a target element in '{real_clause}'")
+
+        all_steps.append({"type": "FIND", "value": noun})
+        all_steps.append({"type": "DO", "value": f"click {noun}"})
+        return True, noun
+
+    def _sd_handle_drag(
+        self,
+        canonical_type: str,
+        target_area: str,
+        real_clause: str,
+        quotes: List[str],
+        all_steps: List[Dict[str, str]],
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles pattern 'drag [source] onto [dest]'. Returns (handled, next_prev_target)."""
+        if canonical_type != "drag" or not re.search(r"\bonto\b", target_area, re.I):
+            return False, None
+
+        onto_parts = re.split(r"\bonto\b", target_area, maxsplit=1, flags=re.I)
+        drag_tgt = self._sd_clean_target(self._sd_restore(onto_parts[0].strip(), quotes))
+        drop_tgt = self._sd_clean_target(self._sd_restore(onto_parts[1].strip(), quotes))
+
+        if not drag_tgt:
+            raise ValueError(f"No source element identified for drag action in '{real_clause}'")
+        if not drop_tgt:
+            raise ValueError(f"No destination element identified for drop action in '{real_clause}'")
+
+        all_steps.extend(
+            [
+                {"type": "FIND", "value": drag_tgt},
+                {"type": "DO", "value": "drag"},
+                {"type": "FIND", "value": drop_tgt},
+                {"type": "DO", "value": "drop"},
+            ]
+        )
+        return True, drop_tgt
+
+    def _sd_handle_key_input(
+        self,
+        real_clause: str,
+        target_area: str,
+        canonical_type: str,
+        prev_target: Optional[str],
+        all_steps: List[Dict[str, str]],
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles pattern 'press enter' or 'press [key]'. Returns (handled, next_prev_target)."""
+        detected_key = None
+        for k in self._KEY_NAMES:
+            if re.search(rf"\b{re.escape(k)}\b", real_clause.lower()):
+                detected_key = k
+                break
+
+        if not detected_key:
+            return False, None
+
+        # Robust key handling: "Enter" at start is an action, NOT a key press
+        is_explicit_press = re.match(r"^\s*(press|hit|on|hit\s+the|press\s+the)\b", real_clause, flags=re.I)
+        if not is_explicit_press and detected_key.lower() == "enter":
+            return False, None
+
+        if detected_key:
+            # "press enter on the login button"
+            element = re.sub(r"\b(press|hit|on)\b", "", real_clause, flags=re.I)
+            element = re.sub(rf"\b{re.escape(detected_key)}\b", "", element, flags=re.I).strip()
+            element = self._sd_clean_target(element)
+            if element.lower().endswith(" key"):
+                element = element[:-4].strip()
+
+            if not element or element.lower() in ["it", "them"]:
+                element = prev_target
+
+            if not element:
+                raise ValueError(f"No target element identified for key press '{detected_key}' in '{real_clause}'")
+
+            all_steps.append({"type": "FIND", "value": element})
+            all_steps.append({"type": "DO", "value": f"press {detected_key}"})
+            return True, element
+
+        return False, None
+
+    def _sd_handle_type_enter(
+        self,
+        canonical_type: str,
+        target_area: str,
+        real_clause: str,
+        quotes: List[str],
+        prev_target: Optional[str],
+        all_steps: List[Dict[str, str]],
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles single or multi-field 'type [payload] into [target]' or 'enter [payload]'. Returns (handled, next_prev_target)."""
+        if canonical_type not in ["type", "enter"]:
+            return False, None
+
+        q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
+        # ── Into/In/On split: distributive or multiple targets ──
+        connector = None
+        if re.search(r"\binto\b", target_area, re.I):
+            connector = "into"
+        elif re.search(r"\bin\b", target_area, re.I):
+            connector = "in"
+
+        if connector:
+            and_parts = re.split(r"\band\b", target_area, flags=re.I)
+            if len(and_parts) >= 2 and all(re.search(rf"\b{connector}\b", p, re.I) for p in and_parts):
+                elem = None
+                for part in and_parts:
+                    part_split = re.split(rf"\b{connector}\b", part.strip(), maxsplit=1, flags=re.I)
+                    if len(part_split) == 2:
+                        pload = self._sd_restore(part_split[0].strip(), quotes)
+                        elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), quotes))
+                        if not elem:
+                            raise ValueError(f"No target element identified for '{canonical_type}' action in '{part}'")
+                        all_steps.append({"type": "FIND", "value": elem})
+                        all_steps.append({"type": "DO", "value": f"{canonical_type} {pload}"})
+                return True, elem
+
+            # Single split: 'payload' in/into element
+            part_split = re.split(rf"\b{connector}\b", target_area, maxsplit=1, flags=re.I)
+            if len(part_split) == 2:
+                pload = self._sd_restore(part_split[0].strip(), quotes)
+                elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), quotes))
+                if not elem or elem.lower() in ["it", "them"]:
+                    elem = prev_target
+                if not elem:
+                    raise ValueError(f"No target element identified for '{canonical_type}' action in '{real_clause}'")
+
+                all_steps.append({"type": "FIND", "value": elem})
+                all_steps.append({"type": "DO", "value": f"{canonical_type} {pload}"})
+                return True, elem
+
+        # ── Multi-field fallback: "type first name john and last name doe" ──
+        restored_target = self._sd_restore(target_area, quotes)
+        and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
+        if len(and_parts) >= 2:
+            last_elem = None
+            for part in and_parts:
+                part = part.strip()
+                words = part.split()
+                if len(words) >= 2:
+                    last_elem = " ".join(words[:-1])
+                    all_steps.append({"type": "FIND", "value": last_elem})
+                    all_steps.append({"type": "DO", "value": f"{canonical_type} {words[-1]}"})
+                elif words:
+                    if not prev_target:
+                        raise ValueError(
+                            f"Ambiguous segment '{part}' in multi-field action '{restored_target}': No target specified."
+                        )
+                    last_elem = prev_target
+                    all_steps.append({"type": "FIND", "value": last_elem})
+                    all_steps.append({"type": "DO", "value": f"{canonical_type} {words[0]}"})
+            return True, last_elem
+
+        return False, None
+
+    def _sd_handle_select(
+        self,
+        canonical_type: str,
+        target_area: str,
+        real_clause: str,
+        quotes: List[str],
+        prev_target: Optional[str],
+        all_steps: List[Dict[str, str]],
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles pattern 'select [option] from [target]' or distributive select. Returns (handled, next_prev_target)."""
+        if canonical_type != "select":
+            return False, None
+
+        q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
+        if re.search(r"\bfrom\b", target_area, re.I):
+            from_split = re.split(r"\bfrom\b", target_area, maxsplit=1, flags=re.I)
+            pload = self._sd_restore(from_split[0].strip(), quotes)
+            elem_val = self._sd_clean_target(self._sd_restore(from_split[1].strip(), quotes))
+            if not elem_val:
+                raise ValueError(f"No target element identified for 'select' action in '{real_clause}'")
+            all_steps.append({"type": "FIND", "value": elem_val})
+            all_steps.append({"type": "DO", "value": f"select {pload}"})
+            return True, elem_val
+
+        elif re.search(r"\band\b", target_area, re.I):
+            # Distributive: 'apple' and 'banana' options
+            and_parts = re.split(r"\band\b", target_area, flags=re.I)
+            last_elem = None
+            for part in and_parts:
+                part_restored = self._sd_clean_target(self._sd_restore(part.strip(), quotes))
+                if not part_restored:
+                    raise ValueError(f"Could not identify a clear option to select in '{real_clause}'")
+
+                # Note: this distributive logic currently assumes the target is prev_target
+                tgt = prev_target or "element"
+                all_steps.append({"type": "FIND", "value": tgt})
+                all_steps.append({"type": "DO", "value": f"select {part_restored}"})
+                last_elem = tgt
+            return True, last_elem
+
+        return False, None
+
+    def _sd_handle_distributive_and(
+        self,
+        canonical_type: str,
+        target_area: str,
+        real_clause: str,
+        quotes: List[str],
+        saved_literal: str,
+        all_steps: List[Dict[str, str]],
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles distributive 'and' (e.g., 'click submit and cancel buttons'). Returns (handled, next_prev_target)."""
+        if canonical_type in ["click", "right-click", "hover", "select", "check"] and re.search(
+            r"\band\b", target_area, re.I
+        ):
+            and_parts = re.split(r"\band\b", target_area, flags=re.I)
+            if not any(self._sd_rhs_starts_with_verb(p) for p in and_parts):
+                restored_parts = [self._sd_clean_target(self._sd_restore(p.strip(), quotes)) for p in and_parts]
+                last_words = restored_parts[-1].split()
+                shared_suffix = last_words[-1] if last_words else ""
+                for j, part in enumerate(restored_parts):
+                    tgt = part.strip()
+                    if j < len(restored_parts) - 1 and shared_suffix:
+                        tgt = f"{tgt} {shared_suffix}"
+                    if not tgt or tgt.lower() in ["it", "them"]:
+                        raise ValueError(f"Could not identify a target element in '{real_clause}'")
+
+                    all_steps.append({"type": "FIND", "value": tgt})
+                    all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
+                return True, restored_parts[-1]
+
+        return False, None
+
+    def _sd_handle_press_and_hold(
+        self, lower_real: str, prev_target: Optional[str], all_steps: List[Dict[str, str]]
+    ) -> Tuple[bool, Optional[str]]:
+        """Handles pattern 'press and hold [target]'. Returns (handled, next_prev_target)."""
+        if "press and hold" in lower_real or "press_and_hold" in lower_real:
+            rest = re.sub(r"\b(press\s+and\s+hold|press_and_hold)\b", "", lower_real, flags=re.I).strip()
+            rest = self._sd_clean_target(rest)
+            if not rest or rest.lower() in ["it", "them"]:
+                rest = prev_target
+
+            if not rest:
+                raise ValueError(f"No target element identified for 'press and hold' in '{lower_real}'")
+
+            all_steps.append({"type": "FIND", "value": rest})
+            all_steps.append({"type": "DO", "value": "press-and-hold"})
+            return True, rest
+
+        return False, None
+
+    def _semantic_dissection(self, prompt: str) -> List[Dict[str, str]]:
+        """Modularized decomposition of a UI instruction into FIND/DO/VERIFY steps."""
+        protected, quotes = self._sd_protect(prompt)
+        clauses = self._sd_get_clauses(protected)
 
         all_steps: List[Dict[str, str]] = []
-        prev_target = None  # For target inheritance when RHS clause has no explicit element
+        prev_target = None
 
         for clause in clauses:
-            real_clause = _restore(clause)
+            real_clause = self._sd_restore(clause, quotes)
             lower_real = real_clause.lower()
 
-            # ── VERIFY ──────────────────────────────────────────────────
-            is_verify = (
-                clause.startswith("VERIFY_FLAG ")
-                or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_real)
-                or re.search(r"\bshould\b", lower_real)
-            )
-            if is_verify:
-                val = re.sub(r"^(VERIFY_FLAG\s+)", "", real_clause)
-                val = re.sub(r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", val, flags=re.I).strip()
-                # Split VERIFY on 'and' to emit separate VERIFY steps
-                for vp in re.split(r"\band\b", val, flags=re.I):
-                    vp = re.sub(r"\s+", " ", vp).strip()
-                    if vp:
-                        all_steps.append({"type": "VERIFY", "value": vp})
-                prev_target = None
+            handled, nt = self._sd_handle_verify(clause, real_clause, all_steps)
+            if handled:
+                prev_target = nt
                 continue
 
-            # ── ACTION: find the verb ────────────────────────────────────
-            literal_syn, canonical_type = find_verb(real_clause)
-            saved_literal = literal_syn  # preserve before any reset
+            literal_syn, canonical_type = self._sd_find_verb(real_clause)
+            saved_literal = literal_syn
 
-            # Bare noun (no verb) → click it
             if not canonical_type:
-                noun = strip_articles(lower_real)
-                noun = _restore(noun)
-                if not noun or noun.lower() in ["it", "them"]:
-                    raise ValueError(f"Could not identify a target element in '{real_clause}'")
+                handled, nt = self._sd_handle_bare_noun(real_clause, quotes, all_steps)
+                if handled:
+                    prev_target = nt
+                    continue
 
-                # Use the identified noun as the target instead of generic "element"
-                all_steps.append({"type": "FIND", "value": noun})
-                all_steps.append({"type": "DO", "value": f"click {noun}"})
-                prev_target = noun
-                continue
-
-            # Remove verb from clause to obtain target area (work in protected form)
             target_area = re.sub(rf"\b{re.escape(literal_syn)}\b", "", clause, count=1, flags=re.I).strip()
 
-            # ── DRAG + onto ── → split into drag+drop ───────────────────
-            if canonical_type == "drag" and re.search(r"\bonto\b", target_area, re.I):
-                onto_parts = re.split(r"\bonto\b", target_area, maxsplit=1, flags=re.I)
-                drag_tgt = strip_articles(_restore(onto_parts[0]).strip())
-                drop_tgt = strip_articles(_restore(onto_parts[1]).strip())
-                if not drag_tgt:
-                    raise ValueError(f"No source element identified for drag action in '{real_clause}'")
-                if not drop_tgt:
-                    raise ValueError(f"No destination element identified for drop action in '{real_clause}'")
-
-                all_steps.extend(
-                    [
-                        {"type": "FIND", "value": drag_tgt},
-                        {"type": "DO", "value": "drag"},
-                        {"type": "FIND", "value": drop_tgt},
-                        {"type": "DO", "value": "drop"},
-                    ]
-                )
-                prev_target = drop_tgt
+            handled, nt = self._sd_handle_drag(canonical_type, target_area, real_clause, quotes, all_steps)
+            if handled:
+                prev_target = nt
                 continue
 
-            # ── KEY NAME detection ─────────────────────────────────────
-            # Detect patterns like "Press Enter on the search box" or "Hit the Escape key"
-            lower_target = target_area.lower()
-            detected_key = None
-            for key in sorted(KEY_NAMES, key=len, reverse=True):
-                if re.search(rf"\b{re.escape(key)}\b", lower_target):
-                    detected_key = key
-                    break
-            if detected_key and canonical_type in ["click", "type", "enter"]:
-                rest = re.sub(rf"\b{re.escape(detected_key)}\b", "", lower_target, count=1, flags=re.I).strip()
-                rest = re.sub(r"\bkey\b", "", rest, flags=re.I).strip()  # strip trailing 'key' word
-                rest = re.sub(r"^(on|in|the|a|an)\s+", "", rest, flags=re.I).strip()
-                element = _restore(rest) if rest else ""
-                element = strip_articles(element)
-                if not element or element.lower() in ["it", "them"]:
-                    element = prev_target
-
-                if not element:
-                    raise ValueError(f"No target element identified for key press '{detected_key}' in '{real_clause}'")
-                # Normalize verb to 'press' for key actions
-                all_steps.append({"type": "FIND", "value": element})
-                all_steps.append(
-                    {
-                        "type": "DO",
-                        "value": (
-                            f"press {detected_key} key"
-                            if "key" in lower_real.replace(detected_key, "", 1).lower()
-                            else f"press {detected_key}"
-                        ),
-                    }
-                )
-                prev_target = element
+            handled, nt = self._sd_handle_key_input(real_clause, target_area, canonical_type, prev_target, all_steps)
+            if handled:
+                prev_target = nt
                 continue
 
-            # ── TYPE/ENTER: quoted payload + into/from ─────────────────
-            payload = ""
-            if canonical_type in ["type", "enter"]:
-                q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
-
-                if q_tokens and re.search(r"\binto\b", target_area, re.I):
-                    # Multiple or single "X into Y" patterns
-                    and_into_parts = re.split(r"\band\b", target_area, flags=re.I)
-                    if all(re.search(r"\binto\b", p, re.I) for p in and_into_parts):
-                        for part in and_into_parts:
-                            into_split = re.split(r"\binto\b", part.strip(), maxsplit=1, flags=re.I)
-                            if len(into_split) == 2:
-                                pload = _restore(into_split[0].strip())
-                                elem = strip_articles(_restore(into_split[1].strip()))
-                                if not elem:
-                                    raise ValueError(
-                                        f"No target element identified for '{saved_literal}' action in '{part}'"
-                                    )
-                                all_steps.append({"type": "FIND", "value": elem})
-                                all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                        prev_target = elem
-                        continue
-                    # Single into: 'payload' into element
-                    into_split = re.split(r"\binto\b", target_area, maxsplit=1, flags=re.I)
-                    if len(into_split) == 2:
-                        pload = _restore(into_split[0].strip())
-                        elem = strip_articles(_restore(into_split[1].strip()))
-                        if not elem or elem.lower() in ["it", "them"]:
-                            elem = prev_target
-                        if not elem:
-                            raise ValueError(
-                                f"No target element identified for '{saved_literal}' action in '{real_clause}'"
-                            )
-
-                        all_steps.append({"type": "FIND", "value": elem})
-                        all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                        prev_target = elem
-                        continue
-
-                elif q_tokens:
-                    # Quote is payload, remaining is element
-                    first_q = q_tokens[0]
-                    payload = first_q
-                    target_area = target_area.replace(first_q, "").strip()
-
-                elif re.search(r"\binto\b", target_area, re.I):
-                    # Unquoted: "input mypassword into pass field"
-                    into_split = re.split(r"\binto\b", target_area, maxsplit=1, flags=re.I)
-                    if len(into_split) == 2:
-                        pload = re.sub(
-                            rf"\b{re.escape(literal_syn or canonical_type)}\b", "", into_split[0], count=1, flags=re.I
-                        ).strip()
-                        elem = strip_articles(_restore(into_split[1].strip()))
-                        if not elem or elem.lower() in ["it", "them"]:
-                            elem = prev_target
-                        if not elem:
-                            raise ValueError(
-                                f"No target element identified for '{saved_literal}' action in '{real_clause}'"
-                            )
-
-                        all_steps.append({"type": "FIND", "value": elem})
-                        all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                        prev_target = elem
-                        continue
-
-            # ── SELECT: quoted payload with 'from' OR distributive 'and' ─
-            if canonical_type == "select":
-                q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
-                if q_tokens and re.search(r"\bfrom\b", target_area, re.I):
-                    from_split = re.split(r"\bfrom\b", target_area, maxsplit=1, flags=re.I)
-                    pload = _restore(from_split[0].strip())
-                    elem_val = strip_articles(_restore(from_split[1].strip()))
-                    if not elem_val:
-                        raise ValueError(
-                            f"No target element identified for '{saved_literal}' search in '{real_clause}'"
-                        )
-                    all_steps.append({"type": "FIND", "value": elem_val})
-                    all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                    prev_target = elem_val
-                    continue
-                elif q_tokens and re.search(r"\band\b", target_area, re.I):
-                    # Distributive: 'apple' and 'banana' options
-                    and_parts = re.split(r"\band\b", target_area, flags=re.I)
-                    for part in and_parts:
-                        part = part.strip()
-                        part_restored = strip_articles(_restore(part))
-                        if not part_restored:
-                            raise ValueError(f"Could not identify a clear option to select in '{real_clause}'")
-                        all_steps.append({"type": "FIND", "value": part_restored})
-                        all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
-                    prev_target = part_restored
-                    continue
-
-            # ── Distributive 'and' for noun targets (click submit and cancel buttons) ──
-            if canonical_type in ["click", "right-click", "hover", "select", "check"] and re.search(
-                r"\band\b", target_area, re.I
-            ):
-                and_parts = re.split(r"\band\b", target_area, flags=re.I)
-                if not any(rhs_starts_with_verb(p) for p in and_parts):
-                    restored_parts = [strip_articles(_restore(p.strip())) for p in and_parts]
-                    last_words = restored_parts[-1].split()
-                    shared_suffix = last_words[-1] if last_words else ""
-                    for j, part in enumerate(restored_parts):
-                        tgt = part.strip()
-                        if j < len(restored_parts) - 1 and shared_suffix:
-                            tgt = f"{tgt} {shared_suffix}"
-                        if not tgt or tgt.lower() in ["it", "them"]:
-                            raise ValueError(f"Could not identify a target element in '{real_clause}'")
-                        all_steps.append({"type": "FIND", "value": tgt})
-                        all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
-                    prev_target = restored_parts[-1]
-                    continue
-
-            # ── Press-and-hold special case ─────────────────────────────
-            if "press and hold" in lower_real:
-                rest = re.sub(r"\bpress\b", "", lower_real, count=1, flags=re.I)
-                rest = re.sub(r"\band\s+hold\b", "", rest, flags=re.I).strip()
-                rest = strip_articles(rest)
-                if not rest or rest.lower() in ["it", "them"]:
-                    rest = prev_target
-                if not rest:
-                    raise ValueError(f"No target element identified for 'press and hold' in '{real_clause}'")
-                all_steps.append({"type": "FIND", "value": rest})
-                all_steps.append({"type": "DO", "value": "press"})
-                prev_target = rest
+            handled, nt = self._sd_handle_type_enter(
+                canonical_type, target_area, real_clause, quotes, prev_target, all_steps
+            )
+            if handled:
+                prev_target = nt
                 continue
 
-            # ── Strip verb from target area ─────────────────────────────
-            if literal_syn:
-                target_area = re.sub(rf"\b{re.escape(literal_syn)}\b", "", target_area, count=1, flags=re.I).strip()
+            handled, nt = self._sd_handle_select(
+                canonical_type, target_area, real_clause, quotes, prev_target, all_steps
+            )
+            if handled:
+                prev_target = nt
+                continue
 
-            # Noise: strip leading prepositions and articles
-            target_area = re.sub(
-                r"^(into|onto|to|on|over|in|at|from|with|inside)\s+", "", target_area, flags=re.I
-            ).strip()
-            target_area = re.sub(r"^(the|a|an)\s+", "", target_area, flags=re.I).strip()
+            handled, nt = self._sd_handle_distributive_and(
+                canonical_type, target_area, real_clause, quotes, saved_literal, all_steps
+            )
+            if handled:
+                prev_target = nt
+                continue
 
-            restored_target = _restore(target_area)
-            restored_payload = _restore(payload) if payload else ""
+            handled, nt = self._sd_handle_press_and_hold(lower_real, prev_target, all_steps)
+            if handled:
+                prev_target = nt
+                continue
 
-            target_val = restored_target if restored_target else ""
+            # 5. FINAL FALLBACK (standard verb + noun)
+            target_val = self._sd_clean_target(self._sd_restore(target_area, quotes))
             if not target_val or target_val.lower() in ["it", "them"]:
-                target_val = prev_target or ""
+                target_val = prev_target or "element"
 
             if not target_val:
-                # If wait action, it can default to 'the page' or 'anything' if it just wants to wait, but usually it needs a target
                 if canonical_type == "wait":
-                    target_val = "page"  # Special case for 'Wait 2 seconds'
+                    target_val = "page"
                 else:
-                    raise ValueError(f"No target element identified for {final_verb} in '{real_clause}'")
-
-            target_val = re.sub(r"\s+", " ", target_val).strip()
-            target_val = re.sub(r"^[,.]|[,.]$", "", target_val).strip()
+                    raise ValueError(
+                        f"No target element identified for {saved_literal or canonical_type} in '{real_clause}'"
+                    )
 
             final_verb = saved_literal or canonical_type
-
             if canonical_type == "wait":
-                # Wait requires a clear target or it defaults to the previous one
-                wait_tgt = target_val if target_val != "element" else prev_target
-                if not wait_tgt:
-                    raise ValueError(f"No target element identified for 'wait' action in '{real_clause}'")
-
-                all_steps.append({"type": "FIND", "value": wait_tgt})
-                all_steps.append({"type": "DO", "value": f"wait {target_val}"})
-                prev_target = wait_tgt
-                continue
-
-            # ── Type/Enter payload building ─────────────────────────────
-            if canonical_type in ["type", "enter"]:
-                if restored_payload:
-                    final_verb = f"{final_verb} {restored_payload}"
-                else:
-                    # Multi-field: "type first name john and last name doe"
-                    and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
-                    if len(and_parts) >= 2:
-                        for part in and_parts:
-                            part = part.strip()
-                            words = part.split()
-                            if len(words) >= 2:
-                                all_steps.append({"type": "FIND", "value": " ".join(words[:-1])})
-                                all_steps.append({"type": "DO", "value": f"{final_verb} {words[-1]}"})
-                            elif words:
-                                if not prev_target:
-                                    raise ValueError(
-                                        f"Ambiguous segment '{part}' in multi-field action '{restored_target}': No target specified."
-                                    )
-                                all_steps.append({"type": "FIND", "value": prev_target})
-                                all_steps.append({"type": "DO", "value": f"{final_verb} {words[0]}"})
-                        prev_target = "element"  # mark as used
-                        continue
-                    else:
-                        # Single field+value: last word = value, rest = field
-                        parts = restored_target.split()
-                        if len(parts) > 1 and restored_target != "element":
-                            final_verb = f"{final_verb} {parts[-1]}"
-                            target_val = " ".join(parts[:-1])
-                        elif restored_target and restored_target != "element":
-                            final_verb = f"{final_verb} {restored_target}"
-                            if not prev_target:
-                                raise ValueError(
-                                    f"Ambiguous action '{final_verb}': No target element provided and no previous context."
-                                )
-                            target_val = prev_target
-
-            # ── FIND-only action ────────────────────────────────────────
-            if canonical_type == "find":
-                if target_val != "element":
-                    all_steps.append({"type": "FIND", "value": target_val})
-                prev_target = target_val
-                continue
-
-            if target_val and target_val != "element":
                 all_steps.append({"type": "FIND", "value": target_val})
-            elif not prev_target:
-                raise ValueError(
-                    f"Ambiguous instruction: Could not identify target for '{real_clause}' and no previous context exists."
-                )
+                all_steps.append({"type": "DO", "value": f"wait {target_val}"})
             else:
-                # Use previous target as fallback if current one is mission/generic
-                all_steps.append({"type": "FIND", "value": prev_target})
-
-            all_steps.append({"type": "DO", "value": final_verb})
-            prev_target = target_val if target_val else prev_target
+                all_steps.append({"type": "FIND", "value": target_val})
+                all_steps.append({"type": "DO", "value": final_verb})
+            prev_target = target_val
 
         if not all_steps:
             raise ValueError(f"Could not decompose the instruction into any valid test steps: '{prompt}'")
