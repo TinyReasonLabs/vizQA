@@ -82,6 +82,9 @@ class TestSession(BaseModel):
     end_time: Optional[datetime] = None
     metadata: Dict[str, Any] = {}
     artifacts: Dict[str, Any] = {}
+    headers: Dict[str, str] = {}
+
+    __test__ = False
 
     @property
     def duration(self) -> float:

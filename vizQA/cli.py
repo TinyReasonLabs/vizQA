@@ -3,7 +3,9 @@ Command-line interface for the UI testing framework.
 """
 
 import asyncio
+import configparser
 import shutil
+import tomllib
 import traceback
 import uuid
 from pathlib import Path
@@ -228,13 +230,19 @@ def discover_test_files(paths: List[str]) -> List[Path]:
             # Recursive discovery
             test_files.extend(list(path.rglob("*.yaml")) + list(path.rglob("*.yml")))
 
-    # Remove duplicates while preserving order
+    # Remove duplicates and filter out non-vizQA files
     seen = set()
     unique_files = []
     for f in test_files:
         if f.absolute() not in seen:
-            unique_files.append(f)
-            seen.add(f.absolute())
+            try:
+                content = f.read_text(encoding="utf-8")
+                # Basic check for vizQA test indicators without full YAML parse if possible
+                if "steps:" in content or "url:" in content:
+                    unique_files.append(f)
+                    seen.add(f.absolute())
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
 
     return unique_files
 
@@ -284,6 +292,42 @@ def _load_artifacts(artifacts_data: dict[str, Any], base_path: Path) -> dict[str
 # ---------------------------------------------------------------------------
 
 
+def _load_config() -> dict[str, str]:
+    """
+    Loads global headers from pyproject.toml or .ini files.
+    Priority:
+    1. pyproject.toml [tool.vizqa.headers]
+    2. [.ini files] [vizqa.headers] (pytest.ini, tox.ini, setup.cfg, vizqa.ini)
+    """
+    headers = {}
+    cwd = Path.cwd()
+
+    # 1. pyproject.toml
+    pyproject = cwd / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            with open(pyproject, "rb") as f:
+                data = tomllib.load(f)
+                headers.update(data.get("tool", {}).get("vizqa", {}).get("headers", {}))
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+    # 2. .ini files
+    ini_files = ["pytest.ini", "tox.ini", "setup.cfg", "vizqa.ini"]
+    for ini_name in ini_files:
+        ini_path = cwd / ini_name
+        if ini_path.exists():
+            try:
+                config = configparser.ConfigParser()
+                config.read(ini_path)
+                if "vizqa.headers" in config.sections():
+                    headers.update(dict(config["vizqa.headers"]))
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+    return {str(k): str(v) for k, v in headers.items()}
+
+
 async def run_single_test(
     test_path: Path,
     automator: Automator,
@@ -309,6 +353,12 @@ async def run_single_test(
 
     artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
 
+    # Load and merge headers
+    global_headers = _load_config()
+    test_headers = test_data.get("headers", {})
+    # Test-specific headers override global headers
+    merged_headers = {**global_headers, **test_headers}
+
     session = TestSession(
         id=str(uuid.uuid4())[:8],
         test_name=test_data.get("name", test_path.stem),
@@ -316,6 +366,7 @@ async def run_single_test(
         url=test_data.get("url", ""),
         steps=steps,
         artifacts=artifacts,
+        headers=merged_headers,
     )
     reporter.register_session(session)
 

@@ -90,6 +90,8 @@ class Automator:
             await self.start()
 
         self._logger.log_session(session.id, "start", f"url={session.url!r}")
+        if session.headers:
+            await self.page.set_extra_http_headers(session.headers)
         await self.page.goto(session.url)
 
         failed = False
