@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vizQA.exceptions import TestDefinitionError
 from vizQA.memory import StepStatus
 from vizQA.minilm import MiniLM
 from vizQA.planner import StepPlanner
@@ -79,9 +80,9 @@ def test_minilm_deserialization_error(mock_minilm):
     mock_tokenizer.decode.return_value = "invalid json"
 
     planner = StepPlanner(model_name="minilm")
-
-    with pytest.raises(RuntimeError, match="not valid JSON"):
+    with pytest.raises(TestDefinitionError) as exc:
         planner.decompose([{"action": "test"}])
+    assert "not valid JSON" in str(exc.value.internal_detail)
 
 
 def test_minilm_malformed_step_error(mock_minilm):
@@ -94,6 +95,6 @@ def test_minilm_malformed_step_error(mock_minilm):
     mock_tokenizer.decode.return_value = '[{"type": "FIND"}]'  # Missing "value"
 
     planner = StepPlanner(model_name="minilm")
-
-    with pytest.raises(RuntimeError, match="malformed or missing keys"):
+    with pytest.raises(TestDefinitionError) as exc:
         planner.decompose([{"action": "test"}])
+    assert "malformed or missing keys" in str(exc.value.internal_detail)

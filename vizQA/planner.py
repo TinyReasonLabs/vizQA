@@ -5,7 +5,7 @@ Planner module for decomposing high-level instructions into atomic steps.
 import os
 from typing import Any, Dict, List, Optional
 
-from vizQA.exceptions import TestDefinitionError
+from vizQA.exceptions import TestDefinitionError, UserFacingException
 from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestStep
 from vizQA.parser import SemanticParser
@@ -77,6 +77,8 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
                 if expectation:
                     sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
+            except (TestDefinitionError, UserFacingException):
+                raise
             except (ValueError, RuntimeError) as e:
                 # Wrap as user-facing definition error
                 raise TestDefinitionError(

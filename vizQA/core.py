@@ -509,9 +509,9 @@ class Automator:
             if elements:
                 visible_texts = list(
                     {
-                        (el.get("placeholder") or el.get("label"))
+                        (el.get("text") or el.get("placeholder") or el.get("label"))
                         for el in elements
-                        if (el.get("placeholder") or el.get("label"))
+                        if (el.get("text") or el.get("placeholder") or el.get("label"))
                     }
                 )[:10]
                 if visible_texts:

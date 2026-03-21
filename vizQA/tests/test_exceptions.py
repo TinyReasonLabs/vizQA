@@ -1,3 +1,4 @@
+import os
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -12,6 +13,7 @@ from vizQA.exceptions import (
     UserFacingException,
 )
 from vizQA.memory import StepStatus, TestStep
+from vizQA.minilm import MiniLM
 from vizQA.planner import StepPlanner
 
 
@@ -58,10 +60,6 @@ def test_planner_line_reporting():
 
 def test_minilm_deterministic_failure():
     """Verify that minilm raises ValueError for ambiguous 'onto' drag without sources."""
-    import os
-
-    from vizQA.minilm import MiniLM
-
     model_dir = os.path.join(os.path.dirname(__file__), "..", "vizQA", "weights", "minilm")
     if not os.path.exists(model_dir):
         pytest.skip("MiniLM weights not found, skipping deterministic failure test")

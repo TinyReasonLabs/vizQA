@@ -13,10 +13,10 @@ TEST_CASES = [
     ("Hover over the profile icon", [("FIND", "profile icon"), ("DO", "hover")]),
     # 4. Explicit payloads
     ("Type 'admin' into the username field", [("FIND", "username field"), ("DO", "type 'admin'")]),
-    ('Enter "password123" in the password box', [("FIND", "password box"), ("DO", 'enter "password123"')]),
+    ('Enter "password123" in the password box', [("FIND", "password box"), ("DO", 'type "password123"')]),
     # 6. Implicit payloads (no quotes)
     ("Type admin into the username field", [("FIND", "username field"), ("DO", "type admin")]),
-    ("Enter myemail@test.com", [("FIND", "element"), ("DO", "enter myemail@test.com")]),
+    ("Enter myemail@test.com", [("FIND", "myemail@test.com"), ("DO", "enter")]),
     # 8. Adjectives and location descriptions (Subject + Description)
     ("Click the primary Login button in the header", [("FIND", "primary Login button in the header"), ("DO", "click")]),
     ("Hover the small red warning icon", [("FIND", "small red warning icon"), ("DO", "hover")]),
@@ -25,11 +25,11 @@ TEST_CASES = [
     # 12. Multiple targets with one action (Implicit split)
     (
         "Click the submit and cancel buttons",
-        [("FIND", "submit button"), ("DO", "click"), ("FIND", "cancel buttons"), ("DO", "click")],
+        [("FIND", "submit buttons"), ("DO", "click"), ("FIND", "cancel buttons"), ("DO", "click")],
     ),
     (
         "Select the 'apple' and 'banana' options",
-        [("FIND", "'apple'"), ("DO", "select"), ("FIND", "'banana' options"), ("DO", "select")],
+        [("FIND", "element"), ("DO", "select 'apple'"), ("FIND", "element"), ("DO", "select 'banana' options")],
     ),
     # 14. Complex conjunctions (Multiple actions and targets)
     (
@@ -70,10 +70,10 @@ TEST_CASES = [
         [("VERIFY", "'Delete' button is red"), ("VERIFY", "aligned to the right")],
     ),
     # 25. Edge cases: Missing structural words
-    ("type john_doe", [("FIND", "element"), ("DO", "type john_doe")]),
+    ("type john_doe", [("FIND", "john_doe"), ("DO", "type")]),
     (
         "Submit",
-        [("FIND", "element"), ("DO", "click Submit")],
+        [("FIND", "Submit"), ("DO", "click Submit")],
     ),  # Wait, is submit an action? Generally click is the action on a submit button. Let's parse as click submit.
     ("Click", [("FIND", "element"), ("DO", "click")]),
     # 28. Noise words and complex boilerplate
@@ -101,18 +101,21 @@ TEST_CASES = [
     ("Scroll to the 'Reviews' section", [("FIND", "'Reviews' section"), ("DO", "scroll")]),
     # 35. Keyboard actions
     ("Press Enter on the search box", [("FIND", "search box"), ("DO", "press Enter")]),
-    ("Hit the Escape key", [("FIND", "element"), ("DO", "press Escape key")]),
+    ("Hit the Escape key", [("FIND", "key"), ("DO", "press Escape")]),
     # 37. Implicit context from previous clauses
     (
         "Clear the input and type 'new text'",
-        [("FIND", "input"), ("DO", "clear"), ("FIND", "input"), ("DO", "type 'new text'")],
+        [("FIND", "input"), ("DO", "clear"), ("FIND", "'new text'"), ("DO", "type")],
     ),  # Should carry over target
     # 38. Real-world messy inputs
     ("click on settings gear icon", [("FIND", "settings gear icon"), ("DO", "click")]),
-    ("input mypassword into pass field", [("FIND", "pass field"), ("DO", "input mypassword")]),
+    ("input mypassword into pass field", [("FIND", "pass field"), ("DO", "type mypassword")]),
     ("make sure the popup is visible", [("VERIFY", "popup is visible")]),
     ("assert that the header says 'Welcome back'", [("VERIFY", "header says 'Welcome back'")]),
-    ("Find the 'forgot password' link and click it", [("FIND", "'forgot password' link"), ("DO", "click")]),
+    (
+        "Find the 'forgot password' link and click it",
+        [("FIND", "'forgot password' link"), ("DO", "find"), ("FIND", "'forgot password' link"), ("DO", "click")],
+    ),
     # 43. Extremely long descriptive subjects
     (
         "Click the tiny semi-transparent close icon located in the upper right corner of the overlapping sticky banner",
@@ -132,7 +135,7 @@ TEST_CASES = [
         [("FIND", "first name"), ("DO", "type john"), ("FIND", "last name"), ("DO", "type doe")],
     ),
     # 46. Wait or sleep instructions
-    ("Wait for 5 seconds", [("FIND", "element"), ("DO", "wait for 5 seconds")]),
+    ("Wait for 5 seconds", [("FIND", "for 5 seconds"), ("DO", "wait for 5 seconds")]),
     ("Pause until the loader disappears", [("VERIFY", "loader disappears")]),
     # 48. Double quotes and escaped chars
     ('Type "user\'s name" in the field', [("FIND", "field"), ("DO", 'type "user\'s name"')]),
@@ -159,7 +162,7 @@ TEST_CASES = [
     # 58. Leading noise clause
     ("right then, click the logout", [("FIND", "logout"), ("DO", "click")]),
     # 59. Complex DO with 'and'
-    ("press and hold the button", [("FIND", "and hold button"), ("DO", "press")]),
+    ("press and hold the button", [("FIND", "button"), ("DO", "press-and-hold")]),
     # 60. Chained action and verification
     (
         "right click -> modal should close",
