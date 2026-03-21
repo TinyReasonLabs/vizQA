@@ -62,6 +62,8 @@ class TestStep(BaseModel):
     end_time: Optional[datetime] = None
     sub_steps: List["TestStep"] = []
 
+    __test__ = False
+
 
 TestStep.model_rebuild()
 

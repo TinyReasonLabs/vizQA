@@ -3,8 +3,9 @@ Planner module for decomposing high-level instructions into atomic steps.
 """
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from vizQA.exceptions import TestDefinitionError
 from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestStep
 from vizQA.parser import SemanticParser
@@ -15,33 +16,49 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     Decomposes natural language instructions into FIND, DO, and VERIFY atoms.
     """
 
-    def __init__(self, model_name: str = "minilm"):
+    def __init__(
+        self,
+        model_name: str = "minilm",
+        parser: Optional[SemanticParser] = None,
+        minilm: Optional[Any] = None,
+    ):
         self.model_name = model_name
-        use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
-        intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
-        action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.52"))
-        semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
-
-        self.parser = SemanticParser(
-            use_advanced_ranking=use_adv,
-            intent_threshold=intent_threq,
-            action_threshold=action_threq,
-            semantic_match_threshold=semantic_threq,
-        )
         self._logger = get_logger()
-        self._logger.log_debug(0, message="ALOOOOO")
-        # Load MiniLM if possible
-        self.minilm = None
-        if model_name == "minilm":
-            model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
-            try:
-                from vizQA.minilm import MiniLM
 
-                self.minilm = MiniLM(model_dir)
-                # Synergize with parser
-                self.parser.minilm = self.minilm
-            except (FileNotFoundError, RuntimeError, ImportError):
-                pass
+        if parser:
+            self.parser = parser
+        else:
+            use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
+            intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
+            action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.52"))
+            semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
+
+            self.parser = SemanticParser(
+                use_advanced_ranking=use_adv,
+                intent_threshold=intent_threq,
+                action_threshold=action_threq,
+                semantic_match_threshold=semantic_threq,
+            )
+
+        if minilm:
+            self.minilm = minilm
+            self.parser.minilm = minilm
+        else:
+            # Load MiniLM if possible
+            self.minilm = None
+            if model_name == "minilm":
+                # Reuse model_dir if provided, otherwise default
+                model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+                try:
+                    from vizQA.minilm import MiniLM
+
+                    self.minilm = MiniLM(model_dir)
+                    # Synergize with parser
+                    self.parser.minilm = self.minilm
+                except (FileNotFoundError, RuntimeError, ImportError) as e:
+                    self._logger.log_debug(
+                        0, f"MiniLM model could not be loaded: {e}. Falling back to rule-based parser."
+                    )
 
     def decompose(self, raw_steps: List[Dict[str, Any]]) -> List[TestStep]:
         """
@@ -52,14 +69,20 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
         for i, step in enumerate(raw_steps):
             instruction = step.get("action", "")
             expectation = step.get("expect")
+            line_num = step.get("__line__", "unknown")
 
-            # Generate sub-steps for better visibility
-            sub_steps = self._decompose_instruction(instruction, i)
+            try:
+                # Generate sub-steps for better visibility
+                sub_steps = self._decompose_instruction(instruction, i)
 
-            if expectation:
-                sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
-            self._logger.log_debug(0, f"step num: {i}")
-            self._logger.log_debug(0, f"sub steps: {sub_steps}")
+                if expectation:
+                    sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
+            except (ValueError, RuntimeError) as e:
+                # Wrap as user-facing definition error
+                raise TestDefinitionError(
+                    f"Failed to plan steps for instruction '{instruction}' (YAML line {line_num})",
+                    internal_detail=str(e),
+                ) from e
 
             refined_steps.append(
                 TestStep(

@@ -12,6 +12,13 @@ from typing import Any, Dict, Optional, Tuple
 from playwright.async_api import Browser, Page, async_playwright
 
 from vizQA.client import PerceptionClient
+from vizQA.exceptions import (
+    ActionExecutionError,
+    ArtifactError,
+    ElementNotFoundError,
+    UserFacingException,
+    VerificationError,
+)
 from vizQA.logger import get_logger
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.minilm import MiniLM
@@ -158,11 +165,30 @@ class Automator:
                 else:
                     step.status = StepStatus.PASSED
 
+        except UserFacingException as exc:
+            # Report specific user-facing error message
+            self._logger.log_debug(session.id, f"User-facing error: {exc.user_message}")
+            if exc.internal_detail:
+                self._logger.log_debug(session.id, f"Detail: {exc.internal_detail}")
+
+            step.status = StepStatus.FAILED
+            # Try to map exception type to FailureType if possible
+            if isinstance(exc, ElementNotFoundError):
+                step.failure_type = FailureType.PERCEPTION_MISMATCH
+            elif isinstance(exc, ActionExecutionError):
+                step.failure_type = FailureType.ACTION_ERROR
+            elif isinstance(exc, VerificationError):
+                step.failure_type = FailureType.TIMEOUT
+            else:
+                step.failure_type = FailureType.SYSTEM_ERROR
+
+            step.failure_reason = exc.user_message
+            success = False
         except Exception as exc:
             self._logger.log_exception(step.id, exc)
             step.status = StepStatus.FAILED
-            step.failure_type = FailureType.ACTION_ERROR
-            # step.failure_reason = str(exc)
+            step.failure_type = FailureType.SYSTEM_ERROR
+            step.failure_reason = "An unexpected error occurred during step execution."
             step.error = str(exc)
             success = False
         finally:
@@ -225,6 +251,7 @@ class Automator:
             return True
 
         step.status = StepStatus.FAILED
+        step.failure_type = FailureType.PERCEPTION_MISMATCH
         step.failure_reason = self._failure_details("FIND", query, perception, "Element not found")
         return False
 
@@ -290,8 +317,9 @@ class Automator:
                     path=action_path, type="jpeg", clip={"x": cx, "y": cy, "width": cw, "height": ch}
                 )
                 step.action_screenshot = action_path
-            except Exception:  # pylint: disable=broad-exception-caught
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 # Fallback to full page screenshot if clipping fails
+                self._logger.log_warning(session.id, f"Failed to capture action screenshot (clipped): {e}")
                 await self.page.screenshot(path=action_path, type="jpeg")
                 step.action_screenshot = action_path
         else:
@@ -354,10 +382,8 @@ class Automator:
                 step.status = StepStatus.PASSED
                 return True
             except Exception as e:
-                self._logger.log_warning(step.id, f"File upload failed: {e}")
-                step.status = StepStatus.FAILED
-                step.failure_reason = f"Failed to upload file artifact: {e}"
-                return False
+                self._logger.log_warning(session.id, f"File upload failed: {e}")
+                raise ArtifactError(f"Failed to upload file artifact for '{art_name}'", internal_detail=str(e))
 
         # Handle other artifact types (content, string) as drops?
         # Maybe just type them?
@@ -594,8 +620,8 @@ class Automator:
             try:
                 await self.page.screenshot(path=action_path, type="jpeg", clip=clip)
                 step.action_screenshot = action_path
-            except Exception:
-                pass
+            except Exception as e:
+                self._logger.log_warning(session.id, f"Failed to capture action screenshot (legacy): {e}")
 
         await asyncio.sleep(0.5)
 

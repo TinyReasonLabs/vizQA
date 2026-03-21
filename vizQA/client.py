@@ -6,6 +6,9 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from vizQA.exceptions import PerceptionServiceError
+from vizQA.logger import get_logger
+
 
 class PerceptionClient:
     """
@@ -15,6 +18,7 @@ class PerceptionClient:
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url
         self.session_id = None
+        self._logger = get_logger()
 
     async def perceive(self, image_path: str, query: Optional[str] = None) -> Dict[str, Any]:
         """Send a screenshot to the perception API."""
@@ -29,16 +33,55 @@ class PerceptionClient:
                 if self.session_id:
                     data["session_id"] = self.session_id
 
-                response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)
-                response.raise_for_status()
-                self.session_id = response.json().get("session_id")
-                return response.json()
+                try:
+                    response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)
+                    response.raise_for_status()
+                    self.session_id = response.json().get("session_id")
+                    return response.json()
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    self._logger.log_exception("client", e)
+                    raise PerceptionServiceError(
+                        f"Could not connect to the visual perception service (at {self.base_url}).",
+                        internal_detail=str(e),
+                    ) from e
+                except httpx.HTTPStatusError as e:
+                    self._logger.log_exception("client", e)
+                    raise PerceptionServiceError(
+                        "The visual perception service returned an error.",
+                        internal_detail=f"HTTP Status {e.response.status_code}: {e.response.text}",
+                    ) from e
+                except Exception as e:
+                    self._logger.log_exception("client", e)
+                    raise PerceptionServiceError(
+                        "An unexpected error occurred while communicating with the visual perception service.",
+                        internal_detail=str(e),
+                    ) from e
 
     async def search(self, session_id: str, query: str) -> Dict[str, Any]:
         """Perform a contextual search on an existing session."""
         if not session_id:
             session_id = self.session_id
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{self.base_url}/v1/search", json={"session_id": session_id, "query": query, "mode": "semantic"})
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await client.post(
+                    f"{self.base_url}/v1/search", json={"session_id": session_id, "query": query, "mode": "semantic"}
+                )
+                response.raise_for_status()
+                return response.json()
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    f"Could not connect to the visual perception service for search (at {self.base_url}).",
+                    internal_detail=str(e),
+                ) from e
+            except httpx.HTTPStatusError as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    "The visual perception service search failed.",
+                    internal_detail=f"HTTP Status {e.response.status_code}: {e.response.text}",
+                ) from e
+            except Exception as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    "An unexpected error occurred during visual perception search.", internal_detail=str(e)
+                ) from e

@@ -18,9 +18,11 @@ from rich.tree import Tree
 
 from vizQA.client import PerceptionClient
 from vizQA.core import Automator
+from vizQA.exceptions import TestDefinitionError, UserFacingException
 from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestSession, TestStep
 from vizQA.planner import StepPlanner
+from vizQA.utility_classes import LineLoader
 
 console = Console(highlight=False)
 
@@ -184,14 +186,11 @@ class ProgressiveReporter:
                     if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
                         console.print(f"  [bold]Type:[/] {failed_step.failure_type}")
 
-                    console.print(f"  [bold]Reason:[/] {failed_step.failure_reason or failed_step.error}")
+                    reason = failed_step.failure_reason or failed_step.error
+                    if not reason and hasattr(failed_step, "user_message"):
+                        reason = failed_step.user_message
 
-                    # if failed_step.screenshot_before:
-                    #     console.print(f"  [dim]Before screenshot:[/] {failed_step.screenshot_before}")
-                    # if failed_step.screenshot_after:
-                    #     console.print(f"  [dim]After screenshot:[/] {failed_step.screenshot_after}")
-                    # if failed_step.action_screenshot:
-                    #     console.print(f"  [dim]Action snapshot:[/] {failed_step.action_screenshot}")
+                    console.print(f"  [bold]Reason:[/] {reason}")
 
         console.print("[bold red]" + "=" * 50 + "[/]")
 
@@ -294,13 +293,19 @@ async def run_single_test(
 ):
     """Runs a single test file and updates the reporter."""
     try:
-        test_data = yaml.safe_load(test_path.read_text())
+        test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
     except Exception as err:  # pylint: disable=broad-exception-caught
-        console.print(f"[red]Error loading {test_path}: {err}[/]")
-        return
+        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err))
 
-    planner = StepPlanner()
-    steps = planner.decompose(test_data.get("steps", []))
+    # Consolidate model choice: use the parser/minilm from automator
+    planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
+
+    try:
+        steps = planner.decompose(test_data.get("steps", []))
+    except TestDefinitionError:
+        # If we have line info in the raw steps, we could try to enrich it
+        # but StepPlanner already knows the instruction.
+        raise
 
     artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
 
@@ -383,13 +388,23 @@ def cli(paths, headless, verbose, interactive):
                         reporter.on_step_done(step, depth=1)
 
                 await run_single_test(
-                    test_file, automator, reporter, on_step_update=on_step_update, interactive=interactive
+                    test_file,
+                    automator,
+                    reporter,
+                    on_step_update=on_step_update,
+                    interactive=interactive,
                 )
 
+        except UserFacingException as err:
+            reporter.finalize()
+            console.print(f"\n[bold red]Error:[/] {err.user_message}")
+            if verbose >= 1 and err.internal_detail:
+                console.print(f"[dim]Details: {err.internal_detail}[/]")
         except Exception as err:  # pylint: disable=broad-exception-caught
             reporter.finalize()
-            console.print(f"[red]Error during execution: {err}[/]")
-            traceback.print_exc()
+            console.print(f"[red]An unexpected error occurred during execution: {err}[/]")
+            if verbose >= 1:
+                traceback.print_exc()
         finally:
             reporter.finalize()
             await automator.stop()

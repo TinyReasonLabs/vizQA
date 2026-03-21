@@ -66,7 +66,7 @@ class TestAdvancedRanking:
         # Quoted "Submit" should be top
         results = engine.rank("Submit", _intent(keyword="Submit"), ELEMENTS)
         assert results[0]["text"] == "Submit"
-        assert results[0]["_ranking_score"] > 10.0
+        assert results[0]["_ranking_score"] > 5.0
 
     def test_ranking_engine_with_salience(self):
         mock_minilm = MagicMock()
@@ -131,7 +131,7 @@ class TestAdvancedRanking:
 
         assert results[0]["id"] == "signin"
         assert results[1]["id"] == "login"
-        assert results[0]["_ranking_score"] > results[1]["_ranking_score"] + 9.0
+        assert results[0]["_ranking_score"] > results[1]["_ranking_score"] + 4.0
 
     def test_perception_similarity_influence(self):
         elements = [

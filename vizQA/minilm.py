@@ -441,10 +441,13 @@ class MiniLM:
             if not canonical_type:
                 noun = strip_articles(lower_real)
                 noun = _restore(noun)
-                if noun:
-                    all_steps.append({"type": "FIND", "value": "element"})
-                    all_steps.append({"type": "DO", "value": f"click {noun}"})
-                prev_target = "element"
+                if not noun or noun.lower() in ["it", "them"]:
+                    raise ValueError(f"Could not identify a target element in '{real_clause}'")
+
+                # Use the identified noun as the target instead of generic "element"
+                all_steps.append({"type": "FIND", "value": noun})
+                all_steps.append({"type": "DO", "value": f"click {noun}"})
+                prev_target = noun
                 continue
 
             # Remove verb from clause to obtain target area (work in protected form)
@@ -455,15 +458,20 @@ class MiniLM:
                 onto_parts = re.split(r"\bonto\b", target_area, maxsplit=1, flags=re.I)
                 drag_tgt = strip_articles(_restore(onto_parts[0]).strip())
                 drop_tgt = strip_articles(_restore(onto_parts[1]).strip())
+                if not drag_tgt:
+                    raise ValueError(f"No source element identified for drag action in '{real_clause}'")
+                if not drop_tgt:
+                    raise ValueError(f"No destination element identified for drop action in '{real_clause}'")
+
                 all_steps.extend(
                     [
-                        {"type": "FIND", "value": drag_tgt or "element"},
+                        {"type": "FIND", "value": drag_tgt},
                         {"type": "DO", "value": "drag"},
-                        {"type": "FIND", "value": drop_tgt or "element"},
+                        {"type": "FIND", "value": drop_tgt},
                         {"type": "DO", "value": "drop"},
                     ]
                 )
-                prev_target = drop_tgt or "element"
+                prev_target = drop_tgt
                 continue
 
             # ── KEY NAME detection ─────────────────────────────────────
@@ -478,10 +486,13 @@ class MiniLM:
                 rest = re.sub(rf"\b{re.escape(detected_key)}\b", "", lower_target, count=1, flags=re.I).strip()
                 rest = re.sub(r"\bkey\b", "", rest, flags=re.I).strip()  # strip trailing 'key' word
                 rest = re.sub(r"^(on|in|the|a|an)\s+", "", rest, flags=re.I).strip()
-                element = _restore(rest) if rest else "element"
+                element = _restore(rest) if rest else ""
                 element = strip_articles(element)
+                if not element or element.lower() in ["it", "them"]:
+                    element = prev_target
+
                 if not element:
-                    element = "element"
+                    raise ValueError(f"No target element identified for key press '{detected_key}' in '{real_clause}'")
                 # Normalize verb to 'press' for key actions
                 all_steps.append({"type": "FIND", "value": element})
                 all_steps.append(
@@ -511,20 +522,30 @@ class MiniLM:
                             if len(into_split) == 2:
                                 pload = _restore(into_split[0].strip())
                                 elem = strip_articles(_restore(into_split[1].strip()))
-                                all_steps.append({"type": "FIND", "value": elem or "element"})
+                                if not elem:
+                                    raise ValueError(
+                                        f"No target element identified for '{saved_literal}' action in '{part}'"
+                                    )
+                                all_steps.append({"type": "FIND", "value": elem})
                                 all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                        prev_target = elem or "element"
+                        prev_target = elem
                         continue
-                    else:
-                        # Single into: 'payload' into element
-                        into_split = re.split(r"\binto\b", target_area, maxsplit=1, flags=re.I)
-                        if len(into_split) == 2:
-                            pload = _restore(into_split[0].strip())
-                            elem = strip_articles(_restore(into_split[1].strip()))
-                            all_steps.append({"type": "FIND", "value": elem or "element"})
-                            all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                            prev_target = elem or "element"
-                            continue
+                    # Single into: 'payload' into element
+                    into_split = re.split(r"\binto\b", target_area, maxsplit=1, flags=re.I)
+                    if len(into_split) == 2:
+                        pload = _restore(into_split[0].strip())
+                        elem = strip_articles(_restore(into_split[1].strip()))
+                        if not elem or elem.lower() in ["it", "them"]:
+                            elem = prev_target
+                        if not elem:
+                            raise ValueError(
+                                f"No target element identified for '{saved_literal}' action in '{real_clause}'"
+                            )
+
+                        all_steps.append({"type": "FIND", "value": elem})
+                        all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
+                        prev_target = elem
+                        continue
 
                 elif q_tokens:
                     # Quote is payload, remaining is element
@@ -540,9 +561,16 @@ class MiniLM:
                             rf"\b{re.escape(literal_syn or canonical_type)}\b", "", into_split[0], count=1, flags=re.I
                         ).strip()
                         elem = strip_articles(_restore(into_split[1].strip()))
-                        all_steps.append({"type": "FIND", "value": elem or "element"})
+                        if not elem or elem.lower() in ["it", "them"]:
+                            elem = prev_target
+                        if not elem:
+                            raise ValueError(
+                                f"No target element identified for '{saved_literal}' action in '{real_clause}'"
+                            )
+
+                        all_steps.append({"type": "FIND", "value": elem})
                         all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                        prev_target = elem or "element"
+                        prev_target = elem
                         continue
 
             # ── SELECT: quoted payload with 'from' OR distributive 'and' ─
@@ -551,22 +579,26 @@ class MiniLM:
                 if q_tokens and re.search(r"\bfrom\b", target_area, re.I):
                     from_split = re.split(r"\bfrom\b", target_area, maxsplit=1, flags=re.I)
                     pload = _restore(from_split[0].strip())
-                    elem = strip_articles(_restore(from_split[1].strip()))
-                    all_steps.append({"type": "FIND", "value": elem or "element"})
+                    elem_val = strip_articles(_restore(from_split[1].strip()))
+                    if not elem_val:
+                        raise ValueError(
+                            f"No target element identified for '{saved_literal}' search in '{real_clause}'"
+                        )
+                    all_steps.append({"type": "FIND", "value": elem_val})
                     all_steps.append({"type": "DO", "value": f"{saved_literal} {pload}"})
-                    prev_target = elem or "element"
+                    prev_target = elem_val
                     continue
                 elif q_tokens and re.search(r"\band\b", target_area, re.I):
                     # Distributive: 'apple' and 'banana' options
                     and_parts = re.split(r"\band\b", target_area, flags=re.I)
                     for part in and_parts:
                         part = part.strip()
-                        part_restored = _restore(part)
-                        part_restored = re.sub(r"^(the|a|an)\s+", "", part_restored, flags=re.I).strip()
-                        elem_val = part_restored if part_restored else "element"
-                        all_steps.append({"type": "FIND", "value": elem_val})
+                        part_restored = strip_articles(_restore(part))
+                        if not part_restored:
+                            raise ValueError(f"Could not identify a clear option to select in '{real_clause}'")
+                        all_steps.append({"type": "FIND", "value": part_restored})
                         all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
-                    prev_target = elem_val or "element"
+                    prev_target = part_restored
                     continue
 
             # ── Distributive 'and' for noun targets (click submit and cancel buttons) ──
@@ -582,9 +614,11 @@ class MiniLM:
                         tgt = part.strip()
                         if j < len(restored_parts) - 1 and shared_suffix:
                             tgt = f"{tgt} {shared_suffix}"
-                        all_steps.append({"type": "FIND", "value": tgt or "element"})
+                        if not tgt or tgt.lower() in ["it", "them"]:
+                            raise ValueError(f"Could not identify a target element in '{real_clause}'")
+                        all_steps.append({"type": "FIND", "value": tgt})
                         all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
-                    prev_target = restored_parts[-1] or "element"
+                    prev_target = restored_parts[-1]
                     continue
 
             # ── Press-and-hold special case ─────────────────────────────
@@ -592,9 +626,13 @@ class MiniLM:
                 rest = re.sub(r"\bpress\b", "", lower_real, count=1, flags=re.I)
                 rest = re.sub(r"\band\s+hold\b", "", rest, flags=re.I).strip()
                 rest = strip_articles(rest)
-                all_steps.append({"type": "FIND", "value": rest or "element"})
+                if not rest or rest.lower() in ["it", "them"]:
+                    rest = prev_target
+                if not rest:
+                    raise ValueError(f"No target element identified for 'press and hold' in '{real_clause}'")
+                all_steps.append({"type": "FIND", "value": rest})
                 all_steps.append({"type": "DO", "value": "press"})
-                prev_target = rest or "element"
+                prev_target = rest
                 continue
 
             # ── Strip verb from target area ─────────────────────────────
@@ -610,19 +648,31 @@ class MiniLM:
             restored_target = _restore(target_area)
             restored_payload = _restore(payload) if payload else ""
 
-            target_val = restored_target if restored_target else "element"
-            if target_val.lower() in ["it", "them", ""]:
-                target_val = prev_target or "element"
+            target_val = restored_target if restored_target else ""
+            if not target_val or target_val.lower() in ["it", "them"]:
+                target_val = prev_target or ""
+
+            if not target_val:
+                # If wait action, it can default to 'the page' or 'anything' if it just wants to wait, but usually it needs a target
+                if canonical_type == "wait":
+                    target_val = "page"  # Special case for 'Wait 2 seconds'
+                else:
+                    raise ValueError(f"No target element identified for {final_verb} in '{real_clause}'")
+
             target_val = re.sub(r"\s+", " ", target_val).strip()
             target_val = re.sub(r"^[,.]|[,.]$", "", target_val).strip()
 
             final_verb = saved_literal or canonical_type
 
-            # ── WAIT ────────────────────────────────────────────────────
             if canonical_type == "wait":
-                all_steps.append({"type": "FIND", "value": "element"})
+                # Wait requires a clear target or it defaults to the previous one
+                wait_tgt = target_val if target_val != "element" else prev_target
+                if not wait_tgt:
+                    raise ValueError(f"No target element identified for 'wait' action in '{real_clause}'")
+
+                all_steps.append({"type": "FIND", "value": wait_tgt})
                 all_steps.append({"type": "DO", "value": f"wait {target_val}"})
-                prev_target = "element"
+                prev_target = wait_tgt
                 continue
 
             # ── Type/Enter payload building ─────────────────────────────
@@ -631,9 +681,7 @@ class MiniLM:
                     final_verb = f"{final_verb} {restored_payload}"
                 else:
                     # Multi-field: "type first name john and last name doe"
-                    and_parts = (
-                        re.split(r"\band\b", restored_target, flags=re.I) if restored_target != "element" else []
-                    )
+                    and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
                     if len(and_parts) >= 2:
                         for part in and_parts:
                             part = part.strip()
@@ -642,9 +690,13 @@ class MiniLM:
                                 all_steps.append({"type": "FIND", "value": " ".join(words[:-1])})
                                 all_steps.append({"type": "DO", "value": f"{final_verb} {words[-1]}"})
                             elif words:
-                                all_steps.append({"type": "FIND", "value": "element"})
+                                if not prev_target:
+                                    raise ValueError(
+                                        f"Ambiguous segment '{part}' in multi-field action '{restored_target}': No target specified."
+                                    )
+                                all_steps.append({"type": "FIND", "value": prev_target})
                                 all_steps.append({"type": "DO", "value": f"{final_verb} {words[0]}"})
-                        prev_target = "element"
+                        prev_target = "element"  # mark as used
                         continue
                     else:
                         # Single field+value: last word = value, rest = field
@@ -654,7 +706,11 @@ class MiniLM:
                             target_val = " ".join(parts[:-1])
                         elif restored_target and restored_target != "element":
                             final_verb = f"{final_verb} {restored_target}"
-                            target_val = "element"
+                            if not prev_target:
+                                raise ValueError(
+                                    f"Ambiguous action '{final_verb}': No target element provided and no previous context."
+                                )
+                            target_val = prev_target
 
             # ── FIND-only action ────────────────────────────────────────
             if canonical_type == "find":
@@ -663,250 +719,20 @@ class MiniLM:
                 prev_target = target_val
                 continue
 
-            if target_val != "element":
+            if target_val and target_val != "element":
                 all_steps.append({"type": "FIND", "value": target_val})
-            elif not all_steps or all_steps[-1]["type"] != "FIND":
-                all_steps.append({"type": "FIND", "value": "element"})
-
-            all_steps.append({"type": "DO", "value": final_verb})
-            prev_target = target_val
-
-        if not all_steps:
-            return [{"type": "FIND", "value": "element"}, {"type": "DO", "value": "interact"}]
-
-        return all_steps
-
-        quotes: List[str] = []
-
-        def _repl(match):
-            quotes.append(match.group(0))
-            return f" __QUOTE_{len(quotes)-1}__ "
-
-        protected = re.sub(r"(['\"])(.*?)\1", _repl, prompt)
-
-        # Upfront noise stripping
-        protected = re.sub(r"\bright\s+then\b", "then", protected, flags=re.I)
-        protected = re.sub(
-            r"^(?:\s*)(?:please\s*(?:navigate\s*ahead\s*)?|i\s*want\s*you\s*to\s*)(?:and\s*)?",
-            "",
-            protected,
-            flags=re.I,
-        )
-
-        # Build verb vocabulary for smart splitting
-        all_verbs = set()
-        for syns in ParserVocabulary.ACTION_VERBS.values():
-            all_verbs.update(map(str.lower, syns))
-        all_verbs.update(map(str.lower, ParserVocabulary.VERIFY_VERBS))
-        all_verbs.update(["should", "appear", "is", "shows", "exists", "visible", "displayed"])
-
-        def has_verb(text: str) -> bool:
-            t = text.lower()
-            return any(re.search(rf"\b{re.escape(v)}\b", t) for v in all_verbs)
-
-        # Handle explicit 'until' for verification
-        until_split = re.split(r"\buntil\b", protected, maxsplit=1, flags=re.I)
-        has_until = len(until_split) == 2
-
-        if has_until:
-            action_part = until_split[0].strip()
-            if re.fullmatch(r"\b(pause|wait|sleep)\b", action_part.lower()):
-                temp_clauses = ["VERIFY_FLAG " + until_split[1].strip()]
+            elif not prev_target:
+                raise ValueError(
+                    f"Ambiguous instruction: Could not identify target for '{real_clause}' and no previous context exists."
+                )
             else:
-                temp_clauses = [
-                    c.strip()
-                    for c in re.split(r"\b(?:then|after|while|also)\b|->|=>", action_part, flags=re.I)
-                    if c.strip()
-                ]
-                temp_clauses.append("VERIFY_FLAG " + until_split[1].strip())
-        else:
-            temp_clauses = [
-                c.strip() for c in re.split(r"\b(?:then|after|while|also)\b|->|=>", protected, flags=re.I) if c.strip()
-            ]
-
-        # Smart split on 'and' or ',' only if RHS STARTS WITH an action verb
-        # This prevents splitting "Type first name john and last name doe" (RHS has no leading verb)
-        # but correctly splits "Clear the input and type 'new text'" (RHS starts with 'type')
-        action_syn_set = set()
-        for syns in ParserVocabulary.ACTION_VERBS.values():
-            action_syn_set.update(s.lower() for s in syns)
-
-        def rhs_starts_with_verb(text: str) -> bool:
-            # Strip leading articles/noise before checking for verb
-            t = re.sub(r"^\s*(the|a|an|please)\s+", "", text.lower()).strip()
-            return any(re.match(rf"{re.escape(v)}\b", t) for v in action_syn_set)
-
-        clauses = []
-        pattern_and = re.compile(r"(\b(?:and)\b|,)", flags=re.I)
-        for c in temp_clauses:
-            tokens = pattern_and.split(c)
-            current_clause = tokens[0]
-            for i in range(1, len(tokens), 2):
-                sep = tokens[i]
-                rhs = tokens[i + 1]
-                if rhs_starts_with_verb(rhs):
-                    if current_clause.strip():
-                        clauses.append(current_clause.strip())
-                    current_clause = rhs
-                else:
-                    current_clause += sep + rhs
-            if current_clause.strip():
-                clauses.append(current_clause.strip())
-
-        all_steps = []
-
-        for clause in clauses:
-            real_clause = clause
-            for i, q in enumerate(quotes):
-                real_clause = real_clause.replace(f"__QUOTE_{i}__", q.strip())
-
-            # VERIFY check
-            is_verify = (
-                clause.startswith("VERIFY_FLAG ")
-                or "verify" in real_clause.lower()
-                or "ensure" in real_clause.lower()
-                or "should" in real_clause.lower()
-                or "assert" in real_clause.lower()
-                or "make sure" in real_clause.lower()
-            )
-
-            if is_verify:
-                val = re.sub(r"^(VERIFY_FLAG\s+)", "", real_clause)
-                val = re.sub(r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", val, flags=re.I).strip()
-                val = re.sub(r"\s+", " ", val).strip()
-                all_steps.append({"type": "VERIFY", "value": val})
-                continue
-
-            # FIND + DO check
-            all_syns = []
-            for t, syns in ParserVocabulary.ACTION_VERBS.items():
-                for s in syns:
-                    # For 'input', only consider it a verb if it's the first word, else 'clear the input' gets confused
-                    all_syns.append((s, t))
-            all_syns.sort(key=lambda x: len(x[0]), reverse=True)
-
-            literal_syn = None
-            canonical_type = None
-            lower_real = real_clause.lower()
-
-            for s, t in all_syns:
-                # Special protection: if the verb is 'input', ensure it's not preceded by 'the'
-                if s == "input" and re.search(r"\bthe\s+input\b", lower_real):
-                    continue
-                if re.search(rf"\b{re.escape(s)}\b", lower_real):
-                    literal_syn = s
-                    canonical_type = t
-                    break
-
-            # Fallback to MiniLM if no literal match
-            if not canonical_type:
-                canonical_type = self.classify_anchor_group(real_clause, groups=self._action_groups, threshold=0.45)
-                if not canonical_type:
-                    canonical_type = "interact"
-                literal_syn = canonical_type  # Fallback assumption
-
-            # Determine payload for 'type'/'enter'/'input'
-            payload = ""
-            target_area = clause
-            if canonical_type in ["type", "enter"]:
-                q_match = re.search(r"(__QUOTE_\d+__)", target_area)
-                if q_match:
-                    token = q_match.group(1)
-                    payload = token
-                    target_area = target_area.replace(token, "").strip()
-                elif " into " in lower_real or " in " in lower_real:
-                    # Format: "input mypassword into pass field"
-                    # literal_syn = input
-                    parts = re.split(r"\b(?:into|in)\b", target_area, maxsplit=1, flags=re.I)
-                    if len(parts) == 2:
-                        payload = re.sub(
-                            rf"\b{re.escape(literal_syn or canonical_type)}\b", "", parts[0], count=1, flags=re.I
-                        ).strip()
-                        target_area = parts[1].strip()
-                        # Reset literal_syn so it doesn't strip from target_area again below
-                        literal_syn = None
-
-            # Strip the exact literal synonym from the target string
-            if literal_syn:
-                # Only strip the FIRST occurrence to avoid mangling the rest of the target
-                target_area = re.sub(rf"\b{re.escape(literal_syn)}\b", "", target_area, count=1, flags=re.I).strip()
-
-            # Special case for "press and hold the button" -> FIND "and hold button" expected by dumb tests
-            # We reconstruct this specific quirk to satisfy legacy tests
-            if "press and hold" in lower_real:
-                target_area = lower_real.replace("press", "", 1).strip()
-                literal_syn = "press"
-                canonical_type = "click"
-
-            # Noise stripping
-            target_area = re.sub(r"\b(also|then)\b", "", target_area, flags=re.I).strip()
-            target_area = re.sub(
-                r"^\b(into|onto|to|on|over|in|at|from|with|inside)\b", "", target_area, flags=re.I
-            ).strip()
-            target_area = re.sub(r"^\b(the|a|an)\b", "", target_area, flags=re.I).strip()
-
-            restored_target = target_area
-            restored_payload = payload
-            for i, q in enumerate(quotes):
-                restored_target = restored_target.replace(f"__QUOTE_{i}__", q.strip())
-                restored_payload = restored_payload.replace(f"__QUOTE_{i}__", q.strip())
-
-            target_val = restored_target if restored_target else "element"
-            if target_val.lower() in ["it", "them", ""]:
-                target_val = "element"
-            target_val = re.sub(r"\s+", " ", target_val).strip()
-            target_val = re.sub(r"^[,\.]|[,\.]$", "", target_val).strip()
-
-            final_verb = literal_syn if literal_syn else canonical_type
-            if canonical_type == "wait":
-                # If previous step was a verb and we just have "wait", maybe we don't need a FIND
-                all_steps.append({"type": "FIND", "value": "element"})
-                all_steps.append({"type": "DO", "value": f"wait {target_val}"})
-                continue
-
-            if canonical_type in ["type", "enter"] and restored_payload:
-                final_verb = f"{final_verb} {restored_payload}"
-            elif canonical_type in ["type", "enter"] and not restored_payload:
-                # Check if the remainder has a " and " — if so, it's likely multiple field+value pairs
-                # e.g. "type first name john and last name doe" → (FIND first name, DO type john) + (FIND last name, DO type doe)
-                and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target != "element" else []
-                if len(and_parts) >= 2:
-                    for part in and_parts:
-                        part = part.strip()
-                        words = part.split()
-                        if len(words) >= 2:
-                            # last word is the value, rest is the field name
-                            field = " ".join(words[:-1])
-                            value = words[-1]
-                            all_steps.append({"type": "FIND", "value": field})
-                            all_steps.append({"type": "DO", "value": f"{literal_syn or final_verb} {value}"})
-                        elif words:
-                            all_steps.append({"type": "FIND", "value": "element"})
-                            all_steps.append({"type": "DO", "value": f"{literal_syn or final_verb} {words[0]}"})
-                    continue
-                else:
-                    # Single field+value: last word is payload, rest is field
-                    parts = restored_target.split()
-                    if len(parts) > 1 and restored_target != "element":
-                        final_verb = f"{final_verb} {parts[-1]}"
-                        target_val = " ".join(parts[:-1])
-                    elif restored_target and restored_target != "element":
-                        final_verb = f"{final_verb} {restored_target}"
-                        target_val = "element"
-
-            if canonical_type == "find":
-                if target_val != "element":
-                    all_steps.append({"type": "FIND", "value": target_val})
-                continue
-
-            if target_val != "element":
-                all_steps.append({"type": "FIND", "value": target_val})
-            elif not all_steps or all_steps[-1]["type"] != "FIND":
-                all_steps.append({"type": "FIND", "value": "element"})
+                # Use previous target as fallback if current one is mission/generic
+                all_steps.append({"type": "FIND", "value": prev_target})
 
             all_steps.append({"type": "DO", "value": final_verb})
+            prev_target = target_val if target_val else prev_target
 
         if not all_steps:
-            return [{"type": "FIND", "value": "element"}, {"type": "DO", "value": "interact"}]
+            raise ValueError(f"Could not decompose the instruction into any valid test steps: '{prompt}'")
 
         return all_steps
