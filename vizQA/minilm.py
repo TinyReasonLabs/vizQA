@@ -4,6 +4,7 @@ ONNX inference module for MiniLM model.
 
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -321,8 +322,6 @@ class MiniLM:
         Vocabulary-grounded decomposition of a UI instruction into atomic FIND/DO/VERIFY steps.
         Uses ParserVocabulary for canonical action grounding and handles special sentence patterns.
         """
-        import re
-
         from vizQA.parser import ParserVocabulary
 
         KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}

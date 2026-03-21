@@ -79,6 +79,7 @@ class TestSession(BaseModel):
     start_time: datetime = Field(default_factory=datetime.now)
     end_time: Optional[datetime] = None
     metadata: Dict[str, Any] = {}
+    artifacts: Dict[str, Any] = {}
 
     @property
     def duration(self) -> float:

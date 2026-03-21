@@ -12,10 +12,9 @@ from typing import Any, List, Optional
 import click
 import yaml
 from rich.console import Console, Group
+from rich.live import Live
 from rich.text import Text
 from rich.tree import Tree
-from rich.live import Live
-
 
 from vizQA.client import PerceptionClient
 from vizQA.core import Automator
@@ -197,7 +196,6 @@ class ProgressiveReporter:
         console.print("[bold red]" + "=" * 50 + "[/]")
 
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -251,6 +249,37 @@ def _add_step_node(parent_node: Tree, step: TestStep, verbosity: int):
         _add_step_node(step_node, sub_step, verbosity)
 
 
+def _load_artifacts(artifacts_data: dict[str, Any], base_path: Path) -> dict[str, Any]:
+    """
+    Loads artifacts from a dictionary, resolving paths and reading file contents if specified.
+    Stores them with type metadata: {"type": "string|content|file|data", "value": ...}
+    """
+    loaded = {}
+    for name, data in artifacts_data.items():
+        if isinstance(data, str):
+            loaded[name] = {"type": "string", "value": data}
+        elif isinstance(data, dict):
+            if "file" in data:
+                file_path = base_path.parent / data["file"]
+                if file_path.exists():
+                    loaded[name] = {
+                        "type": "content",
+                        "value": file_path.read_text(encoding="utf-8"),
+                        "source": str(file_path.absolute()),
+                    }
+                else:
+                    console.print(f"[yellow]Warning: Artifact file not found: {file_path}[/]")
+                    loaded[name] = None
+            elif "path" in data:
+                file_path = base_path.parent / data["path"]
+                loaded[name] = {"type": "file", "value": str(file_path.absolute())}
+            else:
+                loaded[name] = {"type": "data", "value": data}
+        else:
+            loaded[name] = {"type": "data", "value": data}
+    return loaded
+
+
 # ---------------------------------------------------------------------------
 # Session runner
 # ---------------------------------------------------------------------------
@@ -273,12 +302,15 @@ async def run_single_test(
     planner = StepPlanner()
     steps = planner.decompose(test_data.get("steps", []))
 
+    artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
+
     session = TestSession(
         id=str(uuid.uuid4())[:8],
         test_name=test_data.get("name", test_path.stem),
         file_stem=test_path.stem,
         url=test_data.get("url", ""),
         steps=steps,
+        artifacts=artifacts,
     )
     reporter.register_session(session)
 
@@ -300,7 +332,13 @@ async def run_single_test(
 @click.argument("paths", type=click.Path(exists=True), nargs=-1)
 @click.option("--headless/--no-headless", default=True, help="Run browser in headless mode (default: True)")
 @click.option("-v", "--verbose", count=True, help="Verbosity (-v steps, -vv timing/detail)")
-@click.option("-x", "--interactive", is_flag=True, default=False, help="Run in interactive mode, stops at the first failing test (default: False)")
+@click.option(
+    "-x",
+    "--interactive",
+    is_flag=True,
+    default=False,
+    help="Run in interactive mode, stops at the first failing test (default: False)",
+)
 def cli(paths, headless, verbose, interactive):
     """
     UI Testing Framework - Vision-Driven Automation
@@ -344,7 +382,9 @@ def cli(paths, headless, verbose, interactive):
                     else:
                         reporter.on_step_done(step, depth=1)
 
-                await run_single_test(test_file, automator, reporter, on_step_update=on_step_update, interactive=interactive)
+                await run_single_test(
+                    test_file, automator, reporter, on_step_update=on_step_update, interactive=interactive
+                )
 
         except Exception as err:  # pylint: disable=broad-exception-caught
             reporter.finalize()
@@ -375,4 +415,4 @@ def cli(paths, headless, verbose, interactive):
 
 
 if __name__ == "__main__":
-    cli()
+    cli()  # pylint: disable=no-value-for-parameter

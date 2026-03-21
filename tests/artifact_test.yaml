@@ -1,0 +1,18 @@
+name: "Artifact Support Test"
+url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+description: "Verifies artifact loading and usage in the vizQA framework."
+artifacts:
+  user_name: "test_user"
+  config_file:
+    file: "dummy_artifact.txt"
+  image_path:
+    path: "dummy_artifact.txt" # Using the same file as a dummy path
+steps:
+  - action: "Click the login button"
+  - action: "Type {user_name} into the username field"
+    expect: "The username field should contain 'test_user'"
+  - action: "Click the Cancel button"
+  - action: "Click on 'Settings' in the sidebar"
+    expect: "The Settings view should be displayed"
+  - action: "Drag and drop {image_path} onto the drop zone"
+    expect: "The file 'dummy_artifact.txt' should be shown as uploaded"

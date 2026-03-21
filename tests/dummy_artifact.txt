@@ -1,0 +1,2 @@
+This is a dummy artifact file for testing artifact support.
+It contains some text to verify file content loading.

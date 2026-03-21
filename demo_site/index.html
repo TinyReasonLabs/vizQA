@@ -270,11 +270,79 @@
 
     <script>
         function switchView(view) {
-            document.getElementById('view-title').innerText = view === 'Overview' ? 'Dashboard Overview' : view;
+            const title = document.getElementById('view-title');
+            const content = document.getElementById('content-area');
+            title.innerText = view === 'Overview' ? 'Dashboard Overview' : view;
+
             document.querySelectorAll('nav li').forEach(li => {
                 li.classList.remove('active');
                 if (li.innerText === view) li.classList.add('active');
             });
+
+            if (view === 'Settings') {
+                content.innerHTML = `
+                    <div class="card">
+                        <h3>File Upload</h3>
+                        <div id="drop-zone" style="border: 2px dashed var(--glass-border); padding: 3rem; margin-top: 1rem; border-radius: 12px; text-align: center;">
+                            <p style="margin-bottom: 1rem;">Drag and drop files here</p>
+                            <input type="file" id="file-input" style="display: none;">
+                            <button onclick="document.getElementById('file-input').click()">Or select file</button>
+                        </div>
+                        <div id="file-list" style="margin-top: 1rem;"></div>
+                    </div>
+                `;
+                const dz = document.getElementById('drop-zone');
+                const fi = document.getElementById('file-input');
+                fi.onchange = (e) => {
+                    const files = e.target.files;
+                    if (files.length) {
+                        document.getElementById('file-list').innerHTML = `<p style="color: #22c55e">Uploaded: ${files[0].name}</p>`;
+                    }
+                };
+                dz.ondragover = (e) => { e.preventDefault(); dz.style.borderColor = 'var(--accent)'; };
+                dz.ondragleave = () => { dz.style.borderColor = 'var(--glass-border)'; };
+                dz.ondrop = (e) => {
+                    e.preventDefault();
+                    dz.style.borderColor = 'var(--glass-border)';
+                    const files = e.dataTransfer.files;
+                    if (files.length) {
+                        document.getElementById('file-list').innerHTML = `<p style="color: #22c55e">Uploaded: ${files[0].name}</p>`;
+                    }
+                };
+            } else {
+                content.innerHTML = `
+                    <div class="grid">
+                        <div class="card">
+                            <h3>Active Users</h3>
+                            <p style="font-size: 2rem; font-weight: 600; margin-top: 0.5rem;">14,292</p>
+                            <p style="color: #22c55e; font-size: 0.9rem;">+12.5% from last month</p>
+                        </div>
+                        <div class="card">
+                            <h3>Revenue</h3>
+                            <p style="font-size: 2rem; font-weight: 600; margin-top: 0.5rem;">$52,042</p>
+                            <p style="color: var(--text-dim); font-size: 0.9rem;">Target: $60,000</p>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-top: 1.5rem;">
+                        <h3>Recent Deals</h3>
+                        <input type="text" id="table-search" placeholder="Search customers..." onkeyup="filterTable()">
+                        <table id="deals-table">
+                            <thead>
+                                <tr>
+                                    <th>Customer</th>
+                                    <th>Value</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Acme Corp</td><td>$12,000</td><td style="color: #eab308">Pending</td></tr>
+                                <tr><td>Global Tech</td><td>$25,000</td><td style="color: #22c55e">Closed</td></tr>
+                                <tr><td>Nebula Inc</td><td>$8,400</td><td style="color: #ef4444">Cancelled</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
         }
 
         function toggleTheme() {

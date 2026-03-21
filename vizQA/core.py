@@ -5,6 +5,7 @@ Core execution engine for vision-driven UI automation.
 # pylint: disable=invalid-name, too-many-lines
 import asyncio
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -158,9 +159,6 @@ class Automator:
                     step.status = StepStatus.PASSED
 
         except Exception as exc:
-            import traceback  # pylint: disable=import-outside-toplevel
-
-            traceback.print_exc()
             self._logger.log_exception(step.id, exc)
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.ACTION_ERROR
@@ -187,6 +185,20 @@ class Automator:
         path = f".vizQA/{test_slug}_{step.id}_before.jpg"
         await self.page.screenshot(path=path, type="jpeg")
         step.screenshot_before = path
+
+        # Check if the query refers to an artifact
+        artifact_match = re.fullmatch(r"\{([a-zA-Z0-9_]+)\}", query)
+        if artifact_match:
+            art_name = artifact_match.group(1)
+            if art_name in session.artifacts:
+                artifact = session.artifacts[art_name]
+                session.metadata["target"] = {"type": "artifact", "name": art_name, "value": artifact}
+                step.status = StepStatus.PASSED
+                return True
+            else:
+                self._logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
+                # TODO error reporting
+                raise ValueError(f"Artifact '{art_name}' not found in session.")
 
         perception = await self.client.perceive(path, query=query)
         step.perception_result = perception
@@ -219,14 +231,42 @@ class Automator:
     async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
         """Handles a DO: sub-step — resolves coords and fires the interaction."""
         parts = action_cmd.split(" ", 1)
-        action = parts[0]
+        action = parts[0].lower()
         payload = parts[1] if len(parts) > 1 else ""
+
+        # Resolve placeholders in payload
+        if "{" in payload and "}" in payload:
+            for art_name, art_data in session.artifacts.items():
+                placeholder = f"{{{art_name}}}"
+                if placeholder in payload:
+                    payload = payload.replace(placeholder, str(art_data["value"]))
 
         target = session.metadata.get("target")
         if not target:
             step.status = StepStatus.FAILED
             step.failure_reason = "No target element found. FIND step must precede DO step."
             return False
+
+        # Handle specialized artifact actions
+        if target.get("type") == "artifact":
+            if action == "drag":
+                session.metadata["drag_source"] = target
+                step.status = StepStatus.PASSED
+                return True
+            else:
+                step.status = StepStatus.FAILED
+                step.failure_reason = (
+                    f"Action '{action}' is not supported directly on an artifact. Did you mean to 'drag' it?"
+                )
+                return False
+
+        # Specific handling for drop if the source was an artifact
+        drag_source = session.metadata.get("drag_source")
+        if action == "drop" and drag_source and drag_source.get("type") == "artifact":
+            success = await self._execute_artifact_drop(session, step, drag_source, target)
+            if success:
+                session.metadata.pop("drag_source", None)
+            return success
 
         last_perc = session.metadata.get("last_perception", {})
         viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
@@ -263,6 +303,69 @@ class Automator:
         step.status = StepStatus.PASSED
         return True
 
+    async def _execute_artifact_drop(
+        self, session: TestSession, step: TestStep, source: Dict[str, Any], target: Dict[str, Any]
+    ) -> bool:
+        """Handles dropping an artifact (e.g. a file) onto a UI element."""
+        art_data = source["value"]
+        art_type = art_data.get("type")
+
+        last_perc = session.metadata.get("last_perception", {})
+        viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
+        px, py, pw, ph = _resolve_coords(target, viewport)
+        cx, cy = px + pw / 2, py + ph / 2
+
+        self._logger.log_debug(
+            step.id, f"Artifact drop target: {target.get('text') or target.get('label')} at ({cx}, {cy})"
+        )
+
+        if art_type == "file":
+            file_path = art_data["value"]
+            self._logger.log_debug(step.id, f"Uploading file artifact: {file_path}")
+
+            try:
+                input_selector = "input[type=file]"
+
+                # Check if there are any file inputs
+                count = await self.page.locator(input_selector).count()
+                self._logger.log_debug(step.id, f"Found {count} file inputs on page")
+
+                if count == 0:
+                    step.status = StepStatus.FAILED
+                    step.failure_reason = "No file input element found on the page to receive the artifact."
+                    return False
+
+                # Use Playwright's set_input_files
+                await self.page.set_input_files(input_selector, file_path)
+                self._logger.log_debug(step.id, f"set_input_files called for {file_path}")
+
+                # Trigger a change event if needed
+                await self.page.evaluate(
+                    """([sel, fname]) => {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                        console.log("Triggering change for", fname);
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""",
+                    [input_selector, file_path],
+                )
+
+                step.status = StepStatus.PASSED
+                return True
+            except Exception as e:
+                self._logger.log_warning(step.id, f"File upload failed: {e}")
+                step.status = StepStatus.FAILED
+                step.failure_reason = f"Failed to upload file artifact: {e}"
+                return False
+
+        # Handle other artifact types (content, string) as drops?
+        # Maybe just type them?
+
+        step.status = StepStatus.FAILED
+        step.failure_reason = f"Drop action not yet implemented for artifact type: {art_type}"
+        return False
+
     async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 0.2) -> bool:
         """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
         start_wait = datetime.now()
@@ -289,7 +392,7 @@ class Automator:
             if intent.get("negated"):
                 # Delegated negation path — uses history_metadata for match
                 match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
-                if not match_found: # if the negation is not met
+                if not match_found:  # if the negation is not met
                     reasoning = "Negation failure: Element remains in the view"
             else:
                 filtered = self.parser.filter_elements_by_intent(intent, all_elements)
@@ -300,7 +403,7 @@ class Automator:
                 # 2. Or high-confidence top_match from the API
                 if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
                     match_found = True
-                    self._logger.log_debug(step.id, f"match found from keyword/color/position")
+                    self._logger.log_debug(step.id, "match found from keyword/color/position")
                 elif (
                     perception.get("elements")
                     and not intent.get("keyword")
@@ -308,12 +411,12 @@ class Automator:
                     and not intent.get("position")
                 ):
                     match_found = True
-                    self._logger.log_debug(step.id, f"match found from elements")
+                    self._logger.log_debug(step.id, "match found from elements")
                 elif not intent.get("keyword") and not intent.get("color") and not intent.get("position"):
                     # Only match if we have at least SOME high-confidence elements detected
                     if all_elements:
                         match_found = True
-                        self._logger.log_debug(step.id, f"found generic match from elements")
+                        self._logger.log_debug(step.id, "found generic match from elements")
 
             if match_found:
                 # Update perception history for subsequent steps/negations
@@ -344,9 +447,7 @@ class Automator:
         wait_time = (datetime.now() - start_wait).total_seconds()
         if not reasoning:
             reasoning = f"Verification failed after {wait_time:.1f}s"
-        step.failure_reason = self._failure_details(
-            "VERIFY", query, perception, reasoning
-        )
+        step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
         return False
 
     async def _execute_legacy(self, session: TestSession, step: TestStep) -> bool:
@@ -441,6 +542,12 @@ class Automator:
             # Let's just stick to typing for now to avoid side effects.
         elif action == "hover":
             await self.page.mouse.move(x, y)
+        elif action == "drag":
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.down()
+        elif action == "drop":
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.up()
         elif action == "scroll":
             # Move mouse to target first to ensure it's grounded on the right element
             await self.page.mouse.move(x, y)
