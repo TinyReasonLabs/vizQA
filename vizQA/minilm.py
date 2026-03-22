@@ -5,7 +5,7 @@ ONNX inference module for MiniLM model.
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import onnxruntime as ort
@@ -14,6 +14,7 @@ from tokenizers import Tokenizer
 from vizQA.parser import ParserVocabulary
 
 
+# pylint: disable=too-many-instance-attributes
 class MiniLM:
     """
     Handles MiniLM ONNX inference for semantic similarity and intent classification.
@@ -536,11 +537,21 @@ class MiniLM:
         prev_target: Optional[str],
         all_steps: List[Dict[str, str]],
     ) -> Tuple[bool, Optional[str]]:
-        """Handles single or multi-field 'type [payload] into [target]' or 'enter [payload]'. Returns (handled, next_prev_target)."""
+        """Handles single or multi-field
+        'type [payload] into [target]' or 'enter [payload]'.
+        Returns (handled, next_prev_target).
+
+        :param canonical_type: The canonical type of the action.
+        :param target_area: The target area of the action.
+        :param real_clause: The real clause of the action.
+        :param quotes: The quotes of the action.
+        :param prev_target: The previous target of the action.
+        :param all_steps: The list of all steps.
+        :return: A tuple of (handled, next_prev_target).
+        """
         if canonical_type not in ["type", "enter"]:
             return False, None
 
-        q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
         # ── Into/In/On split: distributive or multiple targets ──
         connector = None
         if re.search(r"\binto\b", target_area, re.I):
@@ -610,11 +621,20 @@ class MiniLM:
         prev_target: Optional[str],
         all_steps: List[Dict[str, str]],
     ) -> Tuple[bool, Optional[str]]:
-        """Handles pattern 'select [option] from [target]' or distributive select. Returns (handled, next_prev_target)."""
+        """Handles pattern 'select [option] from [target]'
+        or distributive select.
+
+        :param canonical_type: The canonical type of the action.
+        :param target_area: The target area of the action.
+        :param real_clause: The real clause of the action.
+        :param quotes: The quotes of the action.
+        :param prev_target: The previous target of the action.
+        :param all_steps: The list of all steps.
+        :return: A tuple of (handled, next_prev_target).
+        """
         if canonical_type != "select":
             return False, None
 
-        q_tokens = re.findall(r"__QUOTE_\d+__", target_area)
         if re.search(r"\bfrom\b", target_area, re.I):
             from_split = re.split(r"\bfrom\b", target_area, maxsplit=1, flags=re.I)
             pload = self._sd_restore(from_split[0].strip(), quotes)
@@ -625,7 +645,7 @@ class MiniLM:
             all_steps.append({"type": "DO", "value": f"select {pload}"})
             return True, elem_val
 
-        elif re.search(r"\band\b", target_area, re.I):
+        if re.search(r"\band\b", target_area, re.I):
             # Distributive: 'apple' and 'banana' options
             and_parts = re.split(r"\band\b", target_area, flags=re.I)
             last_elem = None

@@ -6,7 +6,7 @@ import re
 from typing import Any, Dict, List
 
 from vizQA.logger import get_logger
-from memory import StepStatus, TestStep
+from vizQA.memory import StepStatus, TestStep
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods

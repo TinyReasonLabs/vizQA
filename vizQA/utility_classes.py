@@ -1,3 +1,7 @@
+"""
+Utility classes for the vizQA package.
+"""
+
 import yaml
 
 # ---------------------------------------------------------------------------
@@ -5,6 +9,7 @@ import yaml
 # ---------------------------------------------------------------------------
 
 
+# pylint: disable=too-many-ancestors
 class LineLoader(yaml.SafeLoader):
     """Custom YAML loader that adds line numbers to mappings."""
 

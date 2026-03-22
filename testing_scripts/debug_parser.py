@@ -1,3 +1,4 @@
+# pylint: disable=all
 import re
 from typing import Any, Dict, List, NamedTuple, Optional
 

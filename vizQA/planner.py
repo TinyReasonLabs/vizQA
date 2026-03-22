@@ -5,9 +5,10 @@ Planner module for decomposing high-level instructions into atomic steps.
 import os
 from typing import Any, Dict, List, Optional
 
-from vizQA.exceptions import TestDefinitionError, UserFacingException
+from vizQA.exceptions import TestDefinitionError
 from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestStep
+from vizQA.minilm import MiniLM
 from vizQA.parser import SemanticParser
 
 
@@ -50,8 +51,6 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                 # Reuse model_dir if provided, otherwise default
                 model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
                 try:
-                    from vizQA.minilm import MiniLM
-
                     self.minilm = MiniLM(model_dir)
                     # Synergize with parser
                     self.parser.minilm = self.minilm
@@ -77,8 +76,6 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
                 if expectation:
                     sub_steps.extend(self._decompose_expectation(expectation, i, len(sub_steps)))
-            except (TestDefinitionError, UserFacingException):
-                raise
             except (ValueError, RuntimeError) as e:
                 # Wrap as user-facing definition error
                 raise TestDefinitionError(
@@ -124,7 +121,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             raise RuntimeError(f"Semantic decomposition failed for expectation '{expectation}': {e}") from e
 
     def _to_test_steps(
-        self, model_steps: List[Dict[str, str]], parent_idx: int, prefix: str, start_idx: int = 0
+        self, model_steps: List[Dict[str, str]], parent_idx: int, _prefix: str, start_idx: int = 0
     ) -> List[TestStep]:
         """Converts model output steps into TestStep objects."""
         test_steps = []

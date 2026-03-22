@@ -58,12 +58,15 @@ class SessionLogger:
     # Structured log helpers
     # ------------------------------------------------------------------
 
-    def log_perception(self, step_id: str, query: str, response: Dict[str, Any]) -> None:
-        """Logs a full perception API response at DEBUG level."""
+    def log_perception(self, _step_id: str, _query: str, response: Dict[str, Any]) -> None:
+        """Logs a full perception API response at DEBUG level.
+
+        :param response: The response.
+        """
         try:
-            payload = json.dumps(response, ensure_ascii=False)
+            _payload = json.dumps(response, ensure_ascii=False)
         except (TypeError, ValueError):
-            payload = str(response)
+            _payload = str(response)
         # self._logger.debug("[%s] PERCEPTION query=%r  response=%s", step_id, query, payload)
 
     def log_step(

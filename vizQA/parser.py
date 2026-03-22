@@ -75,6 +75,7 @@ class ParserVocabulary:
         "center",
         "middle",
     ]
+    # pylint: disable=line-too-long
     NEGATION_RE = re.compile(
         r"\b(not|no longer|should not|shouldn't|should not be|disappear(?:s|ed)?|gone|invisible|absent|done|finished|closed|close|removed|vanish(?:es|ed)?|gone)\b",
         re.IGNORECASE,
@@ -130,6 +131,7 @@ class SemanticParser:
 
         return nodes
 
+    # pylint: disable=protected-access
     def parse_verify_intent(self, query: str) -> Dict[str, Any]:
         """
         Parses a verification query to extract specific intents.
@@ -192,7 +194,7 @@ class SemanticParser:
 
         # 3. Color detection
         if self.minilm:
-            color_group = {c: self.minilm._intent_anchor_groups["color"] for c in ParserVocabulary.COLORS}
+            _color_group = {c: self.minilm._intent_anchor_groups["color"] for c in ParserVocabulary.COLORS}
             # Use classify across individual words so multi-word queries work
             for word in query.lower().split():
                 if word in ParserVocabulary.COLORS:
@@ -261,6 +263,7 @@ class SemanticParser:
                     break
 
         # 6. Clean subject
+        # pylint: disable=line-too-long
         subject = re.sub(
             r"\b(should appear|should close|should occur|is|at the|in the|on the|of the|off the|the|a|an|located|aligned|should be|should|of|on|center of|screen|be|been|was|were|has|have|had)\b",
             "",
@@ -530,7 +533,7 @@ class SemanticParser:
         self,
         after_elements: List[Dict[str, Any]],
         intent_or_subject: Any,
-        before_elements: Optional[List[Dict[str, Any]]] = None,
+        _before_elements: Optional[List[Dict[str, Any]]] = None,
         target: Optional[Dict[str, Any]] = None,
         history_metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -555,7 +558,7 @@ class SemanticParser:
 
         # 2. Resolve target from history if needed
         if not target and history_metadata:
-            target, before_elements = self.resolve_historical_target(intent, history_metadata)
+            target, _before_elements = self.resolve_historical_target(intent, history_metadata)
 
         # 3. Identity-based check if target is provided
         if target:
@@ -609,6 +612,7 @@ class SemanticParser:
         # e.g. "is red and aligned right" -> ["is red", "aligned right"]
         if re.search(r"\band\b", cleaned, re.I):
             # Split if "and" is followed by a state, position, or another subject/boilerplate
+            # pylint: disable=line-too-long
             parts = re.split(
                 r"\s+and\s+(?='|\"|the|a|an|it|is|should|must|at|in|on|color|state|visible|hidden|displayed|present|aligned|centered|top|bottom|left|right)",
                 cleaned,
@@ -692,7 +696,7 @@ class SemanticParser:
         splits = re.split(r"\bthen\b|\bafter\b|\bwhile\b|,|->", protected_text, flags=re.I)
 
         final_chunks = []
-        for i, s in enumerate(splits):
+        for s in splits:
             s_clean = s.strip()
             if not s_clean:
                 continue
@@ -700,6 +704,7 @@ class SemanticParser:
             # 2. Split 'and' if followed by a verb, article, quoted string, or specific descriptors
             # Prioritize splitting when different objects or subjects are being described.
             # We use a narrower list to avoid splitting compound attributes (like red and aligned)
+            # pylint: disable=line-too-long
             sub_splits = re.split(
                 r"\band\b\s+(?='|\"|the|a|an|click|tap|type|enter|input|fill|select|press|hover|into|onto|last|first|clear|scroll|right|left|context|submit|cancel|delete|save|sign|log|password|username|email)",
                 s_clean,
@@ -713,7 +718,7 @@ class SemanticParser:
 
         return final_chunks
 
-    def _parse_atomic_action(  # pylint: disable=too-many-branches,too-many-statements
+    def _parse_atomic_action(  # pylint: disable=too-many-branches,too-many-statements, too-many-return-statements
         self, chunk: str, implicit_target: str, implicit_action: Optional[str] = None
     ) -> tuple:
         """Takes a single continuous phrase and extracts FIND and DO."""
@@ -739,6 +744,7 @@ class SemanticParser:
         if not action_type and self.minilm:
             # Restore quotes for semantic matching to get full context
             semantic_query = chunk
+            # pylint: disable=protected-access
             detected = self.minilm.classify_anchor_group(
                 semantic_query, groups=self.minilm._action_groups, threshold=self.action_threshold
             )
@@ -752,7 +758,7 @@ class SemanticParser:
                     # Avoid matching "input" as verb if it's "the input"
                     pattern = rf"\b{re.escape(syn)}\b"
                     if syn == "input":
-                        pattern = rf"(?<!the\s)\binput\b"
+                        pattern = r"(?<!the\s)\binput\b"
 
                     if re.search(pattern, lower_chunk):
                         action_verb = syn
@@ -770,6 +776,7 @@ class SemanticParser:
                         continue
                     for syn in syns:
                         if re.search(rf"\b{re.escape(syn)}\b", lower_chunk):
+                            # pylint: disable=line-too-long
                             self._logger.log_debug(
                                 0,
                                 f"[Parser] Refined action from '{action_type}' to '{syn_type}' because of literal '{syn}' in chunk",
@@ -787,7 +794,7 @@ class SemanticParser:
                 # Avoid matching "input" as verb if it's "the input"
                 pattern = rf"\b{re.escape(syn)}\b"
                 if syn == "input":
-                    pattern = rf"(?<!the\s)\binput\b"
+                    pattern = r"(?<!the\s)\binput\b"
 
                 if re.search(pattern, lower_chunk):
                     # Check for "type" vs "clear" override
@@ -823,7 +830,7 @@ class SemanticParser:
                     "element",
                     "click",
                 )
-            elif "submit" in lower_chunk:
+            if "submit" in lower_chunk:
                 return (
                     [
                         SemanticNode(type="FIND", value=chunk_protected.strip()),

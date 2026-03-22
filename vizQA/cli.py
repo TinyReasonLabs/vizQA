@@ -9,7 +9,7 @@ import tomllib
 import traceback
 import uuid
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import click
 import yaml
@@ -68,7 +68,7 @@ class ProgressiveReporter:
         self.sessions: List[TestSession] = []
         self._total_sub_steps = 0
         self._completed_sub_steps = 0
-        self._live: Optional[rich.live.Live] = None
+        self._live: Optional[Live] = None
         self._renderable_lines: List[Any] = []
         self._parent_map: Dict[str, int] = {}  # maps step.id to line index
 
@@ -116,7 +116,7 @@ class ProgressiveReporter:
 
     def on_step_done(self, step: TestStep, depth: int = 0) -> None:
         """Called when an atomic step finishes."""
-        if step.status == StepStatus.RUNNING or step.status == StepStatus.PENDING:
+        if step.status in (StepStatus.RUNNING, StepStatus.PENDING):
             return
 
         self._completed_sub_steps += 1
@@ -152,7 +152,7 @@ class ProgressiveReporter:
         """Called when a container step finishes — updates its line color in-place."""
         if step.id in self._parent_map:
             idx = self._parent_map[step.id]
-            icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
+            _, color = _STATUS_ICON.get(step.status, ("?", "white"))
 
             line = Text()
             line.append("● ", style=color)
@@ -339,17 +339,12 @@ async def run_single_test(
     try:
         test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
     except Exception as err:  # pylint: disable=broad-exception-caught
-        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err))
+        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err)) from err
 
     # Consolidate model choice: use the parser/minilm from automator
     planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
 
-    try:
-        steps = planner.decompose(test_data.get("steps", []))
-    except TestDefinitionError:
-        # If we have line info in the raw steps, we could try to enrich it
-        # but StepPlanner already knows the instruction.
-        raise
+    steps = planner.decompose(test_data.get("steps", []))
 
     artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
 
@@ -395,7 +390,7 @@ async def run_single_test(
     default=False,
     help="Run in interactive mode, stops at the first failing test (default: False)",
 )
-def cli(paths, headless, verbose, interactive):
+def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool):
     """
     UI Testing Framework - Vision-Driven Automation
 
@@ -404,6 +399,7 @@ def cli(paths, headless, verbose, interactive):
     :param paths: Paths to the test files or directories.
     :param headless: Whether to run the browser in headless mode.
     :param verbose: Verbosity level for output.
+    :param interactive: Whether to run in interactive mode.
     """
     if not paths:
         ctx = click.get_current_context()

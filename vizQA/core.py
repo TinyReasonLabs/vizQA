@@ -25,12 +25,20 @@ from vizQA.minilm import MiniLM
 from vizQA.parser import SemanticParser
 
 
+# pylint: disable=too-many-instance-attributes
 class Automator:
     """
     Main controller for browser automation and perception-integrated execution.
     """
 
     def __init__(self, perception_client: PerceptionClient, verbosity: int = 0, headless: bool = True):
+        """
+        Initialises the Automator.
+
+        :param perception_client: The perception client.
+        :param verbosity: The verbosity level.
+        :param headless: Whether the browser should be headless.
+        """
         self.client = perception_client
         self.verbosity = verbosity
         self.headless = headless
@@ -114,7 +122,13 @@ class Automator:
 
     # pylint: disable=too-many-branches, broad-exception-caught
     async def _run_step_recursive(self, session: TestSession, step: TestStep, on_step_update: Optional[Any]) -> bool:
-        """Executes a step and its sub-steps recursively."""
+        """Executes a step and its sub-steps recursively.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param on_step_update: A callback to update the step status.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         step.status = StepStatus.RUNNING
         if on_step_update:
             await on_step_update(step)
@@ -208,7 +222,13 @@ class Automator:
     # ------------------------------------------------------------------
 
     async def _execute_find(self, session: TestSession, step: TestStep, query: str) -> bool:
-        """Handles a FIND: sub-step — perceives the page and stores the target."""
+        """Handles a FIND: sub-step — perceives the page and stores the target.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param query: The query to execute.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         test_slug = _test_slug(session)
         path = f".vizQA/{test_slug}_{step.id}_before.jpg"
         await self.page.screenshot(path=path, type="jpeg")
@@ -223,10 +243,8 @@ class Automator:
                 session.metadata["target"] = {"type": "artifact", "name": art_name, "value": artifact}
                 step.status = StepStatus.PASSED
                 return True
-            else:
-                self._logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
-                # TODO error reporting
-                raise ValueError(f"Artifact '{art_name}' not found in session.")
+            self._logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
+            raise ValueError(f"Artifact '{art_name}' not found in session.")
 
         perception = await self.client.perceive(path, query=query)
         step.perception_result = perception
@@ -258,7 +276,13 @@ class Automator:
         return False
 
     async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
-        """Handles a DO: sub-step — resolves coords and fires the interaction."""
+        """Handles a DO: sub-step — resolves coords and fires the interaction.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param action_cmd: The action command.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         parts = action_cmd.split(" ", 1)
         action = parts[0].lower()
         payload = parts[1] if len(parts) > 1 else ""
@@ -282,12 +306,11 @@ class Automator:
                 session.metadata["drag_source"] = target
                 step.status = StepStatus.PASSED
                 return True
-            else:
-                step.status = StepStatus.FAILED
-                step.failure_reason = (
-                    f"Action '{action}' is not supported directly on an artifact. Did you mean to 'drag' it?"
-                )
-                return False
+            step.status = StepStatus.FAILED
+            step.failure_reason = (
+                f"Action '{action}' is not supported directly on an artifact. Did you mean to 'drag' it?"
+            )
+            return False
 
         # Specific handling for drop if the source was an artifact
         drag_source = session.metadata.get("drag_source")
@@ -336,7 +359,14 @@ class Automator:
     async def _execute_artifact_drop(
         self, session: TestSession, step: TestStep, source: Dict[str, Any], target: Dict[str, Any]
     ) -> bool:
-        """Handles dropping an artifact (e.g. a file) onto a UI element."""
+        """Handles dropping an artifact (e.g. a file) onto a UI element.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param source: The source artifact.
+        :param target: The target element.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         art_data = source["value"]
         art_type = art_data.get("type")
 
@@ -385,7 +415,9 @@ class Automator:
                 return True
             except Exception as e:
                 self._logger.log_warning(session.id, f"File upload failed: {e}")
-                raise ArtifactError(f"Failed to upload file artifact for '{art_name}'", internal_detail=str(e))
+                raise ArtifactError(
+                    f"Failed to upload file artifact for '{art_data['value']}'", internal_detail=str(e)
+                ) from e
 
         # Handle other artifact types (content, string) as drops?
         # Maybe just type them?
@@ -395,7 +427,14 @@ class Automator:
         return False
 
     async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 0.2) -> bool:
-        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
+        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param query: The query to execute.
+        :param timeout: The timeout to wait for the verification.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 
@@ -479,7 +518,12 @@ class Automator:
         return False
 
     async def _execute_legacy(self, session: TestSession, step: TestStep) -> bool:
-        """Legacy execution path for non-decomposed steps."""
+        """Legacy execution path for non-decomposed steps.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         test_slug = _test_slug(session)
         before_path = f".vizQA/{test_slug}_{step.id}_before.jpg"
         await self.page.screenshot(path=before_path, type="jpeg")
@@ -502,8 +546,15 @@ class Automator:
     # Failure reporting
     # ------------------------------------------------------------------
 
-    def _failure_details(self, stage: str, query: str, perception: Dict[str, Any], base_message: str) -> str:
-        """Generates a concise failure reason string for CLI display."""
+    def _failure_details(self, _stage: str, query: str, perception: Dict[str, Any], base_message: str) -> str:
+        """Generates a concise failure reason string for CLI display.
+
+        :param _stage: The stage of the test.
+        :param query: The query to execute.
+        :param perception: The perception result.
+        :param base_message: The base message.
+        :return: The failure reason.
+        """
         reason = f"{base_message} for query: '{query}'"
 
         if self.verbosity >= 1:
@@ -539,7 +590,13 @@ class Automator:
     # ------------------------------------------------------------------
 
     async def _execute_interaction(self, action: str, x: float, y: float, payload: str):
-        """Performs actual Playwright interactions at the specified pixel coordinates."""
+        """Performs actual Playwright interactions at the specified pixel coordinates.
+
+        :param action: The action to perform.
+        :param x: The x-coordinate.
+        :param y: The y-coordinate.
+        :param payload: The payload to use for the action.
+        """
         # Strip quotes if present
         clean_payload = payload.strip("'\"")
 
@@ -585,7 +642,11 @@ class Automator:
         await asyncio.sleep(0.5)
 
     async def _skip_step_recursive(self, step: TestStep, on_step_update: Optional[Any]):
-        """Recursively marks a step and its sub-steps as skipped."""
+        """Recursively marks a step and its sub-steps as skipped.
+
+        :param step: The step to skip.
+        :param on_step_update: A callback to update the step status.
+        """
         step.status = StepStatus.SKIPPED
         if on_step_update:
             await on_step_update(step)
@@ -594,7 +655,12 @@ class Automator:
 
     # pylint: disable=too-many-locals, broad-exception-caught
     async def _execute_action(self, session: TestSession, step: TestStep):
-        """Legacy: simulates finding an element and interacting with it."""
+        """Legacy: simulates finding an element and interacting with it.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :return: True if the step was executed successfully, False otherwise.
+        """
         action = self._parse_action(step.instruction)
         test_slug = _test_slug(session)
 
@@ -628,7 +694,11 @@ class Automator:
         await asyncio.sleep(0.5)
 
     def _parse_action(self, instruction: str) -> str:
-        """Heuristic to determine the action type from an instruction string."""
+        """Heuristic to determine the action type from an instruction string.
+
+        :param instruction: The instruction to parse.
+        :return: The action type.
+        """
         instr = instruction.lower()
         if "click" in instr or "tap" in instr:
             return "click"
@@ -642,7 +712,13 @@ class Automator:
 
     # pylint: disable=broad-exception-caught
     async def _verify_expectation(self, session: TestSession, step: TestStep, timeout: int = 10) -> StepStatus:
-        """Polls the Perception API until the expectation is met or timed out."""
+        """Polls the Perception API until the expectation is met or timed out.
+
+        :param session: The test session.
+        :param step: The step to execute.
+        :param timeout: The timeout to wait for the verification.
+        :return: The status of the step.
+        """
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 
@@ -702,6 +778,10 @@ def _resolve_coords(target: Dict[str, Any], viewport: Dict[str, Any]) -> Tuple[f
 
     Returns ``(x, y, width, height)`` in pixels.  Returns ``(0, 0, 0, 0)``
     when no usable coordinate data is found.
+
+    :param target: The target to extract coordinates from.
+    :param viewport: The viewport to use for coordinate calculations.
+    :return: The coordinates of the target.
     """
     vw = viewport.get("width", 1280)
     vh = viewport.get("height", 720)

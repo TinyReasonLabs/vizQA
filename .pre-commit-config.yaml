@@ -30,6 +30,7 @@ repos:
           [
             "--recursive=y",
             "--load-plugins=pylint.extensions.docparams", # Optional check for docstrings
+            "--default-docstring-type=sphinx",
             "--max-line-length=120",
             "--ignore-patterns=test",
           ]

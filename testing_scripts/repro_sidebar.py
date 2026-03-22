@@ -1,6 +1,6 @@
+# pylint: disable=all
 import os
 
-from vizQA.minilm import MiniLM
 from vizQA.planner import StepPlanner
 
 

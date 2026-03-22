@@ -4,11 +4,12 @@ Implements a dual-vector strategy: label-based retrieval + metadata-based re-ran
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 
+# pylint: disable=too-few-public-methods
 class MetadataGenerator:
     """
     Converts structured element data into natural language metadata strings.
@@ -18,6 +19,9 @@ class MetadataGenerator:
     def generate(element: Dict[str, Any]) -> str:
         """
         Generates a descriptive sentence about the element's physical state and context.
+
+        :param element: The element to generate metadata for.
+        :return: The metadata string.
         """
         parts = []
 
@@ -58,6 +62,7 @@ class MetadataGenerator:
         return " ".join(parts)
 
 
+# pylint: disable=too-few-public-methods
 class SparseRanker:
     """
     Heuristic keyword-overlap ranker (fallback for BM25).
@@ -65,6 +70,13 @@ class SparseRanker:
 
     @staticmethod
     def score(query: str, candidates: List[str]) -> List[float]:
+        """
+        Calculates the score based on keyword overlap.
+
+        :param query: The query string.
+        :param candidates: The list of candidates.
+        :return: The score.
+        """
         if not query:
             return [0.0] * len(candidates)
 
@@ -82,6 +94,7 @@ class SparseRanker:
         return scores
 
 
+# pylint: disable=too-few-public-methods
 class SemanticReRanker:
     """
     Phase 2: Re-ranks candidates based on metadata similarity to the query.
@@ -91,18 +104,34 @@ class SemanticReRanker:
         self.minilm = minilm
 
     def calculate_context_score(self, query_vec: np.ndarray, metadata_str: str) -> float:
+        """
+        Calculates the context score based on metadata similarity to the query.
+
+        :param query_vec: The query vector.
+        :param metadata_str: The metadata string.
+        :return: The context score.
+        """
         if not metadata_str:
             return 0.0
         meta_vec = self.minilm.encode(metadata_str)
         return self.minilm.cosine_similarity(query_vec, meta_vec)
 
 
+# pylint: disable=too-few-public-methods
 class SalienceScorer:
     """
     Phase 3: Adjusts scores based on visual salience and query modifiers.
     """
 
     def boost(self, query: str, element: Dict[str, Any], current_score: float) -> float:
+        """
+        Boosts the score based on salience and query modifiers.
+
+        :param query: The query string.
+        :param element: The element to rank.
+        :param current_score: The current score.
+        :return: The boosted score.
+        """
         salience = element.get("salience", 0.5)
         q_lower = query.lower()
 
@@ -117,12 +146,21 @@ class SalienceScorer:
         return current_score * max(0.5, multiplier)
 
 
+# pylint: disable=too-few-public-methods
 class QuoteScorer:
     """
     Phase 3: Pins exact quoted matches to the top.
     """
 
     def boost(self, intent: Dict[str, Any], element: Dict[str, Any], current_score: float) -> float:
+        """
+        Boosts the score if the element matches the keyword.
+
+        :param intent: The intent dictionary.
+        :param element: The element to rank.
+        :param current_score: The current score.
+        :return: The boosted score.
+        """
         keyword = intent.get("keyword")
         if not keyword:
             return current_score
@@ -149,6 +187,7 @@ class QuoteScorer:
         return current_score + max_boost
 
 
+# pylint: disable=too-few-public-methods
 class RankingEngine:
     """
     Orchestrates the multi-phase ranking pipeline.
@@ -160,7 +199,16 @@ class RankingEngine:
         self.salience_scorer = SalienceScorer()
         self.quote_scorer = QuoteScorer()
 
+    # pylint: disable=too-many-locals
     def rank(self, query: str, intent: Dict[str, Any], elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Ranks elements based on query and intent.
+
+        :param query: The query string.
+        :param intent: The intent dictionary.
+        :param elements: The list of elements to rank.
+        :return: The ranked list of elements.
+        """
         if not elements:
             return []
 
