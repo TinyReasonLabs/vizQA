@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -14,6 +15,19 @@ from tokenizers import Tokenizer
 
 from vizQA.logger import get_logger
 from vizQA.parser import ParserVocabulary
+
+
+@dataclass
+class DissectionContext:
+    """Groups context for semantic dissection to reduce parameter counts."""
+
+    canonical_type: str
+    target_area: str
+    real_clause: str
+    quotes: List[str]
+    all_steps: List[Dict[str, str]]
+    prev_target: Optional[str] = None
+    saved_literal: Optional[str] = None
 
 
 # pylint: disable=too-many-instance-attributes
@@ -284,8 +298,7 @@ class MiniLM:
         # print(f"margin={margin:.3f}")
         if margin >= delta * 2.0 and sim_neg >= 0.25:
             return True
-        return prob > logit_threshold and sim_neg >= threshold
-        return prob > logit_threshold and margin >= delta and sim_neg >= threshold
+        return prob > logit_threshold and (sim_neg >= threshold or margin >= delta)
 
         # absolute threshold
         # return sim_neg >= threshold and sim_neg > sim_pos
@@ -518,28 +531,21 @@ class MiniLM:
         all_steps.append({"type": "DO", "value": f"click {noun}"})
         return True, noun
 
-    def _sd_handle_drag(
-        self,
-        canonical_type: str,
-        target_area: str,
-        real_clause: str,
-        quotes: List[str],
-        all_steps: List[Dict[str, str]],
-    ) -> Tuple[bool, Optional[str]]:
+    def _sd_handle_drag(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
         """Handles pattern 'drag [source] onto [dest]'. Returns (handled, next_prev_target)."""
-        if canonical_type != "drag" or not re.search(r"\bonto\b", target_area, re.I):
+        if ctx.canonical_type != "drag" or not re.search(r"\bonto\b", ctx.target_area, re.I):
             return False, None
 
-        onto_parts = re.split(r"\bonto\b", target_area, maxsplit=1, flags=re.I)
-        drag_tgt = self._sd_clean_target(self._sd_restore(onto_parts[0].strip(), quotes))
-        drop_tgt = self._sd_clean_target(self._sd_restore(onto_parts[1].strip(), quotes))
+        onto_parts = re.split(r"\bonto\b", ctx.target_area, maxsplit=1, flags=re.I)
+        drag_tgt = self._sd_clean_target(self._sd_restore(onto_parts[0].strip(), ctx.quotes))
+        drop_tgt = self._sd_clean_target(self._sd_restore(onto_parts[1].strip(), ctx.quotes))
 
         if not drag_tgt:
-            raise ValueError(f"No source element identified for drag action in '{real_clause}'")
+            raise ValueError(f"No source element identified for drag action in '{ctx.real_clause}'")
         if not drop_tgt:
-            raise ValueError(f"No destination element identified for drop action in '{real_clause}'")
+            raise ValueError(f"No destination element identified for drop action in '{ctx.real_clause}'")
 
-        all_steps.extend(
+        ctx.all_steps.extend(
             [
                 {"type": "FIND", "value": drag_tgt},
                 {"type": "DO", "value": "drag"},
@@ -549,18 +555,11 @@ class MiniLM:
         )
         return True, drop_tgt
 
-    def _sd_handle_key_input(
-        self,
-        real_clause: str,
-        target_area: str,
-        canonical_type: str,
-        prev_target: Optional[str],
-        all_steps: List[Dict[str, str]],
-    ) -> Tuple[bool, Optional[str]]:
+    def _sd_handle_key_input(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
         """Handles pattern 'press enter' or 'press [key]'. Returns (handled, next_prev_target)."""
         detected_key = None
         for k in self._KEY_NAMES:
-            if re.search(rf"\b{re.escape(k)}\b", real_clause.lower()):
+            if re.search(rf"\b{re.escape(k)}\b", ctx.real_clause.lower()):
                 detected_key = k
                 break
 
@@ -568,181 +567,148 @@ class MiniLM:
             return False, None
 
         # Robust key handling: "Enter" at start is an action, NOT a key press
-        is_explicit_press = re.match(r"^\s*(press|hit|on|hit\s+the|press\s+the)\b", real_clause, flags=re.I)
+        is_explicit_press = re.match(r"^\s*(press|hit|on|hit\s+the|press\s+the)\b", ctx.real_clause, flags=re.I)
         if not is_explicit_press and detected_key.lower() == "enter":
             return False, None
 
-        if detected_key:
+        if is_explicit_press:
             # "press enter on the login button"
-            element = re.sub(r"\b(press|hit|on)\b", "", real_clause, flags=re.I)
+            element = re.sub(r"\b(press|hit|on)\b", "", ctx.real_clause, flags=re.I)
             element = re.sub(rf"\b{re.escape(detected_key)}\b", "", element, flags=re.I).strip()
             element = self._sd_clean_target(element)
             if element.lower().endswith(" key"):
                 element = element[:-4].strip()
 
             if not element or element.lower() in ["it", "them"]:
-                element = prev_target
+                element = ctx.prev_target
 
             if not element:
-                raise ValueError(f"No target element identified for key press '{detected_key}' in '{real_clause}'")
+                raise ValueError(f"No target element identified for key press '{detected_key}' in '{ctx.real_clause}'")
 
-            all_steps.append({"type": "FIND", "value": element})
-            all_steps.append({"type": "DO", "value": f"press {detected_key}"})
+            ctx.all_steps.append({"type": "FIND", "value": element})
+            ctx.all_steps.append({"type": "DO", "value": f"press {detected_key}"})
             return True, element
 
         return False, None
 
-    def _sd_handle_type_enter(
-        self,
-        canonical_type: str,
-        target_area: str,
-        real_clause: str,
-        quotes: List[str],
-        prev_target: Optional[str],
-        all_steps: List[Dict[str, str]],
-    ) -> Tuple[bool, Optional[str]]:
-        """Handles single or multi-field
-        'type [payload] into [target]' or 'enter [payload]'.
+    def _sd_handle_type_enter(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
+        """Handles single or multi-field 'type [payload] into [target]' or 'enter [payload]'.
         Returns (handled, next_prev_target).
-
-        :param canonical_type: The canonical type of the action.
-        :param target_area: The target area of the action.
-        :param real_clause: The real clause of the action.
-        :param quotes: The quotes of the action.
-        :param prev_target: The previous target of the action.
-        :param all_steps: The list of all steps.
-        :return: A tuple of (handled, next_prev_target).
         """
-        if canonical_type not in ["type", "enter"]:
+        if ctx.canonical_type not in ["type", "enter"]:
             return False, None
 
         # ── Into/In/On split: distributive or multiple targets ──
         connector = None
-        if re.search(r"\binto\b", target_area, re.I):
+        if re.search(r"\binto\b", ctx.target_area, re.I):
             connector = "into"
-        elif re.search(r"\bin\b", target_area, re.I):
+        elif re.search(r"\bin\b", ctx.target_area, re.I):
             connector = "in"
 
         if connector:
-            and_parts = re.split(r"\band\b", target_area, flags=re.I)
-            if len(and_parts) >= 2 and all(re.search(rf"\b{connector}\b", p, re.I) for p in and_parts):
-                elem = None
-                for part in and_parts:
-                    part_split = re.split(rf"\b{connector}\b", part.strip(), maxsplit=1, flags=re.I)
-                    if len(part_split) == 2:
-                        pload = self._sd_restore(part_split[0].strip(), quotes)
-                        elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), quotes))
-                        if not elem:
-                            raise ValueError(f"No target element identified for '{canonical_type}' action in '{part}'")
-                        all_steps.append({"type": "FIND", "value": elem})
-                        all_steps.append({"type": "DO", "value": f"{canonical_type} {pload}"})
-                return True, elem
-
-            # Single split: 'payload' in/into element
-            part_split = re.split(rf"\b{connector}\b", target_area, maxsplit=1, flags=re.I)
-            if len(part_split) == 2:
-                pload = self._sd_restore(part_split[0].strip(), quotes)
-                elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), quotes))
-                if not elem or elem.lower() in ["it", "them"]:
-                    elem = prev_target
-                if not elem:
-                    raise ValueError(f"No target element identified for '{canonical_type}' action in '{real_clause}'")
-
-                all_steps.append({"type": "FIND", "value": elem})
-                all_steps.append({"type": "DO", "value": f"{canonical_type} {pload}"})
-                return True, elem
+            return self._sd_handle_connector_type(ctx, connector)
 
         # ── Multi-field fallback: "type first name john and last name doe" ──
-        restored_target = self._sd_restore(target_area, quotes)
+        restored_target = self._sd_restore(ctx.target_area, ctx.quotes)
         and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
         if len(and_parts) >= 2:
-            last_elem = None
-            for part in and_parts:
-                part = part.strip()
-                words = part.split()
-                if len(words) >= 2:
-                    last_elem = " ".join(words[:-1])
-                    all_steps.append({"type": "FIND", "value": last_elem})
-                    all_steps.append({"type": "DO", "value": f"{canonical_type} {words[-1]}"})
-                elif words:
-                    if not prev_target:
-                        raise ValueError(
-                            f"Ambiguous segment '{part}' in multi-field action '{restored_target}': No target specified."
-                        )
-                    last_elem = prev_target
-                    all_steps.append({"type": "FIND", "value": last_elem})
-                    all_steps.append({"type": "DO", "value": f"{canonical_type} {words[0]}"})
-            return True, last_elem
+            return self._sd_handle_multi_field_type(ctx, and_parts)
 
         return False, None
 
-    def _sd_handle_select(
-        self,
-        canonical_type: str,
-        target_area: str,
-        real_clause: str,
-        quotes: List[str],
-        prev_target: Optional[str],
-        all_steps: List[Dict[str, str]],
-    ) -> Tuple[bool, Optional[str]]:
-        """Handles pattern 'select [option] from [target]'
-        or distributive select.
+    def _sd_handle_connector_type(self, ctx: DissectionContext, connector: str) -> Tuple[bool, Optional[str]]:
+        """Helper for type/enter actions using connectors like 'into' or 'in'."""
+        and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
+        if len(and_parts) >= 2 and all(re.search(rf"\b{connector}\b", p, re.I) for p in and_parts):
+            elem = None
+            for part in and_parts:
+                part_split = re.split(rf"\b{connector}\b", part.strip(), maxsplit=1, flags=re.I)
+                if len(part_split) == 2:
+                    pload = self._sd_restore(part_split[0].strip(), ctx.quotes)
+                    elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), ctx.quotes))
+                    if not elem:
+                        raise ValueError(f"No target identified for '{ctx.canonical_type}' in '{part}'")
+                    ctx.all_steps.append({"type": "FIND", "value": elem})
+                    ctx.all_steps.append({"type": "DO", "value": f"{ctx.canonical_type} {pload}"})
+            return True, elem
 
-        :param canonical_type: The canonical type of the action.
-        :param target_area: The target area of the action.
-        :param real_clause: The real clause of the action.
-        :param quotes: The quotes of the action.
-        :param prev_target: The previous target of the action.
-        :param all_steps: The list of all steps.
-        :return: A tuple of (handled, next_prev_target).
-        """
-        if canonical_type != "select":
+        # Single split: 'payload' in/into element
+        part_split = re.split(rf"\b{connector}\b", ctx.target_area, maxsplit=1, flags=re.I)
+        if len(part_split) == 2:
+            pload = self._sd_restore(part_split[0].strip(), ctx.quotes)
+            elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), ctx.quotes))
+            if not elem or elem.lower() in ["it", "them"]:
+                elem = ctx.prev_target
+            if not elem:
+                raise ValueError(f"No target identified for '{ctx.canonical_type}' in '{ctx.real_clause}'")
+
+            ctx.all_steps.append({"type": "FIND", "value": elem})
+            ctx.all_steps.append({"type": "DO", "value": f"{ctx.canonical_type} {pload}"})
+            return True, elem
+        return False, None
+
+    def _sd_handle_multi_field_type(self, ctx: DissectionContext, and_parts: List[str]) -> Tuple[bool, Optional[str]]:
+        """Helper for multi-field type commands."""
+        last_elem = None
+        for part in and_parts:
+            part = part.strip()
+            words = part.split()
+            if len(words) >= 2:
+                last_elem = " ".join(words[:-1])
+                ctx.all_steps.append({"type": "FIND", "value": last_elem})
+                ctx.all_steps.append({"type": "DO", "value": f"{ctx.canonical_type} {words[-1]}"})
+            elif words:
+                if not ctx.prev_target:
+                    err_msg = (
+                        f"Ambiguous segment '{part}' in multi-field action '{ctx.target_area}': No target specified."
+                    )
+                    raise ValueError(err_msg)
+                last_elem = ctx.prev_target
+                ctx.all_steps.append({"type": "FIND", "value": last_elem})
+                ctx.all_steps.append({"type": "DO", "value": f"{ctx.canonical_type} {words[0]}"})
+        return True, last_elem
+
+    def _sd_handle_select(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
+        """Handles pattern 'select [option] from [target]' or distributive select."""
+        if ctx.canonical_type != "select":
             return False, None
 
-        if re.search(r"\bfrom\b", target_area, re.I):
-            from_split = re.split(r"\bfrom\b", target_area, maxsplit=1, flags=re.I)
-            pload = self._sd_restore(from_split[0].strip(), quotes)
-            elem_val = self._sd_clean_target(self._sd_restore(from_split[1].strip(), quotes))
+        if re.search(r"\bfrom\b", ctx.target_area, re.I):
+            from_split = re.split(r"\bfrom\b", ctx.target_area, maxsplit=1, flags=re.I)
+            pload = self._sd_restore(from_split[0].strip(), ctx.quotes)
+            elem_val = self._sd_clean_target(self._sd_restore(from_split[1].strip(), ctx.quotes))
             if not elem_val:
-                raise ValueError(f"No target element identified for 'select' action in '{real_clause}'")
-            all_steps.append({"type": "FIND", "value": elem_val})
-            all_steps.append({"type": "DO", "value": f"select {pload}"})
+                raise ValueError(f"No target element identified for 'select' action in '{ctx.real_clause}'")
+            ctx.all_steps.append({"type": "FIND", "value": elem_val})
+            ctx.all_steps.append({"type": "DO", "value": f"select {pload}"})
             return True, elem_val
 
-        if re.search(r"\band\b", target_area, re.I):
+        if re.search(r"\band\b", ctx.target_area, re.I):
             # Distributive: 'apple' and 'banana' options
-            and_parts = re.split(r"\band\b", target_area, flags=re.I)
+            and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
             last_elem = None
             for part in and_parts:
-                part_restored = self._sd_clean_target(self._sd_restore(part.strip(), quotes))
+                part_restored = self._sd_clean_target(self._sd_restore(part.strip(), ctx.quotes))
                 if not part_restored:
-                    raise ValueError(f"Could not identify a clear option to select in '{real_clause}'")
+                    raise ValueError(f"Could not identify a clear option to select in '{ctx.real_clause}'")
 
                 # Note: this distributive logic currently assumes the target is prev_target
-                tgt = prev_target or "element"
-                all_steps.append({"type": "FIND", "value": tgt})
-                all_steps.append({"type": "DO", "value": f"select {part_restored}"})
+                tgt = ctx.prev_target or "element"
+                ctx.all_steps.append({"type": "FIND", "value": tgt})
+                ctx.all_steps.append({"type": "DO", "value": f"select {part_restored}"})
                 last_elem = tgt
             return True, last_elem
 
         return False, None
 
-    def _sd_handle_distributive_and(
-        self,
-        canonical_type: str,
-        target_area: str,
-        real_clause: str,
-        quotes: List[str],
-        saved_literal: str,
-        all_steps: List[Dict[str, str]],
-    ) -> Tuple[bool, Optional[str]]:
+    def _sd_handle_distributive_and(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
         """Handles distributive 'and' (e.g., 'click submit and cancel buttons'). Returns (handled, next_prev_target)."""
-        if canonical_type in ["click", "right-click", "hover", "select", "check"] and re.search(
-            r"\band\b", target_area, re.I
+        if ctx.canonical_type in ["click", "right-click", "hover", "select", "check"] and re.search(
+            r"\band\b", ctx.target_area, re.I
         ):
-            and_parts = re.split(r"\band\b", target_area, flags=re.I)
+            and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
             if not any(self._sd_rhs_starts_with_verb(p) for p in and_parts):
-                restored_parts = [self._sd_clean_target(self._sd_restore(p.strip(), quotes)) for p in and_parts]
+                restored_parts = [self._sd_clean_target(self._sd_restore(p.strip(), ctx.quotes)) for p in and_parts]
                 last_words = restored_parts[-1].split()
                 shared_suffix = last_words[-1] if last_words else ""
                 for j, part in enumerate(restored_parts):
@@ -750,10 +716,10 @@ class MiniLM:
                     if j < len(restored_parts) - 1 and shared_suffix:
                         tgt = f"{tgt} {shared_suffix}"
                     if not tgt or tgt.lower() in ["it", "them"]:
-                        raise ValueError(f"Could not identify a target element in '{real_clause}'")
+                        raise ValueError(f"Could not identify a target element in '{ctx.real_clause}'")
 
-                    all_steps.append({"type": "FIND", "value": tgt})
-                    all_steps.append({"type": "DO", "value": saved_literal or canonical_type})
+                    ctx.all_steps.append({"type": "FIND", "value": tgt})
+                    ctx.all_steps.append({"type": "DO", "value": ctx.saved_literal or ctx.canonical_type})
                 return True, restored_parts[-1]
 
         return False, None
@@ -805,34 +771,37 @@ class MiniLM:
                     continue
 
             target_area = re.sub(rf"\b{re.escape(literal_syn)}\b", "", clause, count=1, flags=re.I).strip()
-
-            handled, nt = self._sd_handle_drag(canonical_type, target_area, real_clause, quotes, all_steps)
-            if handled:
-                prev_target = nt
-                continue
-
-            handled, nt = self._sd_handle_key_input(real_clause, target_area, canonical_type, prev_target, all_steps)
-            if handled:
-                prev_target = nt
-                continue
-
-            handled, nt = self._sd_handle_type_enter(
-                canonical_type, target_area, real_clause, quotes, prev_target, all_steps
+            ctx = DissectionContext(
+                canonical_type=canonical_type,
+                target_area=target_area,
+                real_clause=real_clause,
+                quotes=quotes,
+                all_steps=all_steps,
+                prev_target=prev_target,
+                saved_literal=saved_literal,
             )
+
+            handled, nt = self._sd_handle_drag(ctx)
             if handled:
                 prev_target = nt
                 continue
 
-            handled, nt = self._sd_handle_select(
-                canonical_type, target_area, real_clause, quotes, prev_target, all_steps
-            )
+            handled, nt = self._sd_handle_key_input(ctx)
             if handled:
                 prev_target = nt
                 continue
 
-            handled, nt = self._sd_handle_distributive_and(
-                canonical_type, target_area, real_clause, quotes, saved_literal, all_steps
-            )
+            handled, nt = self._sd_handle_type_enter(ctx)
+            if handled:
+                prev_target = nt
+                continue
+
+            handled, nt = self._sd_handle_select(ctx)
+            if handled:
+                prev_target = nt
+                continue
+
+            handled, nt = self._sd_handle_distributive_and(ctx)
             if handled:
                 prev_target = nt
                 continue
@@ -865,6 +834,6 @@ class MiniLM:
             prev_target = target_val
 
         if not all_steps:
-            raise ValueError(f"Could not decompose the instruction into any valid test steps: '{prompt}'")
+            raise ValueError(f"Could decompose the instruction into any valid test steps: '{prompt}'")
 
         return all_steps

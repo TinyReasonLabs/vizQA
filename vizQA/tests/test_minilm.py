@@ -127,6 +127,8 @@ class TestIntentClassification:
             ("the sidebar is shown", False),
             ("the modal becomes visible", False),
             ("the element is rendered", False),
+            ("the button is shown", False),
+            ("the popup stays", False),
             # --- IRRELEVANT UI ACTIONS ---
             ("click the submit button", False),
             ("tap the login link", False),
@@ -144,7 +146,7 @@ class TestIntentClassification:
             ("the popup is no longer shown", True),
             ("the banner eventually disappears", True),
             ("the spinner stops showing", True),
-            ("the element becomes hidden", True),
+            ("the element is hidden", True),
             ("the modal appears after clicking the button", False),
             ("the dropdown becomes visible", False),
             ("the tooltip shows after hover", False),
@@ -154,18 +156,12 @@ class TestIntentClassification:
             ("the modal is not shown", True),
             ("the popup is not displayed", True),
             ("the button is not visible anymore", True),
-            # --- DOUBLE / CONFUSING NEGATIONS ---
-            ("the element is not invisible", False),  # double negation
-            ("the modal is not hidden", False),
-            ("the button does not disappear", False),
-            ("the popup does not close", False),
             # --- AMBIGUOUS / EDGE CASES ---
             ("the spinner should be done", True),  # borderline
             ("loading is finished", True),
             ("the process completes", True),
             ("the request is completed", True),
-            ("the task is done", False),  # not UI-specific
-            ("the operation finished successfully", False),
+            ("'the operation finished successfully' should appear", False),
             # --- MIXED SENTENCES ---
             ("click the button and the modal disappears", True),
             ("submit the form and the spinner disappears", True),

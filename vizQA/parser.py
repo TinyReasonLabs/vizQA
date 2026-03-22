@@ -406,7 +406,7 @@ class SemanticParser:
 
         return None, []
 
-    # pylint: disable=too-many-arguments, too-many-positional-arguments
+    # pylint: disable=too-many-arguments, too-many-positional-arguments, unused-argument
     def verify_negation(
         self,
         after_elements: List[Dict[str, Any]],
