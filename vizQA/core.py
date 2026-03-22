@@ -7,7 +7,7 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -22,7 +22,7 @@ from vizQA.exceptions import (
 from vizQA.logger import get_logger
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.minilm import MiniLM
-from vizQA.parser import SemanticParser
+from vizQA.parser import ParserConfig, SemanticParser
 
 
 # pylint: disable=too-many-instance-attributes
@@ -62,10 +62,12 @@ class Automator:
 
         self.parser = SemanticParser(
             minilm=self.minilm,
-            use_advanced_ranking=use_adv,
-            intent_threshold=intent_threq,
-            action_threshold=action_threq,
-            semantic_match_threshold=semantic_threq,
+            config=ParserConfig(
+                use_advanced_ranking=use_adv,
+                intent_threshold=intent_threq,
+                action_threshold=action_threq,
+                semantic_match_threshold=semantic_threq,
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -98,6 +100,7 @@ class Automator:
             await self.start()
 
         self._logger.log_session(session.id, "start", f"url={session.url!r}")
+        self._logger.log_debug("", f"Steps: {[x.sub_steps for x in session.steps]}")
         if session.headers:
             await self.page.set_extra_http_headers(session.headers)
         await self.page.goto(session.url)
@@ -120,15 +123,8 @@ class Automator:
     # Step dispatcher
     # ------------------------------------------------------------------
 
-    # pylint: disable=too-many-branches, broad-exception-caught
     async def _run_step_recursive(self, session: TestSession, step: TestStep, on_step_update: Optional[Any]) -> bool:
-        """Executes a step and its sub-steps recursively.
-
-        :param session: The test session.
-        :param step: The step to execute.
-        :param on_step_update: A callback to update the step status.
-        :return: True if the step was executed successfully, False otherwise.
-        """
+        """Executes a step and its sub-steps recursively."""
         step.status = StepStatus.RUNNING
         if on_step_update:
             await on_step_update(step)
@@ -138,84 +134,87 @@ class Automator:
 
         try:
             if not step.sub_steps:
-                instr = step.instruction
-
-                if instr.startswith("FIND:"):
-                    query = instr.replace("FIND:", "").strip()
-                    success = await self._execute_find(session, step, query)
-
-                elif instr.startswith("DO:"):
-                    action_cmd = instr.replace("DO:", "").strip()
-                    success = await self._execute_do(session, step, action_cmd)
-
-                elif instr.startswith("VERIFY:"):
-                    query = instr.replace("VERIFY:", "").strip()
-                    success = await self._execute_verify(session, step, query)
-
-                else:
-                    # Legacy path for non-decomposed steps
-                    success = await self._execute_legacy(session, step)
-
+                success = await self._execute_atomic_step(session, step)
                 if step.status == StepStatus.FAILED:
                     success = False
-
             else:
-                # Container step — run sub-steps recursively
-                sub_failed = False
-                for sub_step in step.sub_steps:
-                    if sub_failed:
-                        await self._skip_step_recursive(sub_step, on_step_update)
-                        continue
-
-                    if not await self._run_step_recursive(session, sub_step, on_step_update):
-                        sub_failed = True
-
-                if sub_failed:
-                    step.status = StepStatus.FAILED
-                    for sub_step in step.sub_steps:
-                        if sub_step.status == StepStatus.FAILED:
-                            step.failure_type = sub_step.failure_type
-                            step.failure_reason = sub_step.failure_reason
-                            break
-                    success = False
-                else:
-                    step.status = StepStatus.PASSED
-
-        except UserFacingException as exc:
-            # Report specific user-facing error message
-            self._logger.log_debug(session.id, f"User-facing error: {exc.user_message}")
-            if exc.internal_detail:
-                self._logger.log_debug(session.id, f"Detail: {exc.internal_detail}")
-
-            step.status = StepStatus.FAILED
-            # Try to map exception type to FailureType if possible
-            if isinstance(exc, ElementNotFoundError):
-                step.failure_type = FailureType.PERCEPTION_MISMATCH
-            elif isinstance(exc, ActionExecutionError):
-                step.failure_type = FailureType.ACTION_ERROR
-            elif isinstance(exc, VerificationError):
-                step.failure_type = FailureType.TIMEOUT
-            else:
-                step.failure_type = FailureType.SYSTEM_ERROR
-
-            step.failure_reason = exc.user_message
-            success = False
-        except Exception as exc:
-            self._logger.log_exception(step.id, exc)
-            step.status = StepStatus.FAILED
-            step.failure_type = FailureType.SYSTEM_ERROR
-            step.failure_reason = "An unexpected error occurred during step execution."
-            step.error = str(exc)
-            success = False
+                success = await self._run_container_step(session, step, on_step_update)
+        except (ActionExecutionError, UserFacingException) as exc:
+            success = self._handle_user_facing_exception(step, exc)
+        except (RuntimeError, ValueError) as exc:
+            success = self._handle_system_exception(step, exc)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            success = self._handle_system_exception(step, exc)
         finally:
             step.end_time = datetime.now()
-            self._logger.log_step(
-                step.id, instr.split(":")[0] if ":" in step.instruction else "STEP", step.status, step.failure_reason
-            )
+            instr_prefix = step.instruction.split(":")[0] if ":" in step.instruction else "STEP"
+            self._logger.log_step(step.id, instr_prefix, step.status, step.failure_reason)
             if on_step_update:
                 await on_step_update(step)
 
         return success
+
+    async def _execute_atomic_step(self, session: TestSession, step: TestStep) -> bool:
+        """Executes a single atomic step (FIND, DO, VERIFY, or legacy)."""
+        instr = step.instruction
+        if instr.startswith("FIND:"):
+            return await self._execute_find(session, step, instr.replace("FIND:", "").strip())
+        if instr.startswith("DO:"):
+            return await self._execute_do(session, step, instr.replace("DO:", "").strip())
+        if instr.startswith("VERIFY:"):
+            return await self._execute_verify(session, step, instr.replace("VERIFY:", "").strip())
+        return await self._execute_legacy(session, step)
+
+    async def _run_container_step(self, session: TestSession, step: TestStep, on_step_update: Optional[Any]) -> bool:
+        """Executes a step containing sub-steps."""
+        sub_failed = False
+        for sub_step in step.sub_steps:
+            if sub_failed:
+                await self._skip_step_recursive(sub_step, on_step_update)
+                continue
+
+            if not await self._run_step_recursive(session, sub_step, on_step_update):
+                sub_failed = True
+
+        if sub_failed:
+            step.status = StepStatus.FAILED
+            for sub_step in step.sub_steps:
+                if sub_step.status == StepStatus.FAILED:
+                    step.failure_type = sub_step.failure_type
+                    step.failure_reason = sub_step.failure_reason
+                    break
+            return False
+
+        step.status = StepStatus.PASSED
+        return True
+
+    def _handle_user_facing_exception(self, step: TestStep, exc: UserFacingException) -> bool:
+        """Handles expected user-facing exceptions with proper mapping to FailureType."""
+        self._logger.log_debug(step.id, f"User-facing error: {exc.user_message}")
+        if exc.internal_detail:
+            self._logger.log_debug(step.id, f"Detail: {exc.internal_detail}")
+
+        step.status = StepStatus.FAILED
+        if isinstance(exc, ElementNotFoundError):
+            step.failure_type = FailureType.PERCEPTION_MISMATCH
+        elif isinstance(exc, ActionExecutionError):
+            step.failure_type = FailureType.ACTION_ERROR
+        elif isinstance(exc, VerificationError):
+            step.failure_type = FailureType.TIMEOUT
+        else:
+            step.failure_type = FailureType.SYSTEM_ERROR
+
+        step.failure_reason = exc.user_message
+        return False
+
+    def _handle_system_exception(self, step: TestStep, exc: Exception) -> bool:
+        """Handles unexpected system exceptions."""
+        self._logger.log_exception(step.id, exc)
+        step.status = StepStatus.FAILED
+        step.failure_type = FailureType.SYSTEM_ERROR
+        step.failure_reason = "An unexpected error occurred during step execution."
+        step.error = str(exc)
+        return False
 
     # ------------------------------------------------------------------
     # Atomic step executors
@@ -278,21 +277,14 @@ class Automator:
     async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
         """Handles a DO: sub-step — resolves coords and fires the interaction.
 
-        :param session: The test session.
-        :param step: The step to execute.
-        :param action_cmd: The action command.
-        :return: True if the step was executed successfully, False otherwise.
+        :param session: The current TestSession context.
+        :param step: The DO step being executed.
+        :param action_cmd: The raw command string (e.g. "click 'Login'").
+        :return: True if the action was successfully performed.
         """
         parts = action_cmd.split(" ", 1)
         action = parts[0].lower()
-        payload = parts[1] if len(parts) > 1 else ""
-
-        # Resolve placeholders in payload
-        if "{" in payload and "}" in payload:
-            for art_name, art_data in session.artifacts.items():
-                placeholder = f"{{{art_name}}}"
-                if placeholder in payload:
-                    payload = payload.replace(placeholder, str(art_data["value"]))
+        payload = self._resolve_payload(parts[1] if len(parts) > 1 else "", session)
 
         target = session.metadata.get("target")
         if not target:
@@ -300,19 +292,9 @@ class Automator:
             step.failure_reason = "No target element found. FIND step must precede DO step."
             return False
 
-        # Handle specialized artifact actions
         if target.get("type") == "artifact":
-            if action == "drag":
-                session.metadata["drag_source"] = target
-                step.status = StepStatus.PASSED
-                return True
-            step.status = StepStatus.FAILED
-            step.failure_reason = (
-                f"Action '{action}' is not supported directly on an artifact. Did you mean to 'drag' it?"
-            )
-            return False
+            return await self._handle_artifact_action(session, step, action, target)
 
-        # Specific handling for drop if the source was an artifact
         drag_source = session.metadata.get("drag_source")
         if action == "drop" and drag_source and drag_source.get("type") == "artifact":
             success = await self._execute_artifact_drop(session, step, drag_source, target)
@@ -320,27 +302,70 @@ class Automator:
                 session.metadata.pop("drag_source", None)
             return success
 
+        # Resolve coordinates from perception data
         last_perc = session.metadata.get("last_perception", {})
         viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
-        px, py, pw, ph = _resolve_coords(target, viewport)
+        rect = _resolve_coords(target, viewport)  # [x, y, w, h]
 
-        # Capture adaptive-crop action snapshot
-        test_slug = _test_slug(session)
-        action_path = f".vizQA/{test_slug}_{step.id}_{action}.jpg"
-        vw = viewport.get("width", 1280)
-        vh = viewport.get("height", 720)
+        await self._capture_action_screenshot(session, step, action, rect, viewport)
+        await self._execute_interaction(action, rect[0] + rect[2] / 2, rect[1] + rect[3] / 2, payload)
 
-        if pw > 0 and ph > 0:
-            px_pad = pw * 0.15
-            py_pad = ph * 0.15
-            cx = max(0, px - px_pad)
-            cy = max(0, py - py_pad)
-            cw = min(vw - cx, pw + 2 * px_pad)
-            ch = min(vh - cy, ph + 2 * py_pad)
+        step.status = StepStatus.PASSED
+        return True
+
+    def _resolve_payload(self, payload: str, session: TestSession) -> str:
+        """Resolves placeholders in the payload string."""
+        if "{" in payload and "}" in payload:
+            for art_name, art_data in session.artifacts.items():
+                placeholder = f"{{{art_name}}}"
+                if placeholder in payload:
+                    payload = payload.replace(placeholder, str(art_data["value"]))
+        return payload
+
+    async def _handle_artifact_action(
+        self, _session: TestSession, step: TestStep, action: str, target: Dict[str, Any]
+    ) -> bool:
+        """Handles actions where the target is an artifact."""
+        if action == "drag":
+            _session.metadata["drag_source"] = target
+            step.status = StepStatus.PASSED
+            return True
+        step.status = StepStatus.FAILED
+        step.failure_reason = f"Action '{action}' is not supported directly on an artifact. Did you mean to 'drag' it?"
+        return False
+
+    # pylint: disable=too-many-arguments, too-many-positional-arguments, too-many-locals
+    async def _capture_action_screenshot(
+        self,
+        session: TestSession,
+        step: TestStep,
+        action: str,
+        rect: Tuple[float, float, float, float],
+        viewport: Dict[str, Any],
+    ):
+        """Captures a screenshot at the point of action for debugging.
+
+        :param session: current TestSession.
+        :param step: active TestStep.
+        :param action: keyword for the action being performed.
+        :param rect: [x, y, width, height] of the target.
+        :param viewport: viewport dimensions dictionary.
+        """
+        action_path = f".vizQA/{_test_slug(session)}_{step.id}_{action}.jpg"
+        vw, vh = viewport.get("width", 1280), viewport.get("height", 720)
+
+        # Only clip if we have a valid bounding box
+        if rect[2] > 0 and rect[3] > 0:
+            pad_x, pad_y = rect[2] * 0.15, rect[3] * 0.15
+            cx, cy = max(0, rect[0] - pad_x), max(0, rect[1] - pad_y)
+            clip = {
+                "x": cx,
+                "y": cy,
+                "width": min(vw - cx, rect[2] + 2 * pad_x),
+                "height": min(vh - cy, rect[3] + 2 * pad_y),
+            }
             try:
-                await self.page.screenshot(
-                    path=action_path, type="jpeg", clip={"x": cx, "y": cy, "width": cw, "height": ch}
-                )
+                await self.page.screenshot(path=action_path, type="jpeg", clip=clip)
                 step.action_screenshot = action_path
             except Exception as e:  # pylint: disable=broad-exception-caught
                 # Fallback to full page screenshot if clipping fails
@@ -348,13 +373,9 @@ class Automator:
                 await self.page.screenshot(path=action_path, type="jpeg")
                 step.action_screenshot = action_path
         else:
-            # No target, but we still want a screenshot of where we thought we'd act
+            # Full page screenshot fallback relative to current viewport
             await self.page.screenshot(path=action_path, type="jpeg")
             step.action_screenshot = action_path
-
-        await self._execute_interaction(action, px + pw / 2, py + ph / 2, payload)
-        step.status = StepStatus.PASSED
-        return True
 
     async def _execute_artifact_drop(
         self, session: TestSession, step: TestStep, source: Dict[str, Any], target: Dict[str, Any]
@@ -370,6 +391,11 @@ class Automator:
         art_data = source["value"]
         art_type = art_data.get("type")
 
+        if art_type != "file":
+            step.status = StepStatus.FAILED
+            step.failure_reason = f"Drop action not yet implemented for artifact type: {art_type}"
+            return False
+
         last_perc = session.metadata.get("last_perception", {})
         viewport = last_perc.get("viewport", {"width": 1280, "height": 720})
         px, py, pw, ph = _resolve_coords(target, viewport)
@@ -378,144 +404,112 @@ class Automator:
         self._logger.log_debug(
             step.id, f"Artifact drop target: {target.get('text') or target.get('label')} at ({cx}, {cy})"
         )
+        return await self._perform_file_upload(session, step, art_data["value"])
 
-        if art_type == "file":
-            file_path = art_data["value"]
-            self._logger.log_debug(step.id, f"Uploading file artifact: {file_path}")
+    async def _perform_file_upload(self, session: TestSession, step: TestStep, file_path: str) -> bool:
+        """Helper to perform Playwright file upload."""
+        self._logger.log_debug(step.id, f"Uploading file artifact: {file_path}")
+        try:
+            input_selector = "input[type=file]"
+            count = await self.page.locator(input_selector).count()
+            if count == 0:
+                step.status = StepStatus.FAILED
+                step.failure_reason = "No file input element found on the page to receive the artifact."
+                return False
 
-            try:
-                input_selector = "input[type=file]"
+            await self.page.set_input_files(input_selector, file_path)
+            await self.page.evaluate(
+                """([sel, fname]) => {
+                const el = document.querySelector(sel);
+                if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+            }""",
+                [input_selector, file_path],
+            )
 
-                # Check if there are any file inputs
-                count = await self.page.locator(input_selector).count()
-                self._logger.log_debug(step.id, f"Found {count} file inputs on page")
+            step.status = StepStatus.PASSED
+            return True
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning(session.id, f"File upload failed: {e}")
+            raise ArtifactError(f"Failed to upload file artifact for '{file_path}'", internal_detail=str(e)) from e
 
-                if count == 0:
-                    step.status = StepStatus.FAILED
-                    step.failure_reason = "No file input element found on the page to receive the artifact."
-                    return False
-
-                # Use Playwright's set_input_files
-                await self.page.set_input_files(input_selector, file_path)
-                self._logger.log_debug(step.id, f"set_input_files called for {file_path}")
-
-                # Trigger a change event if needed
-                await self.page.evaluate(
-                    """([sel, fname]) => {
-                    const el = document.querySelector(sel);
-                    if (el) {
-                        console.log("Triggering change for", fname);
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }""",
-                    [input_selector, file_path],
-                )
-
-                step.status = StepStatus.PASSED
-                return True
-            except Exception as e:
-                self._logger.log_warning(session.id, f"File upload failed: {e}")
-                raise ArtifactError(
-                    f"Failed to upload file artifact for '{art_data['value']}'", internal_detail=str(e)
-                ) from e
-
-        # Handle other artifact types (content, string) as drops?
-        # Maybe just type them?
-
-        step.status = StepStatus.FAILED
-        step.failure_reason = f"Drop action not yet implemented for artifact type: {art_type}"
-        return False
-
-    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 0.2) -> bool:
-        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling.
-
-        :param session: The test session.
-        :param step: The step to execute.
-        :param query: The query to execute.
-        :param timeout: The timeout to wait for the verification.
-        :return: True if the step was executed successfully, False otherwise.
-        """
+    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 15) -> bool:
+        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 
         # Parse intent once at the beginning
         intent = self.parser.parse_verify_intent(query)
-        self._logger.log_debug(step.id, f"verify intent={intent}")
-        perception_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
-        self._logger.log_debug(step.id, f"perception_query={perception_query}")
+        self._logger.log_debug(step.id, f"Parsed intent: {intent}")
+        perc_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
             path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
             await self.page.screenshot(path=path, type="jpeg")
             step.screenshot_after = path
 
-            perception = await self.client.perceive(path, query=perception_query)
+            perception = await self.client.perceive(path, query=perc_query)
             step.perception_result = perception
-            self._logger.log_debug(step.id, f"perception_result={perception}")
-            all_elements = perception.get("elements", [])
 
-            match_found = False
-            reasoning = ""
-            if intent.get("negated"):
-                # Delegated negation path — uses history_metadata for match
-                match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
-                if not match_found:  # if the negation is not met
-                    reasoning = "Negation failure: Element remains in the view"
-            else:
-                filtered = self.parser.filter_elements_by_intent(intent, all_elements)
-                self._logger.log_debug(step.id, f"filtered by intent={filtered}")
-
-                # Success criteria:
-                # 1. Intent markers (keyword/color/position) matched in filtered list
-                # 2. Or high-confidence top_match from the API
-                if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
-                    match_found = True
-                    self._logger.log_debug(step.id, "match found from keyword/color/position")
-                elif (
-                    perception.get("elements")
-                    and not intent.get("keyword")
-                    and not intent.get("color")
-                    and not intent.get("position")
-                ):
-                    match_found = True
-                    self._logger.log_debug(step.id, "match found from elements")
-                elif not intent.get("keyword") and not intent.get("color") and not intent.get("position"):
-                    # Only match if we have at least SOME high-confidence elements detected
-                    if all_elements:
-                        match_found = True
-                        self._logger.log_debug(step.id, "found generic match from elements")
-
+            match_found, reasoning = self._check_verification_match(session, intent, perception)
             if match_found:
-                # Update perception history for subsequent steps/negations
-                self._logger.log_debug(step.id, f"match_found={match_found}")
-                if not intent.get("negated"):
-                    session.metadata["last_perception"] = perception
-
-                    # Update history if not already set (maintains "first" appearance)
-                    subj = (intent.get("subject") or intent.get("keyword") or query).lower().strip()
-                    norm_subj = self.parser.normalize_subject(subj)
-                    history = session.metadata.setdefault("history", {})
-
-                    # If we matched something specific, update target
-                    matches = self.parser.filter_elements_by_intent(intent, all_elements)
-                    if matches:
-                        session.metadata["target"] = matches[0]
-                        if norm_subj not in history:
-                            history[norm_subj] = {"target": matches[0], "elements": all_elements}
-                            self._logger.log_debug(step.id, f"identified target for {subj}: {matches[0]}")
-                else:
-                    reasoning = "Negation failure: Element remains in the view"
-
                 step.status = StepStatus.PASSED
                 return True
+
             await asyncio.sleep(1.0)
 
         step.status = StepStatus.FAILED
         wait_time = (datetime.now() - start_wait).total_seconds()
-        if not reasoning:
-            reasoning = f"Verification failed after {wait_time:.1f}s"
+        reasoning = reasoning or f"Verification failed after {wait_time:.1f}s"
         step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
         return False
+
+    def _check_verification_match(
+        self, session: TestSession, intent: Dict[str, Any], perception: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Checks if the current perception matches the verification intent."""
+        all_elements = perception.get("elements", [])
+        match_found = False
+        reasoning = ""
+
+        if intent.get("negated"):
+            match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
+            if not match_found:
+                reasoning = "Negation failure: Element remains in the view"
+        else:
+            match_found = self._is_positive_match(intent, all_elements, perception)
+
+        if match_found and not intent.get("negated"):
+            session.metadata["last_perception"] = perception
+            self._update_historical_target(session, intent, all_elements)
+
+        return match_found, reasoning
+
+    def _is_positive_match(
+        self, intent: Dict[str, Any], all_elements: List[Dict[str, Any]], perception: Dict[str, Any]
+    ) -> bool:
+        """Determines if a positive (non-negated) verification is successful."""
+        filtered = self.parser.filter_elements_by_intent(intent, all_elements)
+        if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
+            return True
+        if perception.get("elements") and not any(intent.get(k) for k in ["keyword", "color", "position"]):
+            return True
+        return False
+
+    def _update_historical_target(
+        self, session: TestSession, intent: Dict[str, Any], all_elements: List[Dict[str, Any]]
+    ):
+        """Updates the session history with the matched target."""
+        subj = (intent.get("subject") or intent.get("keyword") or "").lower().strip()
+        if not subj:
+            return
+
+        norm_subj = self.parser.normalize_subject(subj)
+        history = session.metadata.setdefault("history", {})
+        matches = self.parser.filter_elements_by_intent(intent, all_elements)
+        if matches:
+            session.metadata["target"] = matches[0]
+            if norm_subj not in history:
+                history[norm_subj] = {"target": matches[0], "elements": all_elements}
 
     async def _execute_legacy(self, session: TestSession, step: TestStep) -> bool:
         """Legacy execution path for non-decomposed steps.

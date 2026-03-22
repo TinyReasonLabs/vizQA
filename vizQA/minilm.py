@@ -3,6 +3,7 @@ ONNX inference module for MiniLM model.
 """
 
 import json
+import math
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,7 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
+from vizQA.logger import get_logger
 from vizQA.parser import ParserVocabulary
 
 
@@ -36,29 +38,46 @@ class MiniLM:
         "bottom-right",
     ]
     _NEGATION_ANCHORS = [
-        "the element should disappear",
-        "the element is gone",
-        "the element is no longer present",
-        "the element vanished",
-        "the element is hidden",
-        "the element was removed",
-        "the element is absent",
-        "the element is not visible",
-        "the element is done",
-        "the spinner is done",
-        "the loading is finished",
-        "the modal is closed",
+        "element is not present",
+        "element is no longer visible",
+        "element has disappeared",
+        "element was removed",
+        "element is absent",
+        "element is hidden from view",
+        "element is no longer displayed",
+        "element has vanished",
+        "element is gone from the page",
+        "element is not showing anymore",
+        "element should be done",
+        # state transitions
+        "element disappears",
+        "element vanishes",
+        "element gets removed",
+        "element closes",
+        "element is done",
+        "element is out of view",
+        "element is not in view",
+        "element is invisible",
+        "element is not visible",
     ]
+
     _POSITIVE_ANCHORS = [
-        "the element should appear",
-        "the element is visible",
-        "the element is present",
-        "the element shows up",
-        "the element is active",
-        "the element exists",
-        "the element is displayed",
-        "the element is running",
-        "the button appeared",
+        "element is present",
+        "element is visible",
+        "element is displayed",
+        "element appears on the page",
+        "element becomes visible",
+        "element is shown",
+        "element exists on the screen",
+        "element is active and visible",
+        "element is currently displayed",
+        # state transitions
+        "element appears",
+        "element shows up",
+        "element becomes visible",
+        "element opens",
+        "element comes into view",
+        "element is in view",
     ]
 
     _ACTION_ANCHOR_GROUPS = {
@@ -94,6 +113,7 @@ class MiniLM:
     _KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
 
     def __init__(self, model_dir: str):
+        self._logger = get_logger()
         self.model_path = os.path.join(model_dir, "model.onnx")
         self.tokenizer_path = os.path.join(model_dir, "tokenizer.json")
 
@@ -173,6 +193,29 @@ class MiniLM:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
+    def best_anchor_similarity_centroid(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
+        """
+        Returns cosine similarity between vec and the centroid of anchor_matrix
+        (replaces max pooling with centroid-based similarity).
+        """
+        # Normalize input vector
+        norm_v = np.linalg.norm(vec)
+        if norm_v == 0:
+            return 0.0
+        vec_n = vec / norm_v
+
+        # Compute centroid of anchors
+        centroid = np.mean(anchor_matrix, axis=0)
+
+        # Normalize centroid
+        norm_c = np.linalg.norm(centroid)
+        if norm_c == 0:
+            return 0.0
+        centroid_n = centroid / norm_c
+
+        # Cosine similarity
+        return float(np.dot(vec_n, centroid_n))
+
     def best_anchor_similarity(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """Returns the highest cosine similarity between vec and any row in anchor_matrix."""
         norms_a = np.linalg.norm(anchor_matrix, axis=-1, keepdims=True)
@@ -213,7 +256,7 @@ class MiniLM:
             return best_group
         return None
 
-    def is_negation(self, text: str, threshold: float = 0.45) -> bool:
+    def is_negation(self, text: str, threshold: float = 0.4, logit_threshold: float = 0.7, delta: float = 0.02) -> bool:
         """
         Returns True if *text* semantically resembles a negation intent.
 
@@ -223,8 +266,29 @@ class MiniLM:
         vec = self.encode(text)
         sim_neg = self.best_anchor_similarity(vec, self._intent_anchor_groups["negation"])
         sim_pos = self.best_anchor_similarity(vec, self._intent_anchor_groups["positive"])
+        self._logger.log_debug("is_negation", f"text={text!r}, sim_neg={sim_neg:.3f}, sim_pos={sim_pos:.3f}")
+        # print(f"text={text!r}, sim_neg={sim_neg:.3f}, sim_pos={sim_pos:.3f}")
+        # print(f"threshold={threshold:.3f}")
+        self._logger.log_debug("is_negation", f"threshold={threshold:.3f}")
 
-        return sim_neg >= threshold and sim_neg > sim_pos
+        # logit-style
+        score = sim_neg - sim_pos
+        prob = 1 / (1 + math.exp(-score * 5))  # k ~ 5–10
+        # print(f"prob={prob:.3f}")
+        if prob > logit_threshold and sim_neg >= 0.25:
+            return True
+        # return prob > threshold
+
+        # margin-based
+        margin = sim_neg - sim_pos
+        # print(f"margin={margin:.3f}")
+        if margin >= delta * 2.0 and sim_neg >= 0.25:
+            return True
+        return prob > logit_threshold and sim_neg >= threshold
+        return prob > logit_threshold and margin >= delta and sim_neg >= threshold
+
+        # absolute threshold
+        # return sim_neg >= threshold and sim_neg > sim_pos
 
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
@@ -713,6 +777,7 @@ class MiniLM:
 
         return False, None
 
+    # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     def _semantic_dissection(self, prompt: str) -> List[Dict[str, str]]:
         """Modularized decomposition of a UI instruction into FIND/DO/VERIFY steps."""
         protected, quotes = self._sd_protect(prompt)

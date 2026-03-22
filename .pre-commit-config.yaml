@@ -29,6 +29,7 @@ repos:
         args:
           [
             "--recursive=y",
+            "--good-names=vizQA",
             "--load-plugins=pylint.extensions.docparams", # Optional check for docstrings
             "--default-docstring-type=sphinx",
             "--max-line-length=120",
