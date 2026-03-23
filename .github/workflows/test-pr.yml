@@ -43,7 +43,7 @@ jobs:
         if: steps.cache-weights.outputs.cache-hit != 'true'
         run: |
           poetry run pip install -U "huggingface_hub[cli]"
-          poetry run huggingface-cli download alieissa/minilm-ui \
+          poetry run hf download alieissa/minilm-ui \
             --revision v1.0 \
             --local-dir ./vizQA/weights \
             --local-dir-use-symlinks False \
