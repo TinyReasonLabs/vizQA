@@ -9,10 +9,6 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 
-packages = [
-    { include = "vizQA", from = "." }
-]
-
 dependencies = [
     "playwright (>=1.58.0,<2.0.0)",
     "click (>=8.1.7)",
@@ -37,6 +33,11 @@ testpaths = ["vizQA/tests"]
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+packages = [
+    { include = "vizQA", from = "." }
+]
 
 [dependency-groups]
 dev = [
