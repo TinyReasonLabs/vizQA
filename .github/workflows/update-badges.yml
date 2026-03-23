@@ -28,8 +28,10 @@ jobs:
 
       - name: Run Tests & Coverage
         run: |
-          poetry run pytest --cov=vizQA --cov-report=term-missing
-          poetry run coverage json -o coverage.json
+          # 1. Ensure we generate the JSON report directly from pytest
+          # 2. Use --cov-report=json:coverage.json to specify the filename explicitly
+          poetry run pytest --cov=vizQA --cov-report=json:coverage.json --cov-report=term
+        # Keep continue-on-error if you want the badge to update even on test failure
         continue-on-error: true
 
       - name: Calculate Coverage and Colors
