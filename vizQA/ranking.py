@@ -220,17 +220,17 @@ class RankingEngine:
         # 1. Prepare candidates
         # We preserve the original values for display/metadata but use a cleaned version for matching
         labels = []
-        for el in elements:
+        for elem in elements:
             # Combine all text-like fields
             parts = [
-                str(el.get("placeholder") or ""),
-                str(el.get("text") or ""),
-                str(el.get("label") or ""),
-                str(el.get("name") or ""),
+                str(elem.get("placeholder") or ""),
+                str(elem.get("text") or ""),
+                str(elem.get("label") or ""),
+                str(elem.get("name") or ""),
             ]
             labels.append(" ".join(filter(None, parts)))
 
-        metadata_strs = [MetadataGenerator.generate(el) for el in elements]
+        metadata_strs = [MetadataGenerator.generate(elem) for elem in elements]
 
         # 2. Phase 1: Retrieval (Dense + Sparse)
         scores = np.zeros(len(elements))

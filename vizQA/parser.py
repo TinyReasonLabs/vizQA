@@ -7,9 +7,9 @@ for verification queries.
 """
 
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
 
+from vizQA.config import CONFIG
 from vizQA.logger import get_logger
 from vizQA.ranking import RankingEngine
 
@@ -29,7 +29,7 @@ class SemanticNode(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-# pylint: disable=too-few-public-methods
+# pylint: disable=too-few-public-methods, duplicate-code
 class ParserVocabulary:
     """Central repository for UI grounding vocabulary."""
 
@@ -83,31 +83,16 @@ class ParserVocabulary:
     )
 
 
-@dataclass
-class ParserConfig:
-    """Configuration for SemanticParser thresholds and behavior."""
-
-    use_advanced_ranking: bool = False
-    intent_threshold: float = 0.6
-    action_threshold: float = 0.52
-    semantic_match_threshold: float = 0.70
-
-
 class SemanticParser:
     """
     Advanced Rule-Based Engine (AST Parser) for dissecting UI testing instructions.
     Optionally enhanced with MiniLM embeddings for robust intent classification.
     """
 
-    def __init__(self, minilm: Optional["MiniLM"] = None, config: Optional[ParserConfig] = None, **kwargs):
+    def __init__(self, minilm: Optional["MiniLM"] = None):
         """Initialise the parser."""
         self.minilm = minilm
-        self.config = config or ParserConfig(
-            use_advanced_ranking=kwargs.get("use_advanced_ranking", False),
-            intent_threshold=kwargs.get("intent_threshold", 0.6),
-            action_threshold=kwargs.get("action_threshold", 0.52),
-            semantic_match_threshold=kwargs.get("semantic_match_threshold", 0.70),
-        )
+        self.config = CONFIG
         self._ranking_engine = RankingEngine(minilm) if minilm else None
         self._logger = get_logger()
 

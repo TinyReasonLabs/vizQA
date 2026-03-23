@@ -22,7 +22,7 @@ from vizQA.exceptions import (
 from vizQA.logger import get_logger
 from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.minilm import MiniLM
-from vizQA.parser import ParserConfig, SemanticParser
+from vizQA.parser import SemanticParser
 
 
 # pylint: disable=too-many-instance-attributes
@@ -55,20 +55,7 @@ class Automator:
             self._logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        use_adv = os.environ.get("VIZQA_ADVANCED_RANKING", "1") == "1"
-        intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
-        action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.52"))
-        semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
-
-        self.parser = SemanticParser(
-            minilm=self.minilm,
-            config=ParserConfig(
-                use_advanced_ranking=use_adv,
-                intent_threshold=intent_threq,
-                action_threshold=action_threq,
-                semantic_match_threshold=semantic_threq,
-            ),
-        )
+        self.parser = SemanticParser(minilm=self.minilm)
 
     # ------------------------------------------------------------------
     # Lifecycle

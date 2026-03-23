@@ -152,7 +152,8 @@ class TestAdvancedRanking:
 
     def test_parser_configurability(self):
         # Without advanced ranking, should use baseline
-        parser_baseline = SemanticParser(use_advanced_ranking=False)
+        parser_baseline = SemanticParser()
+        parser_baseline.config.use_advanced_ranking = False
         # Should not have _ranking_score attached to filtered elements
         result = parser_baseline.filter_elements_by_intent(_intent(keyword="Submit"), ELEMENTS)
         assert "_ranking_score" not in result[0]
@@ -161,6 +162,7 @@ class TestAdvancedRanking:
         mock_minilm = MagicMock()
         mock_minilm.encode.return_value = np.zeros(384)
         mock_minilm.cosine_similarity.return_value = 0.5
-        parser_adv = SemanticParser(minilm=mock_minilm, use_advanced_ranking=True)
+        parser_adv = SemanticParser(minilm=mock_minilm)
+        parser_adv.config.use_advanced_ranking = True
         result_adv = parser_adv.filter_elements_by_intent(_intent(keyword="Submit"), ELEMENTS)
         assert "_ranking_score" in result_adv[0]

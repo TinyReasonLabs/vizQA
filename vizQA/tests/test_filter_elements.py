@@ -6,11 +6,14 @@ Covers: semantic baseline matching, non-destructive color/state stacking,
 and the substring fallback path (no MiniLM).
 """
 
+import os
 from unittest.mock import MagicMock
 
 import pytest
 
+from vizQA.minilm import MiniLM
 from vizQA.parser import SemanticParser
+from vizQA.planner import StepPlanner
 
 # ---------------------------------------------------------------------------
 # Mock elements (shared across test cases)
@@ -88,9 +91,21 @@ class TestSubstringFallback:
 class TestWithMockMiniLM:
     def _make_parser(self, match_indices):
         """Creates a SemanticParser with a MiniLM stub that returns *match_indices*."""
-        mock_model = MagicMock()
-        mock_model.semantic_match.return_value = match_indices
-        return SemanticParser(minilm=mock_model)
+        model_dir = os.path.join("vizQA", "weights", "minilm")
+        if not os.path.exists(model_dir):
+            print("Model not found, skipping...")
+            return
+
+        model = MiniLM(model_dir)
+        planner = StepPlanner()
+        # Support manual injection for testing if needed, though StepPlanner loads its own
+        planner.minilm = model
+        planner.parser.minilm = model
+
+        parser = SemanticParser(minilm=model)
+        # mock_model = MagicMock()
+        # mock_model.semantic_match.return_value = match_indices
+        return SemanticParser(minilm=model)
 
     def test_semantic_match_used(self):
         parser = self._make_parser([0, 2])  # Submit and Error

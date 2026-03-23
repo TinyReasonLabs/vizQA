@@ -2,6 +2,8 @@
 import os
 
 from vizQA.minilm import MiniLM
+from vizQA.parser import SemanticParser
+from vizQA.planner import StepPlanner
 
 
 def test_mangled_output():
@@ -9,9 +11,6 @@ def test_mangled_output():
     if not os.path.exists(model_dir):
         print("Model not found, skipping...")
         return
-
-    from vizQA.parser import SemanticParser
-    from vizQA.planner import StepPlanner
 
     model = MiniLM(model_dir)
     planner = StepPlanner()

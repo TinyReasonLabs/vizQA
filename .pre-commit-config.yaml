@@ -23,6 +23,9 @@ repos:
     rev: v4.0.5
     hooks:
       - id: pylint
+        entry: poetry run pylint
+        language: system
+        types: [python]
         args:
           [
             "--recursive=y",
