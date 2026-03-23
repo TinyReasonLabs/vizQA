@@ -1,0 +1,77 @@
+name: PR Test Comparison
+
+on:
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  compare-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install Dependencies
+        run: poetry install
+
+      - name: Run Tests (PR Branch)
+        run: |
+          poetry run pytest --json-report --json-report-file=head_results.json --cov=vizQA --cov-report=term-missing
+        continue-on-error: true
+
+      - name: Checkout Base Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: base_repo
+
+      - name: Run Tests (Base Branch)
+        run: |
+          cd base_repo
+          poetry install
+          poetry run pytest --json-report --json-report-file=../base_results.json
+        continue-on-error: true
+
+      - name: Compare Results
+        id: compare
+        run: |
+          python .github/scripts/compare_tests.py base_results.json head_results.json > test_diff.md
+          # capture exit code of compare_tests.py
+          EXIT_CODE=$?
+          echo "diff_content<<EOF" >> $GITHUB_OUTPUT
+          cat test_diff.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
+
+      - name: Post PR Comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('test_diff.md')) {
+              const diff = fs.readFileSync('test_diff.md', 'utf8');
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: diff
+              })
+            }
