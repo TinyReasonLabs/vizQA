@@ -23,6 +23,25 @@ jobs:
           curl -sSL https://install.python-poetry.org | python3 -
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      - name: Cache Model Weights
+        id: cache-weights
+        uses: actions/cache@v4
+        with:
+          path: ./vizQA/weights
+          # The key uses your release tag; if the tag changes, the cache misses and re-downloads
+          key: ${{ runner.os }}-hf-weights-v1.0
+
+      - name: Download Weights on Cache Miss
+        if: steps.cache-weights.outputs.cache-hit != 'true'
+        run: |
+          pip install -U "huggingface_hub[cli]"
+          huggingface-cli download alieissa/minilm-ui \
+            --revision v1.0 \
+            --local-dir ./vizQA/weights \
+            --local-dir-use-symlinks False
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
       - name: Set Version
         run: |
           poetry version ${{ github.event.inputs.version }}

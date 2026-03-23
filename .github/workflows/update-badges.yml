@@ -26,6 +26,25 @@ jobs:
       - name: Install Dependencies
         run: poetry install
 
+      - name: Cache Model Weights
+        id: cache-weights
+        uses: actions/cache@v4
+        with:
+          path: ./vizQA/weights
+          # The key uses your release tag; if the tag changes, the cache misses and re-downloads
+          key: ${{ runner.os }}-hf-weights-v1.0
+
+      - name: Download Weights on Cache Miss
+        if: steps.cache-weights.outputs.cache-hit != 'true'
+        run: |
+          pip install -U "huggingface_hub[cli]"
+          huggingface-cli download alieissa/minilm-ui \
+            --revision v1.0 \
+            --local-dir ./vizQA/weights \
+            --local-dir-use-symlinks False
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
       - name: Run Tests & Coverage
         run: |
           # 1. Ensure we generate the JSON report directly from pytest
