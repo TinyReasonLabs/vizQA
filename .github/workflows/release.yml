@@ -34,11 +34,12 @@ jobs:
       - name: Download Weights on Cache Miss
         if: steps.cache-weights.outputs.cache-hit != 'true'
         run: |
-          pip install -U "huggingface_hub[cli]"
-          hf repos download alieissa/minilm-ui \
+          python -m pip install -U "huggingface_hub[cli]"
+          python -m huggingface_hub download alieissa/minilm-ui \
             --revision v1.0 \
             --local-dir ./vizQA/weights \
             --local-dir-use-symlinks False
+            --token "$HF_TOKEN"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
