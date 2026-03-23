@@ -46,7 +46,6 @@ jobs:
           poetry run hf download alieissa/minilm-ui \
             --revision v1.0 \
             --local-dir ./vizQA/weights \
-            --local-dir-use-symlinks False \
             --token "$HF_TOKEN"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
