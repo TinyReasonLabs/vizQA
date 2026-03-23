@@ -19,18 +19,15 @@ repos:
       - id: isort
         args: ["--profile=black", "--line-length=120"]
 
-  - repo: local
+  - repo: https://github.com/pylint-dev/pylint
+    rev: v4.0.5
     hooks:
       - id: pylint
-        name: pylint
-        entry: pylint
-        language: system
-        types: [python]
         args:
           [
             "--recursive=y",
             "--good-names=vizQA",
-            "--load-plugins=pylint.extensions.docparams", # Optional check for docstrings
+            "--load-plugins=pylint.extensions.docparams",
             "--default-docstring-type=sphinx",
             "--max-line-length=120",
             "--ignore-patterns=test",
