@@ -35,10 +35,10 @@ jobs:
         if: steps.cache-weights.outputs.cache-hit != 'true'
         run: |
           python -m pip install -U "huggingface_hub[cli]"
-          python -m huggingface_hub.commands.huggingface_cli download alieissa/minilm-ui \
+          huggingface-cli download alieissa/minilm-ui \
             --revision v1.0 \
             --local-dir ./vizQA/weights \
-            --local-dir-use-symlinks False
+            --local-dir-use-symlinks False \
             --token "$HF_TOKEN"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
