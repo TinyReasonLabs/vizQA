@@ -37,7 +37,7 @@ jobs:
         run: |
           COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
           echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
-          
+
           # Determine color based on coverage
           if [ "$COVERAGE" -ge 90 ]; then
             COLOR="brightgreen"
@@ -58,7 +58,7 @@ jobs:
         run: |
           # Update Coverage Badge
           sed -i "s|\[!\[Code Coverage\](https://img.shields.io/badge/coverage-.*-.*.svg)\]()|[![Code Coverage](https://img.shields.io/badge/coverage-${{ env.COVERAGE }}%25-${{ env.COLOR }}.svg)]()|" README.md
-          
+
           # Update Build Status Badge (if tests passed)
           # We check if coverage.json exists to confirm tests ran
           if [ -f "coverage.json" ]; then

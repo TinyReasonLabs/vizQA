@@ -1,16 +1,19 @@
+# pylint: disable=all
 import json
-import sys
 import os
+import sys
+
 
 def load_results(filename):
     if not os.path.exists(filename):
         return {}
     try:
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             data = json.load(f)
-            return {test['nodeid']: test['outcome'] for test in data.get('tests', [])}
+            return {test["nodeid"]: test["outcome"] for test in data.get("tests", [])}
     except Exception:
         return {}
+
 
 def main():
     if len(sys.argv) < 3:
@@ -25,7 +28,7 @@ def main():
 
     all_tests = set(base_results.keys()) | set(head_results.keys())
     diffs = []
-    
+
     new_regressions = []
     base_failures = [t for t, o in base_results.items() if o in ["failed", "error"]]
     head_failures = [t for t, o in head_results.items() if o in ["failed", "error"]]
@@ -41,7 +44,7 @@ def main():
 
     # Print Markdown Summary
     print("### 🧪 Test Comparison Report")
-    
+
     if new_regressions:
         print(f"#### ❌ ATTENTION: {len(new_regressions)} New Regression(s) Detected!")
         for test in new_regressions:
@@ -66,11 +69,14 @@ def main():
         print("\n❌ CI Failure: New regressions detected.")
         should_fail = True
     elif len(head_failures) > len(base_failures):
-        print(f"\n❌ CI Failure: Total number of failing tests increased ({len(base_failures)} -> {len(head_failures)}).")
+        print(
+            f"\n❌ CI Failure: Total number of failing tests increased ({len(base_failures)} -> {len(head_failures)})."
+        )
         should_fail = True
 
     if should_fail:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
