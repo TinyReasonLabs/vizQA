@@ -43,7 +43,7 @@ jobs:
         if: steps.cache-weights.outputs.cache-hit != 'true'
         run: |
           python -m pip install -U "huggingface_hub[cli]"
-          python -m huggingface_hub download alieissa/minilm-ui \
+          python -m huggingface_hub.commands.huggingface_cli download alieissa/minilm-ui \
             --revision v1.0 \
             --local-dir ./vizQA/weights \
             --local-dir-use-symlinks False
