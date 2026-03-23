@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 
 packages = [
-    { include = "vizQA" }
+    { include = "vizQA", from = "." }
 ]
 
 dependencies = [
