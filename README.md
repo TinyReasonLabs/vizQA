@@ -21,7 +21,7 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **Natural Language Steps**: Define your test flow in simple YAML instructions.
 - **Advanced Interactions**: Supports `click`, `hover`, `type`, `scroll`, and even `drag and drop`.
@@ -86,7 +86,7 @@ vizqa tests/
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 vizQA supports global and per-test configuration, including custom HTTP headers for authentication or specialized testing.
 
@@ -122,7 +122,7 @@ steps:
 
 ---
 
-## 🛠️ Methodology
+## Methodology
 
 vizQA follows a three-stage execution cycle for every step:
 
@@ -132,10 +132,10 @@ vizQA follows a three-stage execution cycle for every step:
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for details on setting up the environment and submitting PRs.
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
