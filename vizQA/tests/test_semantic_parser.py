@@ -135,8 +135,10 @@ TEST_CASES = [
         [("FIND", "first name"), ("DO", "type john"), ("FIND", "last name"), ("DO", "type doe")],
     ),
     # 46. Wait or sleep instructions
-    ("Wait for 5 seconds", [("FIND", "for 5 seconds"), ("DO", "wait for 5 seconds")]),
+    ("Wait for 5 seconds", [("DO", "wait for 5 seconds")]),
     ("Pause until the loader disappears", [("VERIFY", "loader disappears")]),
+    ("Wait 500ms before continuing", [("DO", "wait 500ms before continuing")]),
+    ("Sleep for 2 minutes", [("DO", "wait for 2 minutes")]),
     # 48. Double quotes and escaped chars
     ('Type "user\'s name" in the field', [("FIND", "field"), ("DO", 'type "user\'s name"')]),
     # 49. Ambiguous verbs used as nouns
