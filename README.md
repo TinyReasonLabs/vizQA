@@ -7,6 +7,10 @@
 
 **vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA allows you to write tests in natural language without brittle CSS selectors or XPath—all running efficiently on **CPU** without the need for LLMs.
 
+> [!IMPORTANT]
+> **vizQA is currently in its early alpha stage.** We are actively developing and refining the framework. Feedback, bug reports, and contributions are highly encouraged and welcome! Please review our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+
 ---
 
 ## 👁️ Why Vision-Driven?

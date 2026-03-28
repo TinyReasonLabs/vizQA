@@ -33,7 +33,7 @@ vizQA uses [Poetry](https://python-poetry.org/) for dependency management and pa
 
 ## 🧪 Running Tests
 
-We use `pytest` for our test suite.
+We use `pytest` for our test suite. **All pull requests must include new tests for added functionality or bug fixes.**
 
 ```bash
 # Run all tests
@@ -43,42 +43,44 @@ poetry run pytest
 poetry run pytest --cov=vizQA
 ```
 
-Before submitting a pull request, please ensure all tests are passing and that you've added tests for any new functionality.
-
 ---
 
-## 🎨 Code Style
+## ⚖️ Code Style & Architecture
 
-We follow PEP 8 and use several tools through **pre-commit** hooks to maintain code quality:
+### Architectural Principles
+To maintain a high-quality, lightweight codebase, we strictly adhere to a **Separation of Concerns**. When contributing new code, ensure that:
+- **Perception** logic (visual analysis) is strictly isolated from **Planning** (semantic understanding).
+- **Execution** (Playwright interaction) only depends on the output of the Planner.
+- Core utilities remain browser-agnostic where possible.
 
-- **Black**: For consistent code formatting (120 character line length).
+### Style Guidelines
+We follow PEP 8 and use several tools through **pre-commit** hooks:
+- **Black**: For consistent code formatting (120 code length).
 - **Isort**: For sorting imports.
 - **Pylint**: For comprehensive linting and code analysis.
-- **Pre-commit Hooks**: Includes checks for trailing whitespace, end-of-file, and large files.
 
-### Installing Pre-commit Hooks
-
-To ensure your code matches our style guidelines, please install the pre-commit hooks:
-
+To install pre-commit hooks:
 ```bash
 poetry run pre-commit install
 ```
 
-Once installed, these tools will run automatically every time you commit. You can also run them manually on all files:
+## 🤖 Automated Checks
 
-```bash
-poetry run pre-commit run --all-files
-```
+Every Pull Request triggers automated GitHub Actions to ensure stability and quality:
+- **Pytest**: Full test suite execution on multiple environments.
+- **Linting**: Automated Black, Isort, and Pylint checks.
+- **Snyk**: Security vulnerability scans on dependencies and code.
+- **Coverage**: Automated reporting on code coverage.
 
----
+**PRs cannot be merged until all checks are green.**
 
 ## 🚀 Submitting a Pull Request
 
 1.  Fork the repo and create your branch from `main`.
-2.  If you've added code that should be tested, add tests.
+2.  **Add tests for your changes.** PRs without tests will be requested to add them before review.
 3.  If you've changed APIs, update the documentation.
-4.  Ensure the test suite passes.
-5.  Make sure your code lints.
+4.  Ensure the test suite passes locally.
+5.  Check your code lints via `pre-commit run --all-files`.
 6.  Issue that pull request!
 
 ---
