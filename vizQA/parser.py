@@ -756,7 +756,7 @@ class SemanticParser:
                 val = val.replace(f"__quote_{i}__", q.lower())
             if "until" in val:
                 return self._parse_verify(re.sub(rf"^{verb}\s+until\s+", "", val)), "element", None
-            return [SemanticNode("FIND", "element"), SemanticNode("DO", val)], "element", verb
+            return [SemanticNode("DO", val)], "element", verb
         if atype == "find":
             return [], target, None
 

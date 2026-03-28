@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Code Coverage](https://img.shields.io/badge/coverage-65%25-orange.svg)]()
+[![Code Coverage](https://img.shields.io/badge/coverage-59%25-orange.svg)]()
 
 **vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA allows you to write tests in natural language without brittle CSS selectors or XPath—all running efficiently on **CPU** without the need for LLMs.
 
@@ -25,7 +25,7 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **Natural Language Steps**: Define your test flow in simple YAML instructions.
 - **Advanced Interactions**: Supports `click`, `hover`, `type`, `scroll`, and even `drag and drop`.
@@ -90,7 +90,7 @@ vizqa tests/
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 vizQA supports global and per-test configuration, including custom HTTP headers for authentication or specialized testing.
 
@@ -126,7 +126,7 @@ steps:
 
 ---
 
-## 🛠️ Methodology
+## Methodology
 
 vizQA follows a three-stage execution cycle for every step:
 
@@ -136,10 +136,10 @@ vizQA follows a three-stage execution cycle for every step:
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for details on setting up the environment and submitting PRs.
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
