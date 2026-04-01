@@ -49,7 +49,7 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 
 ```bash
 pip install vizqa
-playwright install chromium
+vizqa install
 ```
 
 ---

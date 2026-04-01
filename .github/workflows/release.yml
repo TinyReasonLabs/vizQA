@@ -29,14 +29,14 @@ jobs:
         with:
           path: ./vizQA/weights
           # The key uses your release tag; if the tag changes, the cache misses and re-downloads
-          key: ${{ runner.os }}-hf-weights-v1.0
+          key: ${{ runner.os }}-hf-weights-v${{ github.event.inputs.version }}
 
       - name: Download Weights on Cache Miss
         if: steps.cache-weights.outputs.cache-hit != 'true'
         run: |
           poetry run pip install -U "huggingface_hub[cli]"
           poetry run hf download alieissa/minilm-ui \
-            --revision v1.0 \
+            --revision v${{ github.event.inputs.version }} \
             --local-dir ./vizQA/weights \
             --token "$HF_TOKEN"
         env:
