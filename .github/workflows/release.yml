@@ -9,10 +9,12 @@ on:
         default: '0.1.1'
 
 jobs:
-  release:
+  # ── 1. Build ────────────────────────────────────────────────────────────────
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -28,7 +30,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ./vizQA/weights
-          # The key uses your release tag; if the tag changes, the cache misses and re-downloads
           key: ${{ runner.os }}-hf-weights-v${{ github.event.inputs.version }}
 
       - name: Download Weights on Cache Miss
@@ -43,13 +44,50 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
       - name: Set Version
-        run: |
-          poetry version ${{ github.event.inputs.version }}
+        run: poetry version ${{ github.event.inputs.version }}
 
       - name: Build Package
         run: poetry build
 
+      # Upload the dist/ folder so downstream jobs don't need to rebuild
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ── 2. Publish to TestPyPI (gate) ───────────────────────────────────────────
+  publish-test-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: test-pypi
+    permissions:
+      id-token: write  # Required for OIDC
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # ── 3. Publish to PyPI (only if TestPyPI succeeded) ─────────────────────────
+  publish-pypi:
+    needs: publish-test-pypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # Required for OIDC
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Publish to PyPI
-        env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
-        run: poetry publish
+        uses: pypa/gh-action-pypi-publish@release/v1
