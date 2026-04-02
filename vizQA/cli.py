@@ -403,6 +403,7 @@ class DefaultGroup(click.Group):
 
 
 @click.group(cls=DefaultGroup, default_command="run", invoke_without_command=True)
+@click.version_option()
 @click.pass_context
 def cli(ctx):
     """

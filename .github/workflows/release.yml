@@ -9,8 +9,32 @@ on:
         default: '0.1.1'
 
 jobs:
-  # ── 1. Build ────────────────────────────────────────────────────────────────
+  # ── 1. Validation ───────────────────────────────────────────────────────────
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Export requirements
+        run: poetry export --without-hashes --format=requirements.txt --output=requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit -r requirements.txt
+
+  # ── 2. Build ────────────────────────────────────────────────────────────────
   build:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,9 +80,34 @@ jobs:
           name: dist
           path: dist/
 
-  # ── 2. Publish to TestPyPI (gate) ───────────────────────────────────────────
-  publish-test-pypi:
+  # ── 3. Smoke Test ───────────────────────────────────────────────────────────
+  smoke-test:
     needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install built package
+        run: pip install dist/*.whl
+
+      - name: Verify CLI version
+        run: vizqa --version
+
+  # ── 4. Publish to TestPyPI (gate) ───────────────────────────────────────────
+  publish-test-pypi:
+    needs: smoke-test
     runs-on: ubuntu-latest
     environment: test-pypi
     permissions:
@@ -75,7 +124,7 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
 
-  # ── 3. Publish to PyPI (only if TestPyPI succeeded) ─────────────────────────
+  # ── 5. Publish to PyPI (only if TestPyPI succeeded) ─────────────────────────
   publish-pypi:
     needs: publish-test-pypi
     runs-on: ubuntu-latest
