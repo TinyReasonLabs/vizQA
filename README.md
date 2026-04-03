@@ -40,10 +40,18 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 
 - **Python 3.11+**
 - **Playwright**
-- **UI Perception API**: vizQA requires a perception backend. You can run the official perception engine as a local Docker container:
+- **UI Perception Backend**: vizQA requires a perception backend. You can run the official lightweight UI-Atlas docker image for cully local operation:
   ```bash
-  docker run -p 8000:8000 tinyreasonlabs/perception-api:latest
+  docker run -d -p 8228:8000 --name ui-atlas tinyreasonlabs/ui-atlas:latest
   ```
+  Learn more about [UI-Atlas on Dockerhub](https://hub.docker.com/r/tinyreasonlabs/ui-atlas)
+
+  vizQA connects to the backend using the `PERCEPTION_BACKEND` environment variable:
+  - Default: `localhost:8228`
+  - Example:
+    ```bash
+    export PERCEPTION_BACKEND=localhost:8228
+    ```
 
 ### Installation
 

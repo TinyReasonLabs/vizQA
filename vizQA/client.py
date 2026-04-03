@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from vizQA.config import PERCEPTION_BACKEND
 from vizQA.exceptions import PerceptionServiceError
 from vizQA.logger import get_logger
 
@@ -15,8 +16,8 @@ class PerceptionClient:
     A client for sending requests to the Vision Perception API.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url
+    def __init__(self, base_url: Optional[str] = None):
+        self.base_url = base_url or PERCEPTION_BACKEND
         self.session_id = None
         self._logger = get_logger()
 
