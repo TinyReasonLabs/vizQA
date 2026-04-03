@@ -34,7 +34,7 @@ from rich.progress import (
 console = Console()
 
 REPO_ID = "alieissa/minilm-ui"
-WEIGHTS_REL_PATH = Path("weights") / "minilm"
+WEIGHTS_REL_PATH = Path("weights")
 
 
 # ---------------------------------------------------------------------------
