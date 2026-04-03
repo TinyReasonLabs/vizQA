@@ -21,7 +21,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Poetry
-        run: pip install poetry
+        run: pip install poetry poetry-plugin-export
 
       - name: Export requirements
         run: poetry export --without-hashes --format=requirements.txt --output=requirements.txt
