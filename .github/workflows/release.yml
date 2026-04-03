@@ -107,7 +107,7 @@ jobs:
 
   # ── 4. Publish to PyPI ────────────────────────────────────────────────────────
   publish-pypi:
-    needs: publish-test-pypi
+    needs: smoke-test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
