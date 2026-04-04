@@ -40,17 +40,16 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 
 - **Python 3.11+**
 - **Playwright**
-- **UI Perception Backend**: vizQA requires a perception backend. You can run the official lightweight UI-Atlas docker image for cully local operation:
+- **UI Perception Backend**: vizQA requires a perception backend. You can run the official lightweight UI-Atlas docker image for fully local operation:
   ```bash
   docker run -d -p 8228:8000 --name ui-atlas tinyreasonlabs/ui-atlas:latest
   ```
   Learn more about [UI-Atlas on Dockerhub](https://hub.docker.com/r/tinyreasonlabs/ui-atlas)
 
-  vizQA connects to the backend using the `PERCEPTION_BACKEND` environment variable:
-  - Default: `localhost:8228`
-  - Example:
+  vizQA connects to the backend using the `PERCEPTION_BACKEND` environment variable (normalized to `http://…`; default `localhost:8228`, i.e. `http://localhost:8228`).
+  - Examples:
     ```bash
-    export PERCEPTION_BACKEND=localhost:8228
+    export PERCEPTION_BACKEND=localhost:8228   # bash / zsh
     ```
 
 ### Installation
@@ -82,19 +81,23 @@ steps:
 ### Run the Test
 
 ```bash
-# Run all tests in a directory
+# Run all YAML tests in a directory (recursively; .yaml / .yml)
 vizqa tests/
+
+# Equivalent explicit subcommand
+vizqa run tests/
 ```
 
 ### CLI Arguments
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `paths` | One or more paths to test files or directories. | (Required) |
+| `paths` | One or more paths to test files or directories. | Required for a run (omit to print help). |
 | `--headless / --no-headless` | Run browser in headless mode. | `True` |
-| `-v, --verbose` | Increase output verbosity (-v, -vv). | `0` |
-| `-x, --interactive` | Stop and enter interactive mode on first failure. | `False` |
-| `--report` | Generate a visual HTML report after execution. | `False` |
+| `-v, --verbose` | Increase output verbosity (-v steps, -vv timing/detail). | `0` |
+| `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
+
+**`vizqa install`** installs Playwright browser binaries and model weights in one step. Use **`--token`** if Hugging Face credentials are required for your weights source.
 
 ---
 
@@ -103,7 +106,7 @@ vizqa tests/
 vizQA supports global and per-test configuration, including custom HTTP headers for authentication or specialized testing.
 
 ### Global Configuration
-You can define global headers in your `pyproject.toml` or any common `.ini` file (e.g., `pytest.ini`, `tox.ini`).
+You can define global headers in your `pyproject.toml` or a `.ini` file in the current working directory: `pytest.ini`, `tox.ini`, `setup.cfg`, or `vizqa.ini`.
 
 **`pyproject.toml`**
 ```toml
@@ -112,7 +115,7 @@ Authorization = "Bearer global-api-token"
 X-Custom-Header = "GlobalValue"
 ```
 
-**`pytest.ini` / `vizqa.ini`**
+**`pytest.ini` / `tox.ini` / `setup.cfg` / `vizqa.ini`**
 ```ini
 [vizqa.headers]
 Authorization = Bearer global-api-token
@@ -129,7 +132,8 @@ url: "https://example.com/api"
 headers:
   Authorization: "Bearer test-specific-token"
 steps:
-  - VERIFY: "Welcome" should appear
+  - action: "Open the dashboard"
+    expect: "A welcome message should appear"
 ```
 
 ---
