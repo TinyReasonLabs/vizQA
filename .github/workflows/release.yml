@@ -58,14 +58,17 @@ jobs:
 
       - name: Download Weights on Cache Miss
         if: steps.cache-weights.outputs.cache-hit != 'true'
-        run: |
-          poetry run pip install -U "huggingface_hub[cli]"
-          poetry run hf download alieissa/minilm-ui \
-            --revision v${{ github.event.inputs.version }} \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PACKAGE_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          poetry run pip install -U "huggingface_hub[cli]" packaging
+          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$PACKAGE_VERSION")
+          echo "Using HF weights revision: $REV"
+          poetry run hf download alieissa/minilm-ui \
+            --revision "$REV" \
+            --local-dir ./vizQA/weights \
+            --token "$HF_TOKEN"
 
       - name: Set Version
         run: poetry version ${{ github.event.inputs.version }}
@@ -105,6 +108,9 @@ jobs:
       - name: Verify CLI version
         run: vizqa --version
 
+      - name: Verify weights install
+        run: vizqa install
+
   # ── 4. Publish to PyPI ────────────────────────────────────────────────────────
   publish-pypi:
     needs: smoke-test
@@ -121,3 +127,33 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── 5. GitHub Release (tag v{version}, attach sdist/wheel) ───────────────────
+  github-release:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # workflow_dispatch: github.sha is the HEAD of the branch you select when running the workflow.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: v${{ github.event.inputs.version }}
+          generate_release_notes: true
+          body: |
+            Published to [PyPI](https://pypi.org/project/vizqa/${{ github.event.inputs.version }}/).
+          files: dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

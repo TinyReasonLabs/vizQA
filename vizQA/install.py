@@ -16,8 +16,7 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[no-redef]
 
-from huggingface_hub import HfApi, snapshot_download
-from packaging.version import parse as parse_version
+from huggingface_hub import snapshot_download
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -31,9 +30,10 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
+from vizQA.hf_revision import REPO_ID, resolve_weights_revision
+
 console = Console()
 
-REPO_ID = "alieissa/minilm-ui"
 WEIGHTS_REL_PATH = Path("weights")
 
 
@@ -155,7 +155,7 @@ class RichHFProgress:
 
 
 # ---------------------------------------------------------------------------
-# Version / tag resolution
+# Version
 # ---------------------------------------------------------------------------
 
 
@@ -175,35 +175,6 @@ def get_package_version() -> str:
         pass
 
     return "0.1.0"
-
-
-def get_best_tag(api: HfApi, package_version: str) -> str:
-    """Return the latest HF repo tag whose version is ≤ *package_version*.
-
-    Falls back to ``"main"`` when no suitable tag is found or on any error.
-    """
-    target = parse_version(package_version)
-
-    try:
-        tags = api.list_repo_refs(repo_id=REPO_ID).tags
-    except Exception:  # pylint: disable=broad-exception-caught
-        return "main"
-
-    best_tag = "main"
-    best_version = parse_version("0.0.0")
-
-    for ref in tags:
-        raw = ref.name.lstrip("v")
-        try:
-            tag_version = parse_version(raw)
-        except Exception:  # pylint: disable=broad-exception-caught
-            continue
-
-        if best_version < tag_version <= target:
-            best_version = tag_version
-            best_tag = ref.name
-
-    return best_tag
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +233,7 @@ async def run_install(token: Optional[str] = None) -> None:
 
     weights_dir = Path(__file__).resolve().parent / WEIGHTS_REL_PATH
 
-    api = HfApi(token=token)
-    tag = await asyncio.to_thread(get_best_tag, api, pkg_version)
+    tag = await asyncio.to_thread(resolve_weights_revision, pkg_version, token=token)
 
     errors: list[str] = []
 
