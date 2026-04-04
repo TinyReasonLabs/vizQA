@@ -379,7 +379,41 @@ async def run_single_test(
 # ---------------------------------------------------------------------------
 
 
-@click.command()
+# ---------------------------------------------------------------------------
+# CLI Group Logic
+# ---------------------------------------------------------------------------
+
+
+class DefaultGroup(click.Group):
+    """
+    Click Group that allows a default command to be invoked if no subcommand is found.
+    Positional arguments are passed to the default command.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.default_command = kwargs.pop("default_command", "run")
+        super().__init__(*args, **kwargs)
+
+    def resolve_command(self, ctx, args):
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError:
+            # If command resolve fails, we assume the first arg belongs to the default command
+            return self.default_command, self.get_command(ctx, self.default_command), args
+
+
+@click.group(cls=DefaultGroup, default_command="run", invoke_without_command=True)
+@click.version_option()
+@click.pass_context
+def cli(ctx):
+    """
+    UI Testing Framework - Vision-Driven Automation
+    """
+    if ctx.invoked_subcommand is None and not ctx.args:
+        click.echo(ctx.get_help())
+
+
+@cli.command()
 @click.argument("paths", type=click.Path(exists=True), nargs=-1)
 @click.option("--headless/--no-headless", default=True, help="Run browser in headless mode (default: True)")
 @click.option("-v", "--verbose", count=True, help="Verbosity (-v steps, -vv timing/detail)")
@@ -390,10 +424,8 @@ async def run_single_test(
     default=False,
     help="Run in interactive mode, stops at the first failing test (default: False)",
 )
-def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool):
+def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool):
     """
-    UI Testing Framework - Vision-Driven Automation
-
     Run UI tests from files or directories.
 
     :param paths: Paths to the test files or directories.
@@ -407,7 +439,7 @@ def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
         return
 
     reporter = ProgressiveReporter(verbosity=verbose)
-    test_files = discover_test_files(paths)
+    test_files = discover_test_files(list(paths))
 
     if not test_files:
         console.print("[yellow]No test files found.[/]")
@@ -416,7 +448,7 @@ def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
     async def main():
         client = PerceptionClient()
         automator = Automator(client, verbosity=verbose, headless=headless)
-        logger = get_logger()
+        get_logger()
 
         try:
             await automator.start()
@@ -459,9 +491,9 @@ def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
         reporter.print_failures()
 
         # Summary line
-        total = len(paths)
+        total = len(test_files)
         passed = sum(1 for s in reporter.sessions if all(st.status == StepStatus.PASSED for st in s.steps))
-        failed = total - passed if not interactive else 1
+        failed = total - passed
 
         summary = Text.assemble(
             ("\nResults: ", "bold"),
@@ -471,9 +503,19 @@ def cli(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
             (f" in {total} test{'s' if total != 1 else ''}", "dim"),
         )
         console.print(summary)
-        console.print(f"[dim]Full log: {logger.log_path}[/]")
 
     asyncio.run(main())
+
+
+@cli.command()
+@click.option("--token", help="Hugging Face authentication token for private repositories.")
+def install(token: Optional[str]):
+    """
+    Installs required browser binaries and model weights concurrently.
+    """
+    from vizQA.install import run_install  # pylint:disable=C0415
+
+    asyncio.run(run_install(token=token))
 
 
 if __name__ == "__main__":

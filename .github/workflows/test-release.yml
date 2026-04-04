@@ -1,4 +1,4 @@
-name: Release and Deploy
+name: Test Release
 
 on:
   workflow_dispatch:
@@ -111,11 +111,11 @@ jobs:
       - name: Verify weights install
         run: vizqa install
 
-  # ── 4. Publish to PyPI ────────────────────────────────────────────────────────
-  publish-pypi:
+  # ── 4. Publish to TestPyPI (gate) ───────────────────────────────────────────
+  publish-test-pypi:
     needs: smoke-test
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: test-pypi
     permissions:
       id-token: write  # Required for OIDC
     steps:
@@ -125,35 +125,7 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Publish to PyPI
+      - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
-  # ── 5. GitHub Release (tag v{version}, attach sdist/wheel) ───────────────────
-  github-release:
-    needs: publish-pypi
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
-
-      # workflow_dispatch: github.sha is the HEAD of the branch you select when running the workflow.
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          target_commitish: ${{ github.sha }}
-          name: v${{ github.event.inputs.version }}
-          generate_release_notes: true
-          body: |
-            Published to [PyPI](https://pypi.org/project/vizqa/${{ github.event.inputs.version }}/).
-          files: dist/*
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/

@@ -273,6 +273,9 @@ class Automator:
         action = parts[0].lower()
         payload = self._resolve_payload(parts[1] if len(parts) > 1 else "", session)
 
+        if action == "wait":
+            return await self._handle_wait_action(session, step, payload)
+
         target = session.metadata.get("target")
         if not target:
             step.status = StepStatus.FAILED
@@ -297,6 +300,27 @@ class Automator:
         await self._capture_action_screenshot(session, step, action, rect, viewport)
         await self._execute_interaction(action, rect[0] + rect[2] / 2, rect[1] + rect[3] / 2, payload)
 
+        step.status = StepStatus.PASSED
+        return True
+
+    async def _handle_wait_action(self, _session: TestSession, step: TestStep, payload: str) -> bool:
+        """Handles waiting for a specific amount of time."""
+        wait_time = 0.5
+        msg = payload.lower()
+
+        match = re.search(r"([\d\.]+)\s*(s|sec|seconds?|ms|m|mins?|minutes?)", msg)
+        if match:
+            val = float(match.group(1))
+            unit = match.group(2)
+            if unit.startswith("m") and not unit == "ms":
+                wait_time = val * 60
+            elif unit == "ms":
+                wait_time = val / 1000.0
+            else:
+                wait_time = val
+
+        self._logger.log_debug(step.id, f"Waiting for {wait_time}s (parsed from '{payload}')")
+        await asyncio.sleep(wait_time)
         step.status = StepStatus.PASSED
         return True
 
@@ -419,8 +443,11 @@ class Automator:
             self._logger.log_warning(session.id, f"File upload failed: {e}")
             raise ArtifactError(f"Failed to upload file artifact for '{file_path}'", internal_detail=str(e)) from e
 
-    async def _execute_verify(self, session: TestSession, step: TestStep, query: str, timeout: int = 15) -> bool:
+    async def _execute_verify(
+        self, session: TestSession, step: TestStep, query: str, timeout: Optional[int] = None
+    ) -> bool:
         """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
+        timeout = timeout or self.parser.config.verification_timeout
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 
@@ -692,7 +719,9 @@ class Automator:
         return "interact"
 
     # pylint: disable=broad-exception-caught
-    async def _verify_expectation(self, session: TestSession, step: TestStep, timeout: int = 10) -> StepStatus:
+    async def _verify_expectation(
+        self, session: TestSession, step: TestStep, timeout: Optional[int] = None
+    ) -> StepStatus:
         """Polls the Perception API until the expectation is met or timed out.
 
         :param session: The test session.
@@ -700,6 +729,7 @@ class Automator:
         :param timeout: The timeout to wait for the verification.
         :return: The status of the step.
         """
+        timeout = timeout or self.parser.config.verification_timeout
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 

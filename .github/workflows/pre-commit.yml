@@ -1,15 +1,25 @@
 name: Pre-commit
 
 on:
-  push:
-    branches: [main, staging]
   pull_request:
-    branches: [main, staging]
+    branches: [main, release/*, staging]
 
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
+      - name: Enforce PR branch policy
+        run: |
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+          if [[ "$base" == release/* ]]; then
+            echo "::error::Pull requests may not target release branches (base: $base)."
+            exit 1
+          fi
+          if [ "$base" = "main" ] && [ "$head" != "staging" ]; then
+            echo "::error::Pull requests to main must merge from staging only (head: $head)."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -18,7 +28,7 @@ jobs:
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          poetry install --no-root
+          poetry install --no-root --with dev
       - uses: pre-commit/action@v3.0.1
         with:
           extra_args: --all-files --show-diff-on-failure

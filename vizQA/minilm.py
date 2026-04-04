@@ -826,7 +826,6 @@ class MiniLM:
 
             final_verb = saved_literal or canonical_type
             if canonical_type == "wait":
-                all_steps.append({"type": "FIND", "value": target_val})
                 all_steps.append({"type": "DO", "value": f"wait {target_val}"})
             else:
                 all_steps.append({"type": "FIND", "value": target_val})
