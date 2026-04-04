@@ -40,7 +40,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          V=$(poetry run python .github/scripts/pr_weights_version.py HEAD)
+          V=$(poetry run python -m vizQA.merged_tag_version HEAD)
           REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$V")
           echo "package_version=$V" >> "$GITHUB_OUTPUT"
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
@@ -88,7 +88,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          V=$(poetry run python "${{ github.workspace }}/.github/scripts/pr_weights_version.py" HEAD "${{ github.workspace }}/base_repo")
+          V=$(poetry run python -m vizQA.merged_tag_version HEAD "${{ github.workspace }}/base_repo")
           REV=$(PYTHONPATH="${{ github.workspace }}" poetry run python -m vizQA.hf_revision "$V")
           echo "package_version=$V" >> "$GITHUB_OUTPUT"
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
@@ -121,8 +121,8 @@ jobs:
       - name: Compare Results
         id: compare
         run: |
-          python .github/scripts/compare_tests.py base_results.json head_results.json > test_diff.md
-          # capture exit code of compare_tests.py
+          poetry run python .github/scripts/pytest_report_compare.py base_results.json head_results.json > test_diff.md
+          # capture exit code of pytest_report_compare
           EXIT_CODE=$?
           echo "diff_content<<EOF" >> $GITHUB_OUTPUT
           cat test_diff.md >> $GITHUB_OUTPUT
