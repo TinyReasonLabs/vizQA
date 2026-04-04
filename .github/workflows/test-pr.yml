@@ -2,7 +2,7 @@ name: PR Test Comparison
 
 on:
   pull_request:
-    branches: [main, release/*]
+    branches: [main, release/*, staging]
 
 jobs:
   compare-tests:
@@ -31,24 +31,37 @@ jobs:
       - name: Install Dependencies
         run: poetry install
 
-      - name: Cache Model Weights
-        id: cache-weights
+      # huggingface_hub may be transitive only; ensure CLI + resolver deps exist.
+      - name: Install HF download helpers
+        run: poetry run pip install -U "huggingface_hub[cli]" packaging
+
+      - name: Resolve weights (PR head)
+        id: weights-head
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          V=$(poetry run python .github/scripts/pr_weights_version.py HEAD)
+          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$V")
+          echo "package_version=$V" >> "$GITHUB_OUTPUT"
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+          echo "PR head: max merged tag version=$V -> HF revision=$REV"
+
+      - name: Cache model weights (PR head)
+        id: cache-weights-head
         uses: actions/cache@v4
         with:
           path: ./vizQA/weights
-          # The key uses your release tag; if the tag changes, the cache misses and re-downloads
-          key: ${{ runner.os }}-hf-weights-v1.0
+          key: ${{ runner.os }}-hf-pr-head-${{ steps.weights-head.outputs.revision }}
 
-      - name: Download Weights on Cache Miss
-        if: steps.cache-weights.outputs.cache-hit != 'true'
-        run: |
-          poetry run pip install -U "huggingface_hub[cli]"
-          poetry run hf download alieissa/minilm-ui \
-            --revision v1.0 \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
+      - name: Download weights (PR head)
+        if: steps.cache-weights-head.outputs.cache-hit != 'true'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          poetry run hf download alieissa/minilm-ui \
+            --revision "${{ steps.weights-head.outputs.revision }}" \
+            --local-dir ./vizQA/weights \
+            --token "$HF_TOKEN"
 
       - name: Run Tests (PR Branch)
         run: |
@@ -60,11 +73,48 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           path: base_repo
+          fetch-depth: 0
+
+      - name: Install Dependencies (base)
+        working-directory: base_repo
+        run: poetry install
+
+      - name: Install HF download helpers (base venv)
+        working-directory: base_repo
+        run: poetry run pip install -U "huggingface_hub[cli]" packaging
+
+      - name: Resolve weights (base branch)
+        id: weights-base
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          V=$(poetry run python "${{ github.workspace }}/.github/scripts/pr_weights_version.py" HEAD "${{ github.workspace }}/base_repo")
+          REV=$(PYTHONPATH="${{ github.workspace }}" poetry run python -m vizQA.hf_revision "$V")
+          echo "package_version=$V" >> "$GITHUB_OUTPUT"
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+          echo "Base branch: max merged tag version=$V -> HF revision=$REV"
+
+      - name: Cache model weights (base)
+        id: cache-weights-base
+        uses: actions/cache@v4
+        with:
+          path: base_repo/vizQA/weights
+          key: ${{ runner.os }}-hf-pr-base-${{ steps.weights-base.outputs.revision }}
+
+      - name: Download weights (base)
+        if: steps.cache-weights-base.outputs.cache-hit != 'true'
+        working-directory: base_repo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          poetry run hf download alieissa/minilm-ui \
+            --revision "${{ steps.weights-base.outputs.revision }}" \
+            --local-dir "${{ github.workspace }}/base_repo/vizQA/weights" \
+            --token "$HF_TOKEN"
 
       - name: Run Tests (Base Branch)
         run: |
           cd base_repo
-          poetry install
           poetry run pytest --json-report --json-report-file=../base_results.json
         continue-on-error: true
 
