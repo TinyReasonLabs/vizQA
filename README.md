@@ -32,7 +32,6 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 - **Visual Assertions**: Verify UI state, colors, positions, and visibility.
 - **Artifact Variables**: Load strings, file contents, or paths as variables (e.g., `{user_name}`) for dynamic test data.
 - **Lightweight & Fast**: CPU-only execution with a minimal **~250 MB** memory footprint and sub-second latency.
----
 
 ## 🚀 Getting Started
 
