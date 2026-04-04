@@ -25,7 +25,7 @@ dependencies = [
 vizqa = "vizQA.cli:cli"
 
 [tool.pytest.ini_options]
-pythonpath = ["vizQA"]
+pythonpath = ["vizQA", ".github/scripts"]
 testpaths = ["vizQA/tests"]
 
 [build-system]

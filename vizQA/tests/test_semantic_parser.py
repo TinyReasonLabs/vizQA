@@ -170,6 +170,55 @@ TEST_CASES = [
         "right click -> modal should close",
         [("FIND", "element"), ("DO", "right click"), ("VERIFY", "modal should close")],
     ),
+    # Former testing_scripts/ reproducers (planner decomposition regression)
+    (
+        "Click the primary Login button header",
+        [("FIND", "primary Login button header"), ("DO", "click")],
+    ),
+    (
+        "Right click the 'Customers' row",
+        [("FIND", "'Customers'  row"), ("DO", "right click")],
+    ),
+    (
+        "Click the button on the right",
+        [("FIND", "button on the right"), ("DO", "click")],
+    ),
+    (
+        "Click on 'Settings' in the sidebar",
+        [("FIND", "'Settings'  in the sidebar"), ("DO", "click")],
+    ),
+    (
+        "Click on 'Overview' in the sidebar",
+        [("FIND", "'Overview'  in the sidebar"), ("DO", "click")],
+    ),
+    (
+        "Scroll to the bottom of the page",
+        [("FIND", "to the bottom of the page"), ("DO", "scroll")],
+    ),
+    (
+        "Type 'wrong_user' into the username field",
+        [("FIND", "username field"), ("DO", "type 'wrong_user'")],
+    ),
+    (
+        "Click the Submit button",
+        [("FIND", "Submit button"), ("DO", "click")],
+    ),
+    (
+        "A red error toast 'Invalid credentials' should appear at the bottom right",
+        [("VERIFY", "red error toast 'Invalid credentials' should appear at bottom right")],
+    ),
+    (
+        "The 'Sign in' modal should close",
+        [("VERIFY", "'Sign in' modal should close")],
+    ),
+    (
+        "The Sign In modal should appear",
+        [("VERIFY", "Sign In modal should appear")],
+    ),
+    (
+        "A popup should NOT be visible",
+        [("VERIFY", "popup should NOT be visible")],
+    ),
 ]
 
 
