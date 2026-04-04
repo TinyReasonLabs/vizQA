@@ -58,14 +58,17 @@ jobs:
 
       - name: Download Weights on Cache Miss
         if: steps.cache-weights.outputs.cache-hit != 'true'
-        run: |
-          poetry run pip install -U "huggingface_hub[cli]"
-          poetry run hf download alieissa/minilm-ui \
-            --revision v${{ github.event.inputs.version }} \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PACKAGE_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          poetry run pip install -U "huggingface_hub[cli]" packaging
+          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$PACKAGE_VERSION")
+          echo "Using HF weights revision: $REV"
+          poetry run hf download alieissa/minilm-ui \
+            --revision "$REV" \
+            --local-dir ./vizQA/weights \
+            --token "$HF_TOKEN"
 
       - name: Set Version
         run: poetry version ${{ github.event.inputs.version }}
@@ -104,6 +107,9 @@ jobs:
 
       - name: Verify CLI version
         run: vizqa --version
+
+      - name: Verify weights install
+        run: vizqa install
 
   # ── 4. Publish to PyPI ────────────────────────────────────────────────────────
   publish-pypi:
