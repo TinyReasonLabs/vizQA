@@ -1,13 +1,12 @@
-#!/usr/bin/env python3
 """Resolve a package-style version string for PR CI model weights.
 
-Looks at every tag reachable from the given git ref and prints the **maximum** PEP 440
+Looks at every tag merged into the given git ref and returns the **maximum** PEP 440
 version among tags whose names parse as versions after stripping a leading ``v``.
-If none match, prints ``0.1.0``.
+If none match, returns ``0.1.0``.
 
-Usage: ``python pr_weights_version.py [REF] [GIT_REPO_DIR]`` — default ``REF`` is
-``HEAD``; optional second argument is the git working tree (e.g. a ``base_repo``
-checkout) so the script can run from the PR workspace while inspecting another clone.
+Used by CI via ``python -m vizQA.merged_tag_version``; optional second CLI argument is
+the git working tree (e.g. a ``base_repo`` checkout) so the command can run from the PR
+workspace while inspecting another clone.
 
 This anchors HF weights to the newest release tag still contained in the branch
 history, without reading ``pyproject.toml`` (which may be bumped on the PR only).
@@ -55,7 +54,7 @@ def max_merged_tag_version(ref: str = "HEAD", *, git_cwd: str | None = None) -> 
 
 
 def main() -> None:
-    """Main function to print the maximum merged tag version."""
+    """Print the maximum merged tag version to stdout."""
     ref = sys.argv[1] if len(sys.argv) > 1 else "HEAD"
     git_cwd = sys.argv[2] if len(sys.argv) > 2 else None
     print(max_merged_tag_version(ref, git_cwd=git_cwd))

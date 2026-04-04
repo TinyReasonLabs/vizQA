@@ -94,6 +94,15 @@ VERIFY_INTENT_CASES = [
         "ensure the disabled confirm button is at the bottom",
         {"state": "disabled", "position": "bottom"},
     ),
+    # Former testing_scripts/repro_negation.py
+    (
+        "'Sign In' modal should appear in the center of the screen",
+        {"negated": False, "subject": "modal", "keyword": "Sign In", "position": "center"},
+    ),
+    (
+        "'Sign In' modal should disappear",
+        {"negated": True, "subject": "modal", "keyword": "Sign In"},
+    ),
 ]
 
 
