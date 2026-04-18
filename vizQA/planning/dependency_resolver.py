@@ -7,8 +7,8 @@ from typing import Dict, List, Set
 
 import yaml
 
-from vizQA.exceptions import TestDefinitionError
-from vizQA.utility_classes import LineLoader
+from vizQA.app.exceptions import TestDefinitionError
+from vizQA.utils import LineLoader
 
 
 # pylint: disable=too-few-public-methods

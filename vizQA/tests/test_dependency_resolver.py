@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from vizQA.dependency_resolver import DependencyResolver
-from vizQA.exceptions import TestDefinitionError
+from vizQA.app.exceptions import TestDefinitionError
+from vizQA.planning import DependencyResolver
 
 
 class TestDependencyResolver:

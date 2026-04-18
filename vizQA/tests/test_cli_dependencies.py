@@ -3,8 +3,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vizQA.cli import _count_top_level_results, run_single_test
-from vizQA.memory import StepStatus, TestSession, TestStep
+from vizQA.app.cli import _count_top_level_results, run_single_test
+from vizQA.app.memory import StepStatus, TestSession, TestStep
 
 
 def _make_test_file(tmp_path: Path, name: str, body: str) -> Path:
@@ -45,7 +45,7 @@ steps: []
 
         with (
             patch(
-                "vizQA.cli._run_test_dependencies",
+                "vizQA.app.cli._run_test_dependencies",
                 new=AsyncMock(
                     return_value=(
                         True,
@@ -64,10 +64,10 @@ steps: []
                     )
                 ),
             ),
-            patch("vizQA.cli.StepPlanner") as mock_planner_cls,
-            patch("vizQA.cli._load_config", return_value={}),
-            patch("vizQA.cli.BrowserStateCache.load", return_value={"localStorage": {"auth": "ok"}}),
-            patch("vizQA.cli.BrowserStateCache.cache") as mock_cache_state,
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli._load_config", return_value={}),
+            patch("vizQA.app.cli.BrowserStateCache.load", return_value={"localStorage": {"auth": "ok"}}),
+            patch("vizQA.app.cli.BrowserStateCache.cache") as mock_cache_state,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
 
@@ -115,9 +115,9 @@ steps: []
         )
 
         with (
-            patch("vizQA.cli.StepPlanner") as mock_planner_cls,
-            patch("vizQA.cli._load_config", return_value={}),
-            patch("vizQA.cli.BrowserStateCache.cache") as mock_cache_state,
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli._load_config", return_value={}),
+            patch("vizQA.app.cli.BrowserStateCache.cache") as mock_cache_state,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(test_path, automator, reporter, is_dependency=True)
@@ -160,7 +160,7 @@ steps: []
 
         with (
             patch(
-                "vizQA.cli._run_test_dependencies",
+                "vizQA.app.cli._run_test_dependencies",
                 new=AsyncMock(
                     return_value=(
                         False,
@@ -176,7 +176,7 @@ steps: []
                     )
                 ),
             ),
-            patch("vizQA.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(test_path, automator, reporter)

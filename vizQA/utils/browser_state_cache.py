@@ -1,31 +1,8 @@
-"""
-Utility classes for the vizQA package.
-"""
+"""Browser state cache helpers."""
 
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
-
-import yaml
-
-# ---------------------------------------------------------------------------
-# YAML Line Tracking
-# ---------------------------------------------------------------------------
-
-
-# pylint: disable=too-many-ancestors
-class LineLoader(yaml.SafeLoader):
-    """Custom YAML loader that adds line numbers to mappings."""
-
-    def construct_mapping(self, node, deep=False):
-        mapping = super().construct_mapping(node, deep=deep)
-        mapping["__line__"] = node.start_mark.line + 1
-        return mapping
-
-
-# ---------------------------------------------------------------------------
-# Browser State Cache Management
-# ---------------------------------------------------------------------------
 
 
 class BrowserStateCache:
@@ -45,8 +22,8 @@ class BrowserStateCache:
         BrowserStateCache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
         cache_file = BrowserStateCache.CACHE_DIR / f"{test_stem}.json"
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(state_dict, f, indent=2)
+        with open(cache_file, "w", encoding="utf-8") as file:
+            json.dump(state_dict, file, indent=2)
 
         return cache_file
 
@@ -64,8 +41,8 @@ class BrowserStateCache:
             return None
 
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(cache_file, "r", encoding="utf-8") as file:
+                return json.load(file)
         except Exception:  # pylint: disable=broad-exception-caught
             return None
 

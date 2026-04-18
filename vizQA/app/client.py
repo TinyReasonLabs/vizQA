@@ -6,9 +6,9 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from vizQA.config import PERCEPTION_BACKEND
-from vizQA.exceptions import PerceptionServiceError
-from vizQA.logger import get_logger
+from vizQA.app.config import PERCEPTION_BACKEND
+from vizQA.app.exceptions import PerceptionServiceError
+from vizQA.app.logger import get_logger
 
 
 class PerceptionClient:

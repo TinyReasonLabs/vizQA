@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from vizQA.core import Automator
+        from vizQA.app.core import Automator
 
         self.mock_client = MagicMock()
         self.automator = Automator(self.mock_client, verbosity=2)
@@ -24,7 +24,7 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
         self.assertIn("'Cancel'", reason)
 
     async def test_failure_propagation(self):
-        from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
+        from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
 
         # Create a parent step with a failed sub-step
         sub_step = TestStep(id="sub1", instruction="VERIFY: admin")

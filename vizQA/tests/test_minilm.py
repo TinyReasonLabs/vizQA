@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def model():
-    from vizQA.minilm import MiniLM  # pylint: disable=import-outside-toplevel
+    from vizQA.reasoning import MiniLM  # pylint: disable=import-outside-toplevel
 
     return MiniLM(MODEL_DIR)
 

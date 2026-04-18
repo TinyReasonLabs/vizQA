@@ -4,17 +4,17 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from vizQA.client import PerceptionClient
-from vizQA.exceptions import (
+from vizQA.app import PerceptionClient
+from vizQA.app.exceptions import (
     ActionExecutionError,
     ElementNotFoundError,
     PerceptionServiceError,
     TestDefinitionError,
     UserFacingException,
 )
-from vizQA.memory import StepStatus, TestStep
-from vizQA.minilm import MiniLM
-from vizQA.planner import StepPlanner
+from vizQA.app.memory import StepStatus, TestStep
+from vizQA.planning import StepPlanner
+from vizQA.reasoning import MiniLM
 
 
 def test_exception_hierarchy():

@@ -11,18 +11,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from playwright.async_api import Browser, Page, async_playwright
 
-from vizQA.client import PerceptionClient
-from vizQA.exceptions import (
+from vizQA.app.client import PerceptionClient
+from vizQA.app.exceptions import (
     ActionExecutionError,
     ArtifactError,
     ElementNotFoundError,
     UserFacingException,
     VerificationError,
 )
-from vizQA.logger import get_logger
-from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
-from vizQA.minilm import MiniLM
-from vizQA.parser import SemanticParser
+from vizQA.app.logger import get_logger
+from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.reasoning import MiniLM, SemanticParser
 
 
 # pylint: disable=too-many-instance-attributes

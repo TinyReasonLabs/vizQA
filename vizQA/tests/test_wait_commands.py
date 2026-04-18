@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vizQA.core import Automator
-from vizQA.memory import StepStatus, TestSession, TestStep
+from vizQA.app.core import Automator
+from vizQA.app.memory import StepStatus, TestSession, TestStep
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def test_wait_for_seconds(session):
     automator = Automator(perception_client=MagicMock())
     step = TestStep(id="s1", instruction="DO: wait for 2.5 seconds")
 
-    with patch("vizQA.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         success = asyncio.run(automator._execute_do(session, step, "wait for 2.5 seconds"))
         assert success is True
         assert step.status == StepStatus.PASSED
@@ -28,7 +28,7 @@ def test_wait_for_minutes(session):
     automator = Automator(perception_client=MagicMock())
     step = TestStep(id="s2", instruction="DO: wait 2m")
 
-    with patch("vizQA.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         success = asyncio.run(automator._execute_do(session, step, "wait 2m"))
         assert success is True
         mock_sleep.assert_called_once_with(120.0)
@@ -45,7 +45,7 @@ def test_wait_until_polling(session):
 
     step = TestStep(id="s3", instruction="VERIFY: success indicator")
 
-    with patch("vizQA.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         success = asyncio.run(automator._execute_verify(session, step, "success indicator", timeout=5))
         assert success is True
         assert step.status == StepStatus.PASSED
@@ -63,7 +63,10 @@ def test_wait_until_timeout(session):
 
     step = TestStep(id="s4", instruction="VERIFY: success indicator")
 
-    with patch("vizQA.core.asyncio.sleep", new_callable=AsyncMock), patch("vizQA.core.datetime") as mock_datetime:
+    with (
+        patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock),
+        patch("vizQA.app.core.datetime") as mock_datetime,
+    ):
 
         start = datetime.now()
         end = start + timedelta(seconds=6)

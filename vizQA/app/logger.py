@@ -7,7 +7,7 @@ solely for debugging.
 
 Usage::
 
-    from vizQA.logger import get_logger
+    from vizQA.app.logger import get_logger
     logger = get_logger()
     logger.log_perception(step_id, query, perception_dict)
     logger.log_step(step_id, "FIND", StepStatus.PASSED)

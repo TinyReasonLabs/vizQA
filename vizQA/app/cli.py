@@ -4,7 +4,6 @@ Command-line interface for the UI testing framework.
 
 import asyncio
 import configparser
-import shutil
 import tomllib
 import traceback
 import uuid
@@ -13,214 +12,26 @@ from typing import Any, Dict, List, Optional
 
 import click
 import yaml
-from rich.console import Console, Group
-from rich.live import Live
+from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
 
-from vizQA.client import PerceptionClient
-from vizQA.core import Automator
-from vizQA.dependency_resolver import DependencyResolver
-from vizQA.exceptions import TestDefinitionError, UserFacingException
-from vizQA.logger import get_logger
-from vizQA.memory import StepStatus, TestSession, TestStep
-from vizQA.planner import StepPlanner
-from vizQA.utility_classes import BrowserStateCache, LineLoader
+from vizQA.app.client import PerceptionClient
+from vizQA.app.core import Automator
+from vizQA.app.exceptions import TestDefinitionError, UserFacingException
+from vizQA.app.logger import get_logger
+from vizQA.app.memory import StepStatus, TestSession, TestStep
+from vizQA.planning import DependencyResolver, StepPlanner
+from vizQA.rendering import (
+    STEP_STATUS_STYLES,
+    ProgressiveReporter,
+    format_step_prefix,
+    print_dependency_failure,
+    print_session_header,
+)
+from vizQA.utils import BrowserStateCache, LineLoader
 
 console = Console(highlight=False)
-
-# ---------------------------------------------------------------------------
-# Status icon / color helpers
-# ---------------------------------------------------------------------------
-
-_STATUS_ICON = {
-    StepStatus.RUNNING: ("▶", "yellow"),
-    StepStatus.PASSED: ("✔", "green"),
-    StepStatus.FAILED: ("✘", "red"),
-    StepStatus.SKIPPED: ("○", "dim"),
-    StepStatus.PENDING: ("○", "white"),
-}
-
-
-def _step_prefix(instr: str) -> Text:
-    """Returns a coloured prefix Text for a step instruction string."""
-    if instr.startswith("FIND:"):
-        return Text.assemble(("FIND ", "bold cyan"), (instr[5:].strip(), "white"))
-    if instr.startswith("DO:"):
-        return Text.assemble(("DO ", "bold magenta"), (instr[3:].strip(), "white"))
-    if instr.startswith("VERIFY:"):
-        return Text.assemble(("VERIFY ", "bold green"), (instr[7:].strip(), "white"))
-    return Text(instr, "white")
-
-
-# ---------------------------------------------------------------------------
-# Progressive renderer
-# ---------------------------------------------------------------------------
-
-
-class ProgressiveReporter:
-    """
-    Prints each step to the console as it completes, one line at a time.
-    Uses rich.Live to allow in-place updates for parent steps.
-    """
-
-    def __init__(self, verbosity: int = 0):
-        self.verbosity = verbosity
-        self.sessions: List[TestSession] = []
-        self._total_sub_steps = 0
-        self._completed_sub_steps = 0
-        self._live: Optional[Live] = None
-        self._renderable_lines: List[Any] = []
-        self._parent_map: Dict[str, int] = {}  # maps step.id to line index
-
-    def register_session(self, session: TestSession) -> None:
-        """Register a session so the reporter can count total sub-steps."""
-        self.sessions.append(session)
-        for step in session.steps:
-            self._total_sub_steps += self._count_atomic(step)
-
-    def _count_atomic(self, step: TestStep) -> int:
-        if step.sub_steps:
-            return sum(self._count_atomic(s) for s in step.sub_steps)
-        return 1
-
-    def _remaining(self) -> int:
-        return max(0, self._total_sub_steps - self._completed_sub_steps)
-
-    def _get_footer(self) -> Text:
-        remaining = self._remaining()
-        if remaining > 0:
-            return Text(f"  ▶ {remaining} step{'s' if remaining != 1 else ''} remaining", style="dim")
-        return Text("")
-
-    def _update_live(self):
-        if not self._live:
-            self._live = Live(
-                Group(*self._get_visible_lines(), self._get_footer()),
-                console=console,
-                refresh_per_second=4,
-                transient=False,
-            )
-            self._live.start()
-        else:
-            self._live.update(Group(*self._get_visible_lines(), self._get_footer()))
-
-    def _get_visible_lines(self) -> List[Any]:
-        """Returns a subset of lines if they exceed terminal height to simulate scrolling."""
-        term_height = shutil.get_terminal_size().lines
-        # Reserve ~4 lines for header, footer, and padding
-        max_lines = max(5, term_height - 6)
-
-        if len(self._renderable_lines) > max_lines:
-            return self._renderable_lines[-max_lines:]
-        return self._renderable_lines
-
-    def on_step_done(self, step: TestStep, depth: int = 0) -> None:
-        """Called when an atomic step finishes."""
-        if step.status in (StepStatus.RUNNING, StepStatus.PENDING):
-            return
-
-        self._completed_sub_steps += 1
-        icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
-        indent = "  " * depth
-        prefix_text = _step_prefix(step.instruction)
-
-        line = Text()
-        line.append(f"{indent}{icon} ", style=color)
-        line.append_text(prefix_text)
-        if step.expectation:
-            line.append(f" → {step.expectation}", style="dim")
-
-        if self.verbosity >= 1 and step.status == StepStatus.FAILED and step.failure_reason:
-            line.append(f"\n{indent}  ↳ {step.failure_reason}", style="red dim")
-
-        self._renderable_lines.append(line)
-        self._update_live()
-
-    def on_parent_step_start(self, step: TestStep) -> None:
-        """Called when a container step starts."""
-        line = Text()
-        line.append("● ", style="white")
-        line.append(step.instruction, style="bold white")
-        if step.expectation:
-            line.append(f" → {step.expectation}", style="dim")
-
-        self._parent_map[step.id] = len(self._renderable_lines)
-        self._renderable_lines.append(line)
-        self._update_live()
-
-    def on_session_start(self, session: TestSession) -> None:
-        """Called when a test session starts. Displays dependency chain if present."""
-        line = Text()
-        line.append("● ", style="white")
-        line.append(session.test_name, style="bold white")
-
-        if session.dependency_results:
-            dep_chain = " → ".join([d["name"] for d in session.dependency_results])
-            line.append(f" [dependencies: {dep_chain}]", style="dim")
-
-        self._renderable_lines.append(line)
-        self._update_live()
-
-    def on_parent_step_done(self, step: TestStep) -> None:
-        """Called when a container step finishes — updates its line color in-place."""
-        if step.id in self._parent_map:
-            idx = self._parent_map[step.id]
-            _, color = _STATUS_ICON.get(step.status, ("?", "white"))
-
-            line = Text()
-            line.append("● ", style=color)
-            line.append(step.instruction, style=f"bold {color}")
-            if step.expectation:
-                line.append(f" → {step.expectation}", style=f"bold {color}")
-
-            self._renderable_lines[idx] = line
-            self._update_live()
-
-    def finalize(self) -> None:
-        """Stops the Live display and clears any trailing footer."""
-        if self._live:
-            self._live.stop()
-            self._live = None
-
-    def print_failures(self) -> None:
-        """Prints detailed failure block after all sessions complete."""
-        failed_sessions = [s for s in self.sessions if any(st.status == StepStatus.FAILED for st in s.steps)]
-        if not failed_sessions:
-            return
-
-        console.print("\n[bold red]" + "=" * 20 + " FAILURES " + "=" * 20 + "[/]")
-        for session in failed_sessions:
-            for top_step in session.steps:
-                if top_step.status == StepStatus.FAILED:
-                    failed_step = _deepest_failed(top_step)
-
-                    console.print(f"\n[bold red]FAILURE in {session.test_name} › {top_step.instruction}[/]")
-                    if failed_step != top_step:
-                        console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
-
-                    if failed_step.failure_type and str(failed_step.failure_type) != "FailureType.NONE":
-                        console.print(f"  [bold]Type:[/] {failed_step.failure_type}")
-
-                    reason = failed_step.failure_reason or failed_step.error
-                    if not reason and hasattr(failed_step, "user_message"):
-                        reason = failed_step.user_message
-
-                    console.print(f"  [bold]Reason:[/] {reason}")
-
-        console.print("[bold red]" + "=" * 50 + "[/]")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _deepest_failed(step: TestStep) -> TestStep:
-    for sub in step.sub_steps:
-        if sub.status == StepStatus.FAILED:
-            return _deepest_failed(sub)
-    return step
 
 
 def discover_test_files(paths: List[str]) -> List[Path]:
@@ -262,8 +73,8 @@ def discover_test_files(paths: List[str]) -> List[Path]:
 
 
 def _add_step_node(parent_node: Tree, step: TestStep, verbosity: int):
-    icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
-    instr_text = _step_prefix(step.instruction)
+    icon, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
+    instr_text = format_step_prefix(step.instruction)
     step_text = Text.assemble((f"{icon} ", color), instr_text)
     step_node = parent_node.add(step_text)
     for sub_step in step.sub_steps:
@@ -528,8 +339,8 @@ async def run_single_test(
 
             # Print session header
             reporter.on_session_start(session)
-            console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
-            console.print(f"[red]✘ Test skipped because required test failed: {dependency_results[-1]['name']}[/]")
+            print_session_header(console, session)
+            print_dependency_failure(console, dependency_results[-1]["name"])
 
             if interactive:
                 reporter.finalize()
@@ -565,10 +376,8 @@ async def run_single_test(
     reporter.register_session(session)
 
     # Print session header with dependency info if present
-    console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
+    print_session_header(console, session)
     if dependency_results:
-        dep_names = " → ".join([d["name"] for d in dependency_results])
-        console.print(f"[dim]dependencies: {dep_names}[/]")
 
         latest_dependency = dependency_results[-1]
         latest_state = BrowserStateCache.load(latest_dependency["file_stem"])
@@ -674,7 +483,7 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
         count = BrowserStateCache.clean()
         console.print(f"[dim]Cleaned {count} cached browser states[/]")
 
-    reporter = ProgressiveReporter(verbosity=verbose)
+    reporter = ProgressiveReporter(console=console, verbosity=verbose)
     test_files = discover_test_files(list(paths))
 
     if not test_files:
@@ -748,7 +557,7 @@ def install(token: Optional[str]):
     """
     Installs required browser binaries and model weights concurrently.
     """
-    from vizQA.install import run_install  # pylint:disable=C0415
+    from vizQA.app.support.install import run_install  # pylint:disable=C0415
 
     asyncio.run(run_install(token=token))
 

@@ -10,8 +10,7 @@ import os
 
 import pytest
 
-from vizQA.minilm import MiniLM
-from vizQA.parser import SemanticParser
+from vizQA.reasoning import MiniLM, SemanticParser
 
 # ---------------------------------------------------------------------------
 # Mock elements (shared across test cases)

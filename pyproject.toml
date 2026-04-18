@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vizqa = "vizQA.cli:cli"
+vizqa = "vizQA.app.cli:cli"
 
 [tool.pytest.ini_options]
 pythonpath = ["vizQA", ".github/scripts"]

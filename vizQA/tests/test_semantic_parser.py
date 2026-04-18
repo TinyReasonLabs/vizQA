@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from vizQA.planner import StepPlanner
+from vizQA.planning import StepPlanner
 
 # A comprehensive suite of 50 diverse UI testing instructions to test the AST parser's ability
 # to extract relations (actions -> subjects, states -> subjects) and clean descriptions.

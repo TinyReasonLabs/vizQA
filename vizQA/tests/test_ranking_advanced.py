@@ -3,8 +3,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from vizQA.parser import SemanticParser
-from vizQA.ranking import MetadataGenerator, RankingEngine
+from vizQA.reasoning import MetadataGenerator, RankingEngine, SemanticParser
 
 ELEMENTS = [
     {
@@ -166,3 +165,46 @@ class TestAdvancedRanking:
         parser_adv.config.use_advanced_ranking = True
         result_adv = parser_adv.filter_elements_by_intent(_intent(keyword="Submit"), ELEMENTS)
         assert "_ranking_score" in result_adv[0]
+
+    def test_boolean_or_returns_multiple_relevant_results(self):
+        mock_minilm = MagicMock()
+        mock_minilm.encode.return_value = np.zeros(384)
+        mock_minilm.cosine_similarity.return_value = 0.5
+
+        engine = RankingEngine(mock_minilm)
+        results = engine.rank("submit or cancel", _intent(keyword="submit or cancel"), ELEMENTS)
+
+        assert {el["text"] for el in results} == {"Submit", "Cancel"}
+
+    def test_boolean_and_requires_all_terms_in_same_candidate(self):
+        mock_minilm = MagicMock()
+        mock_minilm.encode.return_value = np.zeros(384)
+        mock_minilm.cosine_similarity.return_value = 0.5
+
+        engine = RankingEngine(mock_minilm)
+        results = engine.rank("sidebar and nav", _intent(keyword="sidebar and nav"), ELEMENTS)
+
+        assert len(results) == 1
+        assert results[0]["text"] == "Sidebar Item"
+
+    def test_boolean_query_preserves_quoted_phrase(self):
+        elements = ELEMENTS + [
+            {
+                "text": "Verify and Continue",
+                "label": "verify-and-continue",
+                "name": "verify_continue",
+                "salience": 0.7,
+            }
+        ]
+        mock_minilm = MagicMock()
+        mock_minilm.encode.return_value = np.zeros(384)
+        mock_minilm.cosine_similarity.return_value = 0.5
+
+        engine = RankingEngine(mock_minilm)
+        results = engine.rank(
+            "'Verify and Continue' or cancel",
+            _intent(keyword="'Verify and Continue' or cancel"),
+            elements,
+        )
+
+        assert {el["text"] for el in results} == {"Verify and Continue", "Cancel"}

@@ -13,8 +13,9 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-from vizQA.logger import get_logger
-from vizQA.parser import ParserVocabulary
+from vizQA.app.logger import get_logger
+from vizQA.reasoning.query_semantics import lexical_term_score, normalize_boolean_term, split_boolean_query
+from vizQA.reasoning.vocabulary import ParserVocabulary
 
 
 @dataclass
@@ -228,25 +229,7 @@ class MiniLM:
 
     def split_boolean_query(self, query: str) -> List[List[str]]:
         """Splits a query into OR groups, each containing AND clauses, while preserving quoted text."""
-        local_quotes: List[str] = []
-
-        def _repl(match):
-            local_quotes.append(match.group(0))
-            return f"__LOCAL_QUOTE_{len(local_quotes)-1}__"
-
-        protected = re.sub(r"(['\"])(.*?)\1", _repl, query)
-        or_parts = [part.strip() for part in re.split(r"\bor\b", protected, flags=re.I) if part.strip()]
-        groups: List[List[str]] = []
-        for or_part in or_parts:
-            and_parts = [part.strip() for part in re.split(r"\band\b", or_part, flags=re.I) if part.strip()]
-            restored_parts: List[str] = []
-            for part in and_parts:
-                for i, quote in enumerate(local_quotes):
-                    part = part.replace(f"__LOCAL_QUOTE_{i}__", quote)
-                restored_parts.append(part.strip())
-            if restored_parts:
-                groups.append(restored_parts)
-        return groups or [[query]]
+        return split_boolean_query(query)
 
     def best_anchor_similarity_centroid(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """
@@ -317,11 +300,16 @@ class MiniLM:
 
     def normalize_boolean_term(self, term: str) -> str:
         """Normalizes a boolean clause term before embedding."""
-        term = term.strip()
-        quoted_match = re.fullmatch(r"(['\"])(.*?)\1", term)
-        if quoted_match:
-            return quoted_match.group(2).strip()
-        return term
+        return normalize_boolean_term(term)
+
+    def _term_matches_candidate(self, term: str, candidate: str, candidate_vec: np.ndarray, threshold: float) -> bool:
+        """Returns whether a boolean term matches a candidate lexically or semantically."""
+        lexical_score = lexical_term_score(term, candidate)
+        if lexical_score > 0.0:
+            return True
+
+        term_vec = self.encode(self.normalize_boolean_term(term))
+        return self.cosine_similarity(term_vec, candidate_vec) >= threshold
 
     def is_negation(self, text: str, threshold: float = 0.4, logit_threshold: float = 0.7, delta: float = 0.02) -> bool:
         """
@@ -366,14 +354,13 @@ class MiniLM:
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
         query_groups = self.split_boolean_query(query)
-        query_vectors = [[self.encode(self.normalize_boolean_term(part)) for part in group] for group in query_groups]
         matched: set[int] = set()
         for i, cand in enumerate(candidates):
             if not cand:
                 continue
             cand_vec = self.encode(cand)
-            for group in query_vectors:
-                if all(self.cosine_similarity(q_vec, cand_vec) >= threshold for q_vec in group):
+            for group in query_groups:
+                if all(self._term_matches_candidate(term, cand, cand_vec, threshold) for term in group):
                     matched.add(i)
                     break
         return sorted(matched)

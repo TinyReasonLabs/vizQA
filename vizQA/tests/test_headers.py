@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vizQA.cli import _load_config
-from vizQA.core import Automator
-from vizQA.memory import TestSession
+from vizQA.app.cli import _load_config
+from vizQA.app.core import Automator
+from vizQA.app.memory import TestSession
 
 
 def test_load_config_pyproject(tmp_path):
