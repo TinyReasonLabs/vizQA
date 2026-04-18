@@ -185,8 +185,11 @@ class ProgressiveReporter:
             for top_step in session.steps:
                 if top_step.status == StepStatus.FAILED:
                     failed_step = _deepest_failed(top_step)
+                    session_label = session.test_name
+                    if session.is_dependency:
+                        session_label = f"Dependency failure in {session.test_name}"
 
-                    self.console.print(f"\n[bold red]FAILURE in {session.test_name} › {top_step.instruction}[/]")
+                    self.console.print(f"\n[bold red]FAILURE in {session_label} › {top_step.instruction}[/]")
                     if failed_step != top_step:
                         self.console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
 

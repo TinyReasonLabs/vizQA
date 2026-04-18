@@ -381,9 +381,9 @@ async def run_single_test(
             )
             reporter.register_session(session)
 
-            # Print session header
+            # In the dependency-failure path, prefer the reporter's richer
+            # session line so the skipped top-level test appears only once.
             reporter.on_session_start(session)
-            print_session_header(console, session)
             print_dependency_failure(console, dependency_results[-1]["name"])
 
             if interactive:
@@ -537,7 +537,7 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
     involved_test_stems = _collect_involved_test_stems(test_files)
     cleanup_counts = _clean_run_artifacts(involved_test_stems)
 
-    if any(cleanup_counts.values()):
+    if verbose >= 1 and any(cleanup_counts.values()):
         console.print(
             "[dim]Cleaned "
             f"{cleanup_counts['screenshots']} screenshots, "

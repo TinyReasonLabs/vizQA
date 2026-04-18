@@ -3,7 +3,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vizQA.app.cli import _clean_run_artifacts, _collect_involved_test_stems, _count_top_level_results, run_single_test
+from click.testing import CliRunner
+
+from vizQA.app.cli import (
+    _clean_run_artifacts,
+    _collect_involved_test_stems,
+    _count_top_level_results,
+    cli,
+    run_single_test,
+)
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 
 
@@ -177,6 +185,7 @@ steps: []
                 ),
             ),
             patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli.print_session_header") as mock_print_session_header,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(test_path, automator, reporter)
@@ -185,6 +194,7 @@ steps: []
         automator.run_session.assert_not_called()
         reporter.on_session_start.assert_called_once()
         reporter.on_parent_step_start.assert_not_called()
+        mock_print_session_header.assert_not_called()
 
     asyncio.run(run_test())
 
@@ -264,3 +274,59 @@ def test_clean_run_artifacts_removes_only_involved_test_files(tmp_path, monkeypa
     assert not (artifact_dir / "run_20240101_010101.log").exists()
     assert (artifact_dir / "other_step_before.jpg").exists()
     assert (browser_state_dir / "other.json").exists()
+
+
+def test_run_hides_cleanup_message_when_not_verbose(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 2, "browser_states": 1, "logs": 1}),
+        patch("vizQA.app.cli.get_logger"),
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
+    ):
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        mock_automator_cls.return_value = automator
+
+        result = runner.invoke(cli, ["run", str(test_path)])
+
+    assert result.exit_code == 0
+    assert "Cleaned 2 screenshots" not in result.output
+
+
+def test_run_shows_cleanup_message_in_verbose_mode(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 2, "browser_states": 1, "logs": 1}),
+        patch("vizQA.app.cli.get_logger"),
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
+    ):
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        mock_automator_cls.return_value = automator
+
+        result = runner.invoke(cli, ["run", "-v", str(test_path)])
+
+    assert result.exit_code == 0
+    assert "Cleaned 2 screenshots, 1 browser states, 1 old run logs" in result.output
