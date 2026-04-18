@@ -20,11 +20,12 @@ from rich.tree import Tree
 
 from vizQA.client import PerceptionClient
 from vizQA.core import Automator
+from vizQA.dependency_resolver import DependencyResolver
 from vizQA.exceptions import TestDefinitionError, UserFacingException
 from vizQA.logger import get_logger
 from vizQA.memory import StepStatus, TestSession, TestStep
 from vizQA.planner import StepPlanner
-from vizQA.utility_classes import LineLoader
+from vizQA.utility_classes import BrowserStateCache, LineLoader
 
 console = Console(highlight=False)
 
@@ -145,6 +146,19 @@ class ProgressiveReporter:
             line.append(f" → {step.expectation}", style="dim")
 
         self._parent_map[step.id] = len(self._renderable_lines)
+        self._renderable_lines.append(line)
+        self._update_live()
+
+    def on_session_start(self, session: TestSession) -> None:
+        """Called when a test session starts. Displays dependency chain if present."""
+        line = Text()
+        line.append("● ", style="white")
+        line.append(session.test_name, style="bold white")
+
+        if session.dependency_results:
+            dep_chain = " → ".join([d["name"] for d in session.dependency_results])
+            line.append(f" [dependencies: {dep_chain}]", style="dim")
+
         self._renderable_lines.append(line)
         self._update_live()
 
@@ -328,25 +342,208 @@ def _load_config() -> dict[str, str]:
     return {str(k): str(v) for k, v in headers.items()}
 
 
+def _count_top_level_results(sessions: List[TestSession], total_tests: int) -> tuple[int, int]:
+    """
+    Count pass/fail totals for user-invoked tests only.
+
+    Dependency sessions are excluded so a single top-level test with multiple
+    passing prerequisites does not produce negative failure counts.
+    """
+    top_level_sessions = [session for session in sessions if not session.is_dependency]
+    passed = sum(1 for session in top_level_sessions if all(step.status == StepStatus.PASSED for step in session.steps))
+    failed = max(0, total_tests - passed)
+    return passed, failed
+
+
+def _load_test_data(test_path: Path) -> dict[str, Any]:
+    """
+    Load test data from a YAML file.
+
+    :param test_path: Path to the test file
+    :return: Parsed test data
+    """
+    try:
+        test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err)) from err
+    return test_data
+
+
+def _resolve_dependencies(test_path: Path) -> List[Path]:
+    """
+    Resolve dependencies for a test file.
+
+    :param test_path: Path to the test file
+    :return: List of dependency paths
+    """
+    try:
+        resolver = DependencyResolver(test_path.parent)
+        dependency_paths = resolver.resolve(test_path)
+    except TestDefinitionError as err:
+        console.print(f"[red]Error resolving dependencies: {err.user_message}[/]")
+        if err.internal_detail:
+            console.print(f"[dim]{err.internal_detail}[/]")
+        raise
+    return dependency_paths
+
+
+async def _run_single_dependency(
+    dep_path: Path,
+    automator: Automator,
+    reporter: ProgressiveReporter,
+    on_step_update: Optional[Any],
+    interactive: bool,
+) -> tuple[Dict[str, Any], bool, Dict[str, Any]]:
+    """
+    Run a single dependency test and return its result.
+
+    :param dep_path: Path to the dependency test file
+    :param automator: Automator instance
+    :param reporter: ProgressiveReporter instance
+    :param on_step_update: Step update callback
+    :param interactive: Interactive mode flag
+    :return: Tuple of (dependency_result_dict, passed_bool, artifacts_dict)
+    """
+    dep_test_data = _load_test_data(dep_path)
+    dep_name = dep_test_data.get("name", dep_path.stem)
+    dep_artifacts = _load_artifacts(dep_test_data.get("artifacts", {}), dep_path)
+
+    result = await run_single_test(
+        dep_path,
+        automator,
+        reporter,
+        on_step_update=on_step_update,
+        interactive=interactive,
+        is_dependency=True,
+    )
+
+    last_session = reporter.sessions[-1] if reporter.sessions else None
+    dep_session_id = last_session.id if last_session else "unknown"
+    dep_status = "passed" if result else "failed"
+
+    dep_result = {
+        "name": dep_name,
+        "status": dep_status,
+        "session_id": dep_session_id,
+        "file_stem": dep_path.stem,
+    }
+
+    return dep_result, result, dep_artifacts
+
+
+async def _run_test_dependencies(
+    test_path: Path,
+    automator: Automator,
+    reporter: ProgressiveReporter,
+    on_step_update: Optional[Any] = None,
+    interactive: bool = False,
+) -> tuple[bool, List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Resolve and run all dependencies for a test.
+
+    :param test_path: Path to the test file
+    :param automator: Automator instance
+    :param reporter: ProgressiveReporter instance
+    :param on_step_update: Step update callback
+    :param interactive: Interactive mode flag
+    :return: Tuple of (all_dependencies_passed, dependency_results_list, inherited_artifacts)
+    """
+    test_data = _load_test_data(test_path)
+    requires = test_data.get("requires", [])
+    if not requires:
+        return True, [], {}
+
+    dependency_paths = _resolve_dependencies(test_path)
+
+    dependency_results: List[Dict[str, Any]] = []
+    inherited_artifacts: Dict[str, Any] = {}
+    all_passed = True
+
+    # Execute each dependency in order
+    for dep_path in dependency_paths:
+        dep_result, result, dep_artifacts = await _run_single_dependency(
+            dep_path, automator, reporter, on_step_update, interactive
+        )
+        inherited_artifacts.update(dep_artifacts)
+        dependency_results.append(dep_result)
+
+        if not result:
+            all_passed = False
+            console.print(f"[red]Required test '{dep_result['name']}' failed. Stopping test execution.[/]")
+            break  # Stop on first dependency failure
+
+    return all_passed, dependency_results, inherited_artifacts
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
 async def run_single_test(
     test_path: Path,
     automator: Automator,
     reporter: ProgressiveReporter,
     on_step_update: Optional[Any] = None,
     interactive: bool = False,
-):
-    """Runs a single test file and updates the reporter."""
+    is_dependency: bool = False,
+) -> bool:
+    """
+    Runs a single test file and updates the reporter.
+
+    :param test_path: Path to the test file
+    :param automator: Automator instance
+    :param reporter: ProgressiveReporter instance
+    :param on_step_update: Callback for step updates
+    :param interactive: Whether to run in interactive mode
+    :param is_dependency: Whether this test is running as a dependency
+    :return: True if test passed, False otherwise
+    """
     try:
         test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
     except Exception as err:  # pylint: disable=broad-exception-caught
         raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err)) from err
+
+    # Resolve and run dependencies (only if not already a dependency)
+    dependency_results: List[Dict[str, Any]] = []
+    inherited_artifacts: Dict[str, Any] = {}
+
+    if not is_dependency:
+        deps_passed, dependency_results, inherited_artifacts = await _run_test_dependencies(
+            test_path, automator, reporter, on_step_update, interactive
+        )
+        if not deps_passed:
+            # Mark this test as failed due to dependency failure
+            planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
+            steps = planner.decompose(test_data.get("steps", []))
+
+            session = TestSession(
+                id=str(uuid.uuid4())[:8],
+                test_name=test_data.get("name", test_path.stem),
+                file_stem=test_path.stem,
+                url=test_data.get("url", ""),
+                steps=steps,
+                artifacts={},
+                headers={},
+                is_dependency=is_dependency,
+                dependency_results=dependency_results,
+            )
+            reporter.register_session(session)
+
+            # Print session header
+            reporter.on_session_start(session)
+            console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
+            console.print(f"[red]✘ Test skipped because required test failed: {dependency_results[-1]['name']}[/]")
+
+            if interactive:
+                reporter.finalize()
+                raise click.Abort()
+
+            return False
 
     # Consolidate model choice: use the parser/minilm from automator
     planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
 
     steps = planner.decompose(test_data.get("steps", []))
 
-    artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
+    local_artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
+    artifacts = {**inherited_artifacts, **local_artifacts}
 
     # Load and merge headers
     global_headers = _load_config()
@@ -362,16 +559,44 @@ async def run_single_test(
         steps=steps,
         artifacts=artifacts,
         headers=merged_headers,
+        is_dependency=is_dependency,
+        dependency_results=dependency_results,
     )
     reporter.register_session(session)
 
-    # Print session header
+    # Print session header with dependency info if present
     console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
+    if dependency_results:
+        dep_names = " → ".join([d["name"] for d in dependency_results])
+        console.print(f"[dim]dependencies: {dep_names}[/]")
+
+        latest_dependency = dependency_results[-1]
+        latest_state = BrowserStateCache.load(latest_dependency["file_stem"])
+        if latest_state:
+            await automator.restore_browser_state(latest_state)
+            if automator.page:
+                if merged_headers:
+                    await automator.page.set_extra_http_headers(merged_headers)
+                # Rehydrate the page from restored storage/cookies so UI state driven by
+                # localStorage/sessionStorage is visible to the next dependent test.
+                await automator.page.goto(session.url)
 
     result = await automator.run_session(session, on_step_update=on_step_update)
+
+    # Capture browser state after successful test
+    if result:
+        try:
+            browser_state = await automator.capture_browser_state()
+            session.browser_state = browser_state
+            BrowserStateCache.cache(test_path.stem, browser_state)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            console.print(f"[yellow]Warning: Failed to capture browser state: {exc}[/]")
+
     if interactive and not result:
         reporter.finalize()
         raise click.Abort()
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +649,13 @@ def cli(ctx):
     default=False,
     help="Run in interactive mode, stops at the first failing test (default: False)",
 )
-def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool):
+@click.option(
+    "--clean-cache",
+    is_flag=True,
+    default=False,
+    help="Remove all cached browser states before running tests (default: False)",
+)
+def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool, clean_cache: bool):
     """
     Run UI tests from files or directories.
 
@@ -432,11 +663,16 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
     :param headless: Whether to run the browser in headless mode.
     :param verbose: Verbosity level for output.
     :param interactive: Whether to run in interactive mode.
+    :param clean_cache: Whether to clean cached browser states before running.
     """
     if not paths:
         ctx = click.get_current_context()
         click.echo(ctx.get_help())
         return
+
+    if clean_cache:
+        count = BrowserStateCache.clean()
+        console.print(f"[dim]Cleaned {count} cached browser states[/]")
 
     reporter = ProgressiveReporter(verbosity=verbose)
     test_files = discover_test_files(list(paths))
@@ -492,8 +728,7 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool)
 
         # Summary line
         total = len(test_files)
-        passed = sum(1 for s in reporter.sessions if all(st.status == StepStatus.PASSED for st in s.steps))
-        failed = total - passed
+        passed, failed = _count_top_level_results(reporter.sessions, total)
 
         summary = Text.assemble(
             ("\nResults: ", "bold"),

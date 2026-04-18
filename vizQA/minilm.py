@@ -93,6 +93,25 @@ class MiniLM:
         "element comes into view",
         "element is in view",
     ]
+    _NEGATION_REGEX = re.compile(
+        (
+            r"\b("
+            r"not|no longer|disappear(?:s|ed)?|gone|invisible|absent|done|finished|"
+            r"closed?|removed|vanish(?:es|ed)?|collapse(?:s|d)?|dismiss(?:ed|es)?|"
+            r"hidden|out of view|not in view|not showing anymore"
+            r")\b"
+        ),
+        re.IGNORECASE,
+    )
+    _POSITIVE_REGEX = re.compile(
+        (
+            r"\b("
+            r"appear(?:s|ed)?|visible|present|displayed|shown|shows up|opens?|"
+            r"rendered|stays?|becomes visible|comes into view|in view"
+            r")\b"
+        ),
+        re.IGNORECASE,
+    )
 
     _ACTION_ANCHOR_GROUPS = {
         "click": [
@@ -207,6 +226,28 @@ class MiniLM:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
+    def split_boolean_query(self, query: str) -> List[List[str]]:
+        """Splits a query into OR groups, each containing AND clauses, while preserving quoted text."""
+        local_quotes: List[str] = []
+
+        def _repl(match):
+            local_quotes.append(match.group(0))
+            return f"__LOCAL_QUOTE_{len(local_quotes)-1}__"
+
+        protected = re.sub(r"(['\"])(.*?)\1", _repl, query)
+        or_parts = [part.strip() for part in re.split(r"\bor\b", protected, flags=re.I) if part.strip()]
+        groups: List[List[str]] = []
+        for or_part in or_parts:
+            and_parts = [part.strip() for part in re.split(r"\band\b", or_part, flags=re.I) if part.strip()]
+            restored_parts: List[str] = []
+            for part in and_parts:
+                for i, quote in enumerate(local_quotes):
+                    part = part.replace(f"__LOCAL_QUOTE_{i}__", quote)
+                restored_parts.append(part.strip())
+            if restored_parts:
+                groups.append(restored_parts)
+        return groups or [[query]]
+
     def best_anchor_similarity_centroid(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """
         Returns cosine similarity between vec and the centroid of anchor_matrix
@@ -270,6 +311,18 @@ class MiniLM:
             return best_group
         return None
 
+    def _strip_quoted_content(self, text: str) -> str:
+        """Removes quoted content so regex intent checks ignore literal UI copy."""
+        return re.sub(r"(['\"])(.*?)\1", " ", text)
+
+    def normalize_boolean_term(self, term: str) -> str:
+        """Normalizes a boolean clause term before embedding."""
+        term = term.strip()
+        quoted_match = re.fullmatch(r"(['\"])(.*?)\1", term)
+        if quoted_match:
+            return quoted_match.group(2).strip()
+        return term
+
     def is_negation(self, text: str, threshold: float = 0.4, logit_threshold: float = 0.7, delta: float = 0.02) -> bool:
         """
         Returns True if *text* semantically resembles a negation intent.
@@ -277,6 +330,13 @@ class MiniLM:
         This compares similarity against negation anchors and ensures the
         negation match is stronger than the positive match to avoid false positives.
         """
+        unquoted = self._strip_quoted_content(text)
+
+        if self._NEGATION_REGEX.search(unquoted):
+            return True
+        if self._POSITIVE_REGEX.search(unquoted):
+            return False
+
         vec = self.encode(text)
         sim_neg = self.best_anchor_similarity(vec, self._intent_anchor_groups["negation"])
         sim_pos = self.best_anchor_similarity(vec, self._intent_anchor_groups["positive"])
@@ -305,16 +365,18 @@ class MiniLM:
 
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
-        q_vec = self.encode(query)
-        matched = []
+        query_groups = self.split_boolean_query(query)
+        query_vectors = [[self.encode(self.normalize_boolean_term(part)) for part in group] for group in query_groups]
+        matched: set[int] = set()
         for i, cand in enumerate(candidates):
             if not cand:
                 continue
-            c_vec = self.encode(cand)
-            sim = self.cosine_similarity(q_vec, c_vec)
-            if sim >= threshold:
-                matched.append(i)
-        return matched
+            cand_vec = self.encode(cand)
+            for group in query_vectors:
+                if all(self.cosine_similarity(q_vec, cand_vec) >= threshold for q_vec in group):
+                    matched.add(i)
+                    break
+        return sorted(matched)
 
     def rank_candidates(self, query: str, candidates: List[str], threshold: float = 0.0) -> List[Dict[str, Any]]:
         """
@@ -436,6 +498,24 @@ class MiniLM:
         text = text.replace("press_and_hold", "press and hold")
         return text
 
+    def _sd_split_on_and_preserving_quotes(self, text: str) -> List[str]:
+        """Split on 'and' while keeping quoted phrases intact."""
+        local_quotes: List[str] = []
+
+        def _repl(match):
+            local_quotes.append(match.group(0))
+            return f"__LOCAL_QUOTE_{len(local_quotes)-1}__"
+
+        protected = re.sub(r"(['\"])(.*?)\1", _repl, text)
+        parts = [part.strip() for part in re.split(r"\band\b", protected, flags=re.I)]
+
+        restored_parts = []
+        for part in parts:
+            for i, quote in enumerate(local_quotes):
+                part = part.replace(f"__LOCAL_QUOTE_{i}__", quote)
+            restored_parts.append(part)
+        return restored_parts
+
     def _sd_clean_target(self, text: str) -> str:
         """Removes leading articles and prepositions (the, a, an, over, at, on, in, into, from, of)."""
         clean = re.sub(r"^(the|a|an|over|at|on|in|into|from|of)\s+", "", text, flags=re.I).strip()
@@ -496,22 +576,25 @@ class MiniLM:
         return clauses
 
     def _sd_handle_verify(
-        self, clause: str, real_clause: str, all_steps: List[Dict[str, str]]
+        self, clause: str, quotes: List[str], all_steps: List[Dict[str, str]]
     ) -> Tuple[bool, Optional[str]]:
         """Handles VERIFY patterns. Returns (handled, next_prev_target)."""
-        lower_real = real_clause.lower()
+        lower_clause = clause.lower()
         is_verify = (
             clause.startswith("VERIFY_FLAG ")
-            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_real)
-            or re.search(r"\bshould\b", lower_real)
+            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_clause)
+            or re.search(r"\bshould\b", lower_clause)
         )
         if not is_verify:
             return False, None
 
-        val = re.sub(r"^(VERIFY_FLAG\s+)", "", real_clause)
-        val = re.sub(r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", val, flags=re.I).strip()
+        protected_val = re.sub(r"^(VERIFY_FLAG\s+)", "", clause)
+        protected_val = re.sub(
+            r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", protected_val, flags=re.I
+        ).strip()
         # Split VERIFY on 'and' to emit separate VERIFY steps
-        for vp in re.split(r"\band\b", val, flags=re.I):
+        for vp in re.split(r"\band\b", protected_val, flags=re.I):
+            vp = self._sd_restore(vp, quotes)
             vp = re.sub(r"\s+", " ", vp).strip()
             if vp:
                 all_steps.append({"type": "VERIFY", "value": vp})
@@ -610,7 +693,7 @@ class MiniLM:
 
         # ── Multi-field fallback: "type first name john and last name doe" ──
         restored_target = self._sd_restore(ctx.target_area, ctx.quotes)
-        and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
+        and_parts = self._sd_split_on_and_preserving_quotes(restored_target) if restored_target else []
         if len(and_parts) >= 2:
             return self._sd_handle_multi_field_type(ctx, and_parts)
 
@@ -756,7 +839,7 @@ class MiniLM:
             real_clause = self._sd_restore(clause, quotes)
             lower_real = real_clause.lower()
 
-            handled, nt = self._sd_handle_verify(clause, real_clause, all_steps)
+            handled, nt = self._sd_handle_verify(clause, quotes, all_steps)
             if handled:
                 prev_target = nt
                 continue

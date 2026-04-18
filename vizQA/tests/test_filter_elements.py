@@ -7,13 +7,11 @@ and the substring fallback path (no MiniLM).
 """
 
 import os
-from unittest.mock import MagicMock
 
 import pytest
 
 from vizQA.minilm import MiniLM
 from vizQA.parser import SemanticParser
-from vizQA.planner import StepPlanner
 
 # ---------------------------------------------------------------------------
 # Mock elements (shared across test cases)
@@ -86,42 +84,61 @@ class TestSubstringFallback:
 
 
 # ---------------------------------------------------------------------------
-# With a stubbed MiniLM
+# With MiniLM
 # ---------------------------------------------------------------------------
-class TestWithMockMiniLM:
-    def _make_parser(self, match_indices):
-        """Creates a SemanticParser with a MiniLM stub that returns *match_indices*."""
+class TestWithMiniLM:
+    def _make_parser(self):
+        """Creates a SemanticParser backed by the real MiniLM weights."""
         model_dir = os.path.join("vizQA", "weights", "minilm")
         if not os.path.exists(model_dir):
             print("Model not found, skipping...")
             return
 
         model = MiniLM(model_dir)
-        planner = StepPlanner()
-        # Support manual injection for testing if needed, though StepPlanner loads its own
-        planner.minilm = model
-        planner.parser.minilm = model
-
-        parser = SemanticParser(minilm=model)
-        # mock_model = MagicMock()
-        # mock_model.semantic_match.return_value = match_indices
         return SemanticParser(minilm=model)
 
     def test_semantic_match_used(self):
-        parser = self._make_parser([0, 2])  # Submit and Error
+        parser = self._make_parser()
         result = parser.filter_elements_by_intent(_intent(keyword="error or submit"), ELEMENTS)
         assert len(result) == 2
-        assert result[0]["text"] == "Submit"
-        assert result[1]["text"] == "Error: invalid credentials"
+        assert {el["text"] for el in result} == {"Submit", "Error: invalid credentials"}
+
+    def test_semantic_and_requires_both_concepts(self):
+        parser = self._make_parser()
+        result = parser.filter_elements_by_intent(_intent(keyword="error and credentials"), ELEMENTS)
+        assert len(result) == 1
+        assert result[0]["text"] == "Error: invalid credentials"
+
+    def test_semantic_mixed_or_and_groups_clauses(self):
+        parser = self._make_parser()
+        result = parser.filter_elements_by_intent(_intent(keyword="submit or error and credentials"), ELEMENTS)
+        assert len(result) == 2
+        assert {el["text"] for el in result} == {"Submit", "Error: invalid credentials"}
+
+    def test_semantic_boolean_query_preserves_quoted_phrase(self):
+        parser = self._make_parser()
+        elements = ELEMENTS + [
+            {
+                "text": "Verify and Continue",
+                "label": "verify-and-continue-button",
+                "name": "verify-continue",
+                "color": "blue",
+                "state": "enabled",
+            }
+        ]
+        result = parser.filter_elements_by_intent(_intent(keyword="'Verify and Continue' or submit"), elements)
+        texts = [el["text"] for el in result]
+        assert "Submit" in texts
+        assert "Verify and Continue" in texts
 
     def test_fallback_to_none_when_no_match(self):
         """When semantic_match returns nothing, filter should return empty list."""
-        parser = self._make_parser([])
+        parser = self._make_parser()
         result = parser.filter_elements_by_intent(_intent(keyword="nonexistent"), ELEMENTS)
         assert result == []
 
     def test_color_filter_non_destructive_with_minilm(self):
         """Semantic baseline = [Submit]; color='red' gives nothing → keep [Submit]."""
-        parser = self._make_parser([0])  # semantic match: Submit only
+        parser = self._make_parser()
         result = parser.filter_elements_by_intent(_intent(keyword="Submit", color="red"), ELEMENTS)
         assert any(el["text"] == "Submit" for el in result)

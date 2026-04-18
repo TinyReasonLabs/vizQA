@@ -74,8 +74,8 @@ class TestAdvancedRanking:
         mock_minilm.cosine_similarity.return_value = 0.5
 
         engine = RankingEngine(mock_minilm)
-        # "main button" should boost high salience
-        results = engine.rank("main button", _intent(subject="main button"), ELEMENTS)
+        # "main submit cancel" keeps both buttons above pruning while still boosting salience
+        results = engine.rank("main submit cancel", _intent(subject="main submit cancel"), ELEMENTS)
         # Submit has salience 0.9, Cancel has 0.4
         # Multiplier for Submit: 1.0 + (0.9 - 0.5) * 2 = 1.8
         # Multiplier for Cancel: 1.0 + (0.4 - 0.5) * 2 = 0.8

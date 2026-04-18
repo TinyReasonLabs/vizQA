@@ -78,6 +78,114 @@ class Automator:
             await self.playwright_mgr.stop()
 
     # ------------------------------------------------------------------
+    # Browser state persistence
+    # ------------------------------------------------------------------
+
+    async def capture_browser_state(self) -> Dict[str, Any]:
+        """
+        Captures the current browser state including localStorage, sessionStorage, and cookies.
+
+        :return: Dictionary containing browser state with keys: 'localStorage', 'sessionStorage', 'cookies'
+        """
+        if not self.page:
+            return {}
+
+        state = {}
+
+        try:
+            # Capture localStorage
+            local_storage = await self.page.evaluate(
+                """() => {
+                    const items = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        items[key] = localStorage.getItem(key);
+                    }
+                    return items;
+                }"""
+            )
+            state["localStorage"] = local_storage
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("capture_state", f"Failed to capture localStorage: {exc}")
+            state["localStorage"] = {}
+
+        try:
+            # Capture sessionStorage
+            session_storage = await self.page.evaluate(
+                """() => {
+                    const items = {};
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        items[key] = sessionStorage.getItem(key);
+                    }
+                    return items;
+                }"""
+            )
+            state["sessionStorage"] = session_storage
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("capture_state", f"Failed to capture sessionStorage: {exc}")
+            state["sessionStorage"] = {}
+
+        try:
+            # Capture cookies
+            cookies = await self.page.context.cookies()
+            state["cookies"] = cookies
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("capture_state", f"Failed to capture cookies: {exc}")
+            state["cookies"] = []
+
+        return state
+
+    async def restore_browser_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restores previously captured browser state (localStorage, sessionStorage, cookies) to the current page.
+
+        :param state: Dictionary with keys 'localStorage', 'sessionStorage', 'cookies'
+        """
+        if not self.page:
+            return
+
+        try:
+            # Restore localStorage
+            local_storage = state.get("localStorage", {})
+            if local_storage:
+                await self.page.evaluate(
+                    """(items) => {
+                        localStorage.clear();
+                        for (const [key, value] of Object.entries(items)) {
+                            localStorage.setItem(key, value);
+                        }
+                    }""",
+                    local_storage,
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("restore_state", f"Failed to restore localStorage: {exc}")
+
+        try:
+            # Restore sessionStorage
+            session_storage = state.get("sessionStorage", {})
+            if session_storage:
+                await self.page.evaluate(
+                    """(items) => {
+                        sessionStorage.clear();
+                        for (const [key, value] of Object.entries(items)) {
+                            sessionStorage.setItem(key, value);
+                        }
+                    }""",
+                    session_storage,
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("restore_state", f"Failed to restore sessionStorage: {exc}")
+
+        try:
+            # Restore cookies
+            cookies = state.get("cookies", [])
+            if cookies:
+                await self.page.context.add_cookies(cookies)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._logger.log_warning("restore_state", f"Failed to restore cookies: {exc}")
+
+    # ------------------------------------------------------------------
     # Session runner
     # ------------------------------------------------------------------
 
@@ -90,7 +198,10 @@ class Automator:
         self._logger.log_debug("", f"Steps: {[x.sub_steps for x in session.steps]}")
         if session.headers:
             await self.page.set_extra_http_headers(session.headers)
-        await self.page.goto(session.url)
+
+        # Skip navigation if this test has dependencies (page is already at the right location)
+        if not session.dependency_results:
+            await self.page.goto(session.url)
 
         failed = False
         for step in session.steps:
@@ -742,19 +853,16 @@ class Automator:
                 self._logger.log_perception(step.id, step.expectation, result)
 
                 match_found = False
-                if result.get("top_matches") or result.get("salience", 0) > 0.7:
-                    match_found = True
-                else:
-                    q = step.expectation.lower()
-                    for el in result.get("elements", []):
-                        text = (el.get("placeholder") or el.get("text", "")).lower()
-                        label = el.get("label", "").lower()
-                        name = el.get("name", "").lower()
-                        if (q in text or q in label or q in name) or any(
-                            word in text or word in label or word in name for word in q.split() if len(word) > 3
-                        ):
-                            match_found = True
-                            break
+                q = step.expectation.lower()
+                for el in result.get("elements", []):
+                    text = (el.get("placeholder") or el.get("text", "")).lower()
+                    label = el.get("label", "").lower()
+                    name = el.get("name", "").lower()
+                    if (q in text or q in label or q in name) or any(
+                        word in text or word in label or word in name for word in q.split() if len(word) > 3
+                    ):
+                        match_found = True
+                        break
 
                 if match_found:
                     step.screenshot_after = path

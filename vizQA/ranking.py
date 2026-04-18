@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from vizQA.config import CONFIG
+from vizQA.minilm import MiniLM
+
 
 # pylint: disable=too-few-public-methods
 class MetadataGenerator:
@@ -193,11 +196,52 @@ class RankingEngine:
     Orchestrates the multi-phase ranking pipeline.
     """
 
-    def __init__(self, minilm: Optional[Any] = None):
-        self.minilm = minilm
+    def __init__(self, minilm: Optional[MiniLM] = None):
+        self.minilm: MiniLM = minilm
         self.reranker = SemanticReRanker(minilm) if minilm else None
         self.salience_scorer = SalienceScorer()
         self.quote_scorer = QuoteScorer()
+
+    def _best_boolean_dense_score(self, query: str, label: str) -> float:
+        """Scores a label against a boolean query, using OR as union and AND as intersection."""
+        if not self.minilm or not label:
+            return 0.0
+
+        label_vec = self.minilm.encode(label)
+        best_score = 0.0
+        for group in self.minilm.split_boolean_query(query):
+            term_scores = []
+            for term in group:
+                term_vec = self.minilm.encode(self.minilm.normalize_boolean_term(term))
+                term_scores.append(max(0, self.minilm.cosine_similarity(term_vec, label_vec)))
+            if term_scores:
+                best_score = max(best_score, min(term_scores))
+        return best_score
+
+    def _best_boolean_context_score(self, query: str, metadata_str: str) -> float:
+        """Scores metadata against a boolean query, mirroring dense retrieval semantics."""
+        if not self.minilm or not metadata_str:
+            return 0.0
+
+        meta_vec = self.minilm.encode(metadata_str)
+        best_score = 0.0
+        for group in self.minilm.split_boolean_query(query):
+            term_scores = []
+            for term in group:
+                term_vec = self.minilm.encode(self.minilm.normalize_boolean_term(term))
+                term_scores.append(max(0, self.minilm.cosine_similarity(term_vec, meta_vec)))
+            if term_scores:
+                best_score = max(best_score, min(term_scores))
+        return best_score
+
+    def _best_boolean_sparse_score(self, query: str, label: str) -> float:
+        """Sparse boolean scoring that mirrors OR/AND behavior for keyword overlap."""
+        best_score = 0.0
+        for group in self.minilm.split_boolean_query(query):
+            term_scores = SparseRanker.score(" ".join(group), [label])
+            if term_scores:
+                best_score = max(best_score, term_scores[0])
+        return best_score
 
     # pylint: disable=too-many-locals
     def rank(self, query: str, intent: Dict[str, Any], elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -236,30 +280,21 @@ class RankingEngine:
         scores = np.zeros(len(elements))
 
         if self.minilm:
-            # Dense scores on retrieval query
-            q_vec = self.minilm.encode(retrieval_query)
-            c_vec = self.minilm.encode(context_query) if context_query != retrieval_query else q_vec
-
             for i, label in enumerate(labels):
-                if label:
-                    l_vec = self.minilm.encode(label)
-                    # Dense similarity mapped to [0, 1] for stability
-                    sim = self.minilm.cosine_similarity(q_vec, l_vec)
-                    scores[i] += max(0, sim)
+                scores[i] += self._best_boolean_dense_score(retrieval_query, label)
 
             # 3. Phase 2: Context Re-ranking
             # Use context_query against metadata
             for i, meta_str in enumerate(metadata_strs):
                 if meta_str:
-                    context_sim = self.reranker.calculate_context_score(c_vec, meta_str)
+                    context_sim = self._best_boolean_context_score(context_query, meta_str)
                     # Apply context multiplier (up to 2.0x)
                     multiplier = 1.0 + max(0, context_sim)
                     scores[i] *= multiplier
 
         # Sparse scores (Keyword overlap) always added to ensure hits on partial/keyword matches
-        sparse_scores = SparseRanker.score(retrieval_query, labels)
-        for i, s in enumerate(sparse_scores):
-            scores[i] += s * 0.5
+        for i, label in enumerate(labels):
+            scores[i] += self._best_boolean_sparse_score(retrieval_query, label) * 0.5
 
         # 4. Phase 3: Modular Heuristics
         for i, el in enumerate(elements):
@@ -283,7 +318,7 @@ class RankingEngine:
 
         # Pruning: use a stricter threshold than just > 0 to avoid false positives
         # especially in verification tasks where we want high confidence.
-        min_prune_threshold = intent.get("threshold", 0.4)
+        min_prune_threshold = intent.get("threshold", CONFIG.semantic_match_threshold)
         final_elements = [el for el in scored_elements if el["_ranking_score"] > min_prune_threshold]
 
         return final_elements

@@ -1,0 +1,15 @@
+name: "Dependency Access Request"
+url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+description: "Branches from the authenticated analyst session and creates a manager approval request."
+
+requires:
+  - dependency_login_mfa
+
+artifacts:
+  requested_role: "Admin Console Access"
+
+steps:
+  - action: "Click the 'Access Requests' navigation button"
+    expect: "The 'Access Requests' view should load"
+  - action: "Click the 'Request Admin Console Access' button"
+    expect: "A success banner should confirm that an access request for {requested_role} is pending manager approval"

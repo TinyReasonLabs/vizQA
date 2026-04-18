@@ -1,0 +1,14 @@
+name: "Dependency Manager Approval"
+url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+description: "Combines role elevation and a previously submitted access request to verify branching dependencies."
+
+requires:
+  - dependency_role_elevation
+  - dependency_access_request
+
+artifacts:
+  approval_status: "approved"
+
+steps:
+  - action: "Click the 'Approve Latest Request' button"
+    expect: "A success banner should confirm that the latest access request was {approval_status}"
