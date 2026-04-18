@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vizQA.app.cli import _count_top_level_results, run_single_test
+from vizQA.app.cli import _clean_run_artifacts, _collect_involved_test_stems, _count_top_level_results, run_single_test
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 
 
@@ -211,3 +211,56 @@ def test_count_top_level_results_excludes_dependency_sessions():
 
     assert passed == 1
     assert failed == 0
+
+
+def test_collect_involved_test_stems_includes_dependencies(tmp_path):
+    main_test = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+requires:
+  - login
+steps: []
+""".strip(),
+    )
+    _make_test_file(
+        tmp_path,
+        "login",
+        """
+name: "Login"
+url: "http://example.com/login"
+steps: []
+""".strip(),
+    )
+
+    stems = _collect_involved_test_stems([main_test])
+
+    assert stems == {"main", "login"}
+
+
+def test_clean_run_artifacts_removes_only_involved_test_files(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / ".vizQA"
+    browser_state_dir = artifact_dir / "browser_states"
+    browser_state_dir.mkdir(parents=True)
+
+    (artifact_dir / "main_step_before.jpg").write_text("old", encoding="utf-8")
+    (artifact_dir / "login_step_verify.jpg").write_text("old", encoding="utf-8")
+    (artifact_dir / "other_step_before.jpg").write_text("keep", encoding="utf-8")
+    (browser_state_dir / "main.json").write_text("{}", encoding="utf-8")
+    (browser_state_dir / "other.json").write_text("{}", encoding="utf-8")
+    (artifact_dir / "run_20240101_010101.log").write_text("old log", encoding="utf-8")
+
+    monkeypatch.setattr("vizQA.app.cli._ARTIFACT_DIR", artifact_dir)
+    monkeypatch.setattr("vizQA.app.cli.BrowserStateCache.CACHE_DIR", browser_state_dir)
+
+    deleted = _clean_run_artifacts({"main", "login"})
+
+    assert deleted == {"screenshots": 2, "browser_states": 1, "logs": 1}
+    assert not (artifact_dir / "main_step_before.jpg").exists()
+    assert not (artifact_dir / "login_step_verify.jpg").exists()
+    assert not (browser_state_dir / "main.json").exists()
+    assert not (artifact_dir / "run_20240101_010101.log").exists()
+    assert (artifact_dir / "other_step_before.jpg").exists()
+    assert (browser_state_dir / "other.json").exists()

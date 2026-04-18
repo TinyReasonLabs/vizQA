@@ -8,7 +8,7 @@ import tomllib
 import traceback
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import click
 import yaml
@@ -32,6 +32,7 @@ from vizQA.rendering import (
 from vizQA.utils import BrowserStateCache, LineLoader
 
 console = Console(highlight=False)
+_ARTIFACT_DIR = Path(".vizQA")
 
 
 def discover_test_files(paths: List[str]) -> List[Path]:
@@ -196,6 +197,49 @@ def _resolve_dependencies(test_path: Path) -> List[Path]:
             console.print(f"[dim]{err.internal_detail}[/]")
         raise
     return dependency_paths
+
+
+def _collect_involved_test_stems(test_files: List[Path]) -> Set[str]:
+    """
+    Collect all test stems that may produce artifacts in this run.
+
+    Includes top-level tests plus any resolved dependencies.
+    """
+    stems = {test_path.stem for test_path in test_files}
+    for test_path in test_files:
+        for dependency_path in _resolve_dependencies(test_path):
+            stems.add(dependency_path.stem)
+    return stems
+
+
+def _clean_run_artifacts(test_stems: Set[str]) -> Dict[str, int]:
+    """
+    Remove stale screenshots, related browser-state caches, and prior run logs.
+
+    Screenshot cleanup is scoped to the tests involved in the current run so
+    unrelated artifacts remain available for debugging.
+    """
+    deleted = {"screenshots": 0, "browser_states": 0, "logs": 0}
+    if not _ARTIFACT_DIR.exists():
+        return deleted
+
+    for stem in test_stems:
+        for screenshot_path in _ARTIFACT_DIR.glob(f"{stem}_*.jpg"):
+            if screenshot_path.is_file():
+                screenshot_path.unlink()
+                deleted["screenshots"] += 1
+
+        cache_path = BrowserStateCache.CACHE_DIR / f"{stem}.json"
+        if cache_path.exists():
+            cache_path.unlink()
+            deleted["browser_states"] += 1
+
+    for log_path in _ARTIFACT_DIR.glob("run_*.log"):
+        if log_path.is_file():
+            log_path.unlink()
+            deleted["logs"] += 1
+
+    return deleted
 
 
 async def _run_single_dependency(
@@ -489,6 +533,17 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
     if not test_files:
         console.print("[yellow]No test files found.[/]")
         return
+
+    involved_test_stems = _collect_involved_test_stems(test_files)
+    cleanup_counts = _clean_run_artifacts(involved_test_stems)
+
+    if any(cleanup_counts.values()):
+        console.print(
+            "[dim]Cleaned "
+            f"{cleanup_counts['screenshots']} screenshots, "
+            f"{cleanup_counts['browser_states']} browser states, "
+            f"{cleanup_counts['logs']} old run logs[/]"
+        )
 
     async def main():
         client = PerceptionClient()
