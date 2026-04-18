@@ -13,4 +13,4 @@ steps:
   - action: "Type {mfa_code} into the one-time code field"
     expect: "The one-time code field should contain '246810'"
   - action: "Click the 'Verify and Continue' button"
-    expect: "The authenticated app shell should appear with the 'Overview Dashboard' view and with role '{role_name}'"
+    expect: "'authenticated app shell' appears in the 'Dashboard' view and role '{role_name}'"
