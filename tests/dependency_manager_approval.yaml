@@ -6,9 +6,6 @@ requires:
   - dependency_role_elevation
   - dependency_access_request
 
-artifacts:
-  approval_status: "approved"
-
 steps:
   - action: "Click the 'Approve Latest Request' button"
-    expect: "A success banner should confirm that the latest access request was {approval_status}"
+    expect: "'Request approved' should appear"

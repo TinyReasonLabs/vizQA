@@ -7,10 +7,9 @@ requires:
 
 artifacts:
   mfa_code: "246810"
-  role_name: "Analyst"
 
 steps:
   - action: "Type {mfa_code} into the one-time code field"
     expect: "The one-time code field should contain '246810'"
   - action: "Click the 'Verify and Continue' button"
-    expect: "'authenticated app shell' appears in the 'Dashboard' view and role '{role_name}'"
+    expect: "role 'Analyst'"

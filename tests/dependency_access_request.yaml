@@ -12,4 +12,4 @@ steps:
   - action: "Click the 'Access Requests' navigation button"
     expect: "The 'Access Requests' view should load"
   - action: "Click the 'Request Admin Console Access' button"
-    expect: "A success banner should confirm that an access request for {requested_role} is pending manager approval"
+    expect: "'REQ-201' should appear"

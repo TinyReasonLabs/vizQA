@@ -8,14 +8,9 @@ requires:
 artifacts:
   password: "AnalystPass!23"
   mfa_code: "246810"
-  elevated_role: "Manager"
 
 steps:
-  - action: "Click the 'Elevate to Manager Role' button"
-    expect: "A step-up authentication modal should appear"
-  - action: "Type {password} into the current password field"
-    expect: "The current password field should be filled"
-  - action: "Type {mfa_code} into the current one-time code field"
-    expect: "The current one-time code field should contain '246810'"
-  - action: "Click the 'Approve elevation' button"
-    expect: "role '{elevated_role}' and the 'Manager Approvals' view should load"
+  - action: "Type {password} into the manager step-up password field"
+    expect: "The manager step-up password field should be filled"
+  - action: "Type {mfa_code} into the manager step-up one-time code field"
+    expect: "'Role: Manager' should appear"

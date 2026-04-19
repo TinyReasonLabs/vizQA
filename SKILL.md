@@ -137,3 +137,13 @@ For quoted-element issues, compare the exact quoted string in the YAML against t
 - If a dependent test starts on the wrong screen, try `--clean-cache` and inspect `.vizQA/browser_states/`.
 - If an expectation is too broad, rewrite it to mention the visible thing that should appear.
 - If a step fails after a click, look at the action screenshot and the following verify screenshot together.
+
+## Agentic Usage Notes
+
+- Debug dependency chains one YAML at a time first, then rerun the top-level test after each fix.
+- Prefer literal on-screen copy in `expect` steps; when a test is brittle, replace `{artifacts}` in expectations with the exact visible text.
+- If a flow is flaky around modals or transient banners, prefer stable page state checks such as route chips, role chips, headings, or queue/table rows.
+- Use `.vizQA/*_verify.jpg` and `.vizQA/*_before.jpg` to decide whether the page is wrong or the YAML wording is wrong before touching runner code.
+- If the UI looks correct in the screenshot but the step still fails, tighten the YAML to the exact visible phrase instead of broad "should load" or "should appear" wording.
+- When a setup flow keeps misgrounding on a control, simplify the fixture page so the target state is more direct and visually distinct.
+- If multiple steps suddenly fail with connection errors, check the UI-Atlas health endpoint before debugging the YAML.

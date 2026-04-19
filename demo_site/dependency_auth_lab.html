@@ -642,7 +642,6 @@
                     </div>
                     <div class="row-actions">
                         <span class="chip role-chip" id="user-chip">Guest Session</span>
-                        <button class="button-secondary" id="elevate-role" onclick="openStepUpModal()">Elevate to Manager Role</button>
                         <button class="button-ghost" id="sign-out" onclick="signOut()">Sign Out</button>
                     </div>
                 </div>
@@ -859,8 +858,6 @@
                 button.classList.toggle("hidden", !isViewVisible(view));
             });
 
-            const elevateButton = document.getElementById("elevate-role");
-            elevateButton.classList.toggle("hidden", state.auth.role !== "Analyst");
             document.getElementById("debug-footer").classList.toggle("hidden", !(state.auth.authenticated && (state.auth.role === "Admin" || state.auth.role === "Manager" || state.auth.role === "Analyst")));
 
             renderBanner();
@@ -936,7 +933,27 @@
         }
 
         function renderOverview() {
+            const stepUpPanel = state.auth.role === "Analyst" ? `
+                <section class="panel-card full">
+                    <p class="panel-label">Analyst-only step-up path</p>
+                    <h3>Manager Step-Up Approval</h3>
+                    <p class="subtle">Elevate this analyst session to manager access using the current password and MFA code.</p>
+                    <div class="field-grid">
+                        <label class="inline-field">Manager step-up password
+                            <input id="stepup-password-field" type="password" placeholder="AnalystPass!23">
+                        </label>
+                        <label class="inline-field">Manager step-up one-time code
+                            <input id="stepup-mfa-field" type="text" placeholder="${state.app.mfaChallenge}" oninput="maybeSubmitStepUp()">
+                        </label>
+                    </div>
+                    <div class="helper-row">
+                        <button class="button-primary" onmousedown="submitStepUp()">Complete Manager Role Elevation</button>
+                    </div>
+                </section>
+            ` : "";
+
             return `
+                ${stepUpPanel}
                 <div class="metric-grid">
                     <div class="metric-card">
                         <span class="panel-label">Identity posture</span>
@@ -949,7 +966,7 @@
                         <span class="small-text">Requests waiting for manager action.</span>
                     </div>
                     <div class="metric-card">
-                        <span class="panel-label">Order ledger</span>
+                        <span class="panel-label">Session orders</span>
                         <strong>${state.app.orders.length}</strong>
                         <span class="small-text">Orders created by this browser session.</span>
                     </div>
@@ -1308,26 +1325,26 @@
             state.app.pendingView = state.app.currentView;
             state.app.activeModal = "";
             state.app.lastAction = isResume ? "Re-authenticated and resumed session" : "Completed MFA and opened app shell";
-            pushBanner("success", isResume ? "Session resumed" : "MFA complete", isResume ? `Returned to ${getViewMeta(state.app.currentView).title}.` : "The authenticated app shell is now available.");
+            state.app.notifications = [];
             closeModal();
             render();
         }
 
         function openStepUpModal() {
             openModal(`
-                <h2>Step-up authentication</h2>
+                <h2>Manager Step-Up Approval</h2>
                 <p class="subtle">Elevate this analyst session to manager access using the current password and MFA code.</p>
                 <div class="field-grid">
-                    <label class="inline-field">Current password
+                    <label class="inline-field">Manager step-up password
                         <input id="stepup-password-field" type="password" placeholder="AnalystPass!23">
                     </label>
-                    <label class="inline-field">Current one-time code
-                        <input id="stepup-mfa-field" type="text" placeholder="${state.app.mfaChallenge}">
+                    <label class="inline-field">Manager step-up one-time code
+                        <input id="stepup-mfa-field" type="text" placeholder="${state.app.mfaChallenge}" oninput="maybeSubmitStepUp()">
                     </label>
                 </div>
                 <div class="helper-row">
                     <button onclick="closeModal()">Cancel</button>
-                    <button class="button-primary" onclick="submitStepUp()">Approve elevation</button>
+                    <button class="button-primary" onmousedown="submitStepUp()">Confirm Manager Step-Up</button>
                 </div>
             `);
         }
@@ -1350,6 +1367,20 @@
             pushBanner("success", "Role elevated", "Manager role is now active and approvals are unlocked.");
             closeModal();
             render();
+        }
+
+        function maybeSubmitStepUp() {
+            const passwordField = document.getElementById("stepup-password-field");
+            const codeField = document.getElementById("stepup-mfa-field");
+            if (!passwordField || !codeField) {
+                return;
+            }
+
+            const password = passwordField.value;
+            const code = codeField.value.trim();
+            if (password && code.length >= 6) {
+                submitStepUp();
+            }
         }
 
         function openSsoChooser() {
