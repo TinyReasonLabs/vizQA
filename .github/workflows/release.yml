@@ -63,7 +63,7 @@ jobs:
           PACKAGE_VERSION: ${{ github.event.inputs.version }}
         run: |
           poetry run pip install -U "huggingface_hub[cli]" packaging
-          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$PACKAGE_VERSION")
+          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.app.support.hf_revision "$PACKAGE_VERSION")
           echo "Using HF weights revision: $REV"
           poetry run hf download alieissa/minilm-ui \
             --revision "$REV" \

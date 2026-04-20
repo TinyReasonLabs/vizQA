@@ -40,8 +40,8 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          V=$(poetry run python -m vizQA.merged_tag_version HEAD)
-          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.hf_revision "$V")
+          V=$(poetry run python -m vizQA.app.support.merged_tag_version HEAD)
+          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.app.support.hf_revision "$V")
           echo "package_version=$V" >> "$GITHUB_OUTPUT"
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
           echo "PR head: max merged tag version=$V -> HF revision=$REV"
@@ -88,8 +88,8 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          V=$(poetry run python -m vizQA.merged_tag_version HEAD "${{ github.workspace }}/base_repo")
-          REV=$(PYTHONPATH="${{ github.workspace }}" poetry run python -m vizQA.hf_revision "$V")
+          V=$(poetry run python -m vizQA.app.support.merged_tag_version HEAD "${{ github.workspace }}/base_repo")
+          REV=$(PYTHONPATH="${{ github.workspace }}" poetry run python -m vizQA.app.support.hf_revision "$V")
           echo "package_version=$V" >> "$GITHUB_OUTPUT"
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
           echo "Base branch: max merged tag version=$V -> HF revision=$REV"
