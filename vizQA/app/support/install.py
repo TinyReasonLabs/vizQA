@@ -31,11 +31,9 @@ from rich.progress import (
 )
 
 from vizQA.app.support.hf_revision import REPO_ID, resolve_weights_revision
+from vizQA.app.support.weights import get_weights_dir, write_weights_metadata
 
 console = Console()
-
-WEIGHTS_REL_PATH = Path("weights")
-
 
 # ---------------------------------------------------------------------------
 # Progress helpers
@@ -167,7 +165,7 @@ def get_package_version() -> str:
         pass
 
     try:
-        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
         if pyproject.exists():
             with open(pyproject, "rb") as fh:
                 return tomllib.load(fh)["project"]["version"]
@@ -231,7 +229,7 @@ async def run_install(token: Optional[str] = None) -> None:
     pkg_version = get_package_version()
     console.print(f"\n[bold cyan]Initializing vizQA v{pkg_version} environment…[/]\n")
 
-    weights_dir = Path(__file__).resolve().parent / WEIGHTS_REL_PATH
+    weights_dir = get_weights_dir()
 
     tag = await asyncio.to_thread(resolve_weights_revision, pkg_version, token=token)
 
@@ -267,4 +265,5 @@ async def run_install(token: Optional[str] = None) -> None:
             console.print(f"[red]  ✘ {msg}[/]")
         console.print("\n[bold red]Installation completed with errors.[/]\n")
     else:
+        write_weights_metadata(weights_dir, package_version=pkg_version, revision=tag)
         console.print("\n[bold green]vizQA is ready to use![/]\n")

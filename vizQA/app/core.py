@@ -21,6 +21,7 @@ from vizQA.app.exceptions import (
 )
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.app.support.weights import get_model_dir
 from vizQA.reasoning import MiniLM, SemanticParser
 
 
@@ -46,7 +47,7 @@ class Automator:
         self.page: Optional[Page] = None
         self._logger = get_logger()
 
-        model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+        model_dir = os.fspath(get_model_dir())
         try:
             self.minilm: Optional[MiniLM] = MiniLM(model_dir)
         except (FileNotFoundError, RuntimeError):
