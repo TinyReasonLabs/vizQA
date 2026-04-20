@@ -7,6 +7,8 @@ import configparser
 import tomllib
 import traceback
 import uuid
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -21,6 +23,7 @@ from vizQA.app.core import Automator
 from vizQA.app.exceptions import TestDefinitionError, UserFacingException
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
+from vizQA.app.support.weights import inspect_weight_state
 from vizQA.planning import DependencyResolver, StepPlanner
 from vizQA.rendering import (
     STEP_STATUS_STYLES,
@@ -33,6 +36,70 @@ from vizQA.utils import BrowserStateCache, LineLoader
 
 console = Console(highlight=False)
 _ARTIFACT_DIR = Path(".vizQA")
+
+
+def get_package_version() -> str:
+    """Return the installed vizQA version, with a repo fallback for local runs."""
+    try:
+        return pkg_version("vizQA")
+    except PackageNotFoundError:
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        with open(pyproject, "rb") as fh:
+            return tomllib.load(fh)["project"]["version"]
+
+
+def _format_weights_version_line(state) -> str:
+    if state.installed_revision is None:
+        return "weights: missing"
+
+    details = [state.status]
+    if state.status != "aligned":
+        details.append(f"expected {state.expected_revision}")
+    if state.assumed_revision:
+        details.append("assumed from missing metadata")
+    return f"weights: {state.installed_revision} ({'; '.join(details)})"
+
+
+def _show_version(ctx: click.Context, _param: click.Option, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+
+    package_version = get_package_version()
+    state = inspect_weight_state(package_version=package_version)
+    click.echo(f"vizQA {package_version}")
+    click.echo(_format_weights_version_line(state))
+    ctx.exit()
+
+
+def _warn_about_weight_state() -> None:
+    state = inspect_weight_state(package_version=get_package_version())
+
+    if state.installed_revision is None:
+        console.print(
+            "[yellow]Warning:[/] model weights were not found in `vizQA/weights/minilm`. "
+            "Run `vizqa install` to install them."
+        )
+        return
+
+    if state.assumed_revision:
+        console.print(
+            "[yellow]Warning:[/] assuming installed weights version "
+            f"{state.installed_revision} because metadata was not found in `vizQA/weights`. "
+            "Run `vizqa install` to refresh the metadata."
+        )
+
+    if state.status == "older than expected":
+        console.print(
+            "[yellow]Warning:[/] installed model weights are older than expected "
+            f"(installed {state.installed_revision}; expected {state.expected_revision} for vizQA "
+            f"{state.package_version}). Run `vizqa install` to align them."
+        )
+    elif state.status == "newer than expected":
+        console.print(
+            "[yellow]Warning:[/] installed model weights are newer than expected "
+            f"(installed {state.installed_revision}; expected {state.expected_revision} for vizQA "
+            f"{state.package_version}). Run `vizqa install` to align them."
+        )
 
 
 def discover_test_files(paths: List[str]) -> List[Path]:
@@ -481,7 +548,14 @@ class DefaultGroup(click.Group):
 
 
 @click.group(cls=DefaultGroup, default_command="run", invoke_without_command=True)
-@click.version_option()
+@click.option(
+    "--version",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
+    callback=_show_version,
+    help="Show the vizQA package version and installed weights version.",
+)
 @click.pass_context
 def cli(ctx):
     """
@@ -522,6 +596,8 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
         ctx = click.get_current_context()
         click.echo(ctx.get_help())
         return
+
+    _warn_about_weight_state()
 
     if clean_cache:
         count = BrowserStateCache.clean()

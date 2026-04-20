@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Community docs: Code of Conduct, security policy, changelog, and pull request template.
+- Weight metadata tracking under `vizQA/weights`, version-aware `vizqa --version` output, and non-blocking warnings when installed model weights do not match the package's expected weights revision.
+- Test dependencies via `requires`, including dependency graph resolution, circular-dependency and missing-dependency validation, dependency-first execution, dependency skip behavior on failure, artifact inheritance, browser-state reuse, and top-level-only result summaries.
+- Dependency-system documentation and a general YAML test authoring guide under `docs/`.
+- A local dependency auth lab fixture plus example dependency test flows covering password login, MFA, role elevation, checkout, returns, approvals, session resume, and simulated SSO.
+
+### Changed
+
+- CLI runs now clear stale screenshots and browser-state caches for the requested tests and their dependency chain before execution, reducing artifact carryover between runs.
+- CLI cleanup summaries are now shown only in verbose mode to keep default test output quieter.
+- Dependency-related reporting is clearer during execution, including skip messaging and cleaner output for dependency-caused failures.
 
 ## [0.1.0] - 2026-04-04
 
