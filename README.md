@@ -62,6 +62,14 @@ pip install vizqa
 vizqa install
 ```
 
+`vizqa install` installs Playwright browser binaries and model weights under `vizQA/weights`, and refreshes the local weights metadata used by the CLI.
+
+You can inspect both the package version and installed weights revision with:
+
+```bash
+vizqa --version
+```
+
 ---
 
 ## 📝 Usage
@@ -101,7 +109,6 @@ vizqa run tests/
 | `-v, --verbose` | Increase output verbosity (-v steps, -vv timing/detail). | `0` |
 | `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
 
-**`vizqa install`** installs Playwright browser binaries and model weights in one step.
 ---
 
 ## Configuration
