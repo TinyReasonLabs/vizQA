@@ -30,7 +30,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from vizQA.hf_revision import REPO_ID, resolve_weights_revision
+from vizQA.app.support.hf_revision import REPO_ID, resolve_weights_revision
 
 console = Console()
 

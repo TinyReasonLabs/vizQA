@@ -5,7 +5,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![Code Coverage](https://img.shields.io/badge/coverage-55%25-orange.svg)]()
 
-**vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA allows you to write tests in natural language without brittle CSS selectors or XPath—all running efficiently on **CPU** without the need for LLMs.
+**vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA lets you write tests in natural language without brittle CSS selectors or XPath. It is not an LLM-based test runner: execution is rule-driven, CPU-friendly, and designed for repeatable, idempotent regression.
 
 > [!IMPORTANT]
 > **vizQA is currently in its early alpha stage.** We are actively developing and refining the framework. Feedback, bug reports, and contributions are highly encouraged and welcome! Please review our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
@@ -28,9 +28,12 @@ Traditional UI testing relies on the underlying DOM structure. When a developer 
 ## Key Features
 
 - **Natural Language Steps**: Define your test flow in simple YAML instructions.
+- **Not LLM-Based**: Uses deterministic parsing, semantic matching, and ranking rather than live LLM calls during test execution.
 - **Advanced Interactions**: Supports `click`, `hover`, `type`, `scroll`, and even `drag and drop`.
 - **Visual Assertions**: Verify UI state, colors, positions, and visibility.
 - **Artifact Variables**: Load strings, file contents, or paths as variables (e.g., `{user_name}`) for dynamic test data.
+- **Test Dependencies**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
+- **Repeatable Test Runs**: Optimized for stable, idempotent YAML test cases that can be run consistently in CI and local workflows.
 - **Lightweight & Fast**: CPU-only execution with a minimal **~250 MB** memory footprint and sub-second latency.
 ---
 
@@ -68,15 +71,16 @@ vizqa install
 ```yaml
 name: "User Login Flow"
 url: "https://example.com/login"
-description: "Verify that a user can log in with valid credentials."
 
 steps:
   - action: "Type 'admin' into the username field"
-    expect: "The username field should contain 'admin'"
+    expect: "Username field contains 'admin'"
   - action: "Type 'password123' into the password field"
   - action: "Click the 'Login' button"
-    expect: "Should redirect to the dashboard and show 'Welcome back!'"
+    expect: "dashboard"
 ```
+
+For the full YAML format and authoring guide, see [docs/test_cases.md](docs/test_cases.md).
 
 ### Run the Test
 
@@ -97,8 +101,7 @@ vizqa run tests/
 | `-v, --verbose` | Increase output verbosity (-v steps, -vv timing/detail). | `0` |
 | `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
 
-**`vizqa install`** installs Playwright browser binaries and model weights in one step. Use **`--token`** if Hugging Face credentials are required for your weights source.
-
+**`vizqa install`** installs Playwright browser binaries and model weights in one step.
 ---
 
 ## Configuration

@@ -2,14 +2,13 @@
 Planner module for decomposing high-level instructions into atomic steps.
 """
 
-import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vizQA.exceptions import TestDefinitionError
-from vizQA.logger import get_logger
-from vizQA.memory import StepStatus, TestStep
-from vizQA.minilm import MiniLM
-from vizQA.parser import SemanticParser
+from vizQA.app.exceptions import TestDefinitionError
+from vizQA.app.logger import get_logger
+from vizQA.app.memory import StepStatus, TestStep
+from vizQA.reasoning import MiniLM, SemanticParser
 
 
 class StepPlanner:  # pylint: disable=too-few-public-methods
@@ -38,10 +37,9 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             # Load MiniLM if possible
             self.minilm = None
             if model_name == "minilm":
-                # Reuse model_dir if provided, otherwise default
-                model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+                model_dir = Path(__file__).resolve().parents[1] / "weights" / "minilm"
                 try:
-                    self.minilm = MiniLM(model_dir)
+                    self.minilm = MiniLM(str(model_dir))
                     # Synergize with parser
                     self.parser.minilm = self.minilm
                 except (FileNotFoundError, RuntimeError, ImportError) as e:

@@ -13,8 +13,9 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-from vizQA.logger import get_logger
-from vizQA.parser import ParserVocabulary
+from vizQA.app.logger import get_logger
+from vizQA.reasoning.query_semantics import lexical_term_score, normalize_boolean_term, split_boolean_query
+from vizQA.reasoning.vocabulary import ParserVocabulary
 
 
 @dataclass
@@ -93,6 +94,25 @@ class MiniLM:
         "element comes into view",
         "element is in view",
     ]
+    _NEGATION_REGEX = re.compile(
+        (
+            r"\b("
+            r"not|no longer|disappear(?:s|ed)?|gone|invisible|absent|done|finished|"
+            r"closed?|removed|vanish(?:es|ed)?|collapse(?:s|d)?|dismiss(?:ed|es)?|"
+            r"hidden|out of view|not in view|not showing anymore"
+            r")\b"
+        ),
+        re.IGNORECASE,
+    )
+    _POSITIVE_REGEX = re.compile(
+        (
+            r"\b("
+            r"appear(?:s|ed)?|visible|present|displayed|shown|shows up|opens?|"
+            r"rendered|stays?|becomes visible|comes into view|in view"
+            r")\b"
+        ),
+        re.IGNORECASE,
+    )
 
     _ACTION_ANCHOR_GROUPS = {
         "click": [
@@ -207,6 +227,10 @@ class MiniLM:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
+    def split_boolean_query(self, query: str) -> List[List[str]]:
+        """Splits a query into OR groups, each containing AND clauses, while preserving quoted text."""
+        return split_boolean_query(query)
+
     def best_anchor_similarity_centroid(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """
         Returns cosine similarity between vec and the centroid of anchor_matrix
@@ -270,6 +294,23 @@ class MiniLM:
             return best_group
         return None
 
+    def _strip_quoted_content(self, text: str) -> str:
+        """Removes quoted content so regex intent checks ignore literal UI copy."""
+        return re.sub(r"(['\"])(.*?)\1", " ", text)
+
+    def normalize_boolean_term(self, term: str) -> str:
+        """Normalizes a boolean clause term before embedding."""
+        return normalize_boolean_term(term)
+
+    def _term_matches_candidate(self, term: str, candidate: str, candidate_vec: np.ndarray, threshold: float) -> bool:
+        """Returns whether a boolean term matches a candidate lexically or semantically."""
+        lexical_score = lexical_term_score(term, candidate)
+        if lexical_score > 0.0:
+            return True
+
+        term_vec = self.encode(self.normalize_boolean_term(term))
+        return self.cosine_similarity(term_vec, candidate_vec) >= threshold
+
     def is_negation(self, text: str, threshold: float = 0.4, logit_threshold: float = 0.7, delta: float = 0.02) -> bool:
         """
         Returns True if *text* semantically resembles a negation intent.
@@ -277,6 +318,13 @@ class MiniLM:
         This compares similarity against negation anchors and ensures the
         negation match is stronger than the positive match to avoid false positives.
         """
+        unquoted = self._strip_quoted_content(text)
+
+        if self._NEGATION_REGEX.search(unquoted):
+            return True
+        if self._POSITIVE_REGEX.search(unquoted):
+            return False
+
         vec = self.encode(text)
         sim_neg = self.best_anchor_similarity(vec, self._intent_anchor_groups["negation"])
         sim_pos = self.best_anchor_similarity(vec, self._intent_anchor_groups["positive"])
@@ -305,16 +353,17 @@ class MiniLM:
 
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
-        q_vec = self.encode(query)
-        matched = []
+        query_groups = self.split_boolean_query(query)
+        matched: set[int] = set()
         for i, cand in enumerate(candidates):
             if not cand:
                 continue
-            c_vec = self.encode(cand)
-            sim = self.cosine_similarity(q_vec, c_vec)
-            if sim >= threshold:
-                matched.append(i)
-        return matched
+            cand_vec = self.encode(cand)
+            for group in query_groups:
+                if all(self._term_matches_candidate(term, cand, cand_vec, threshold) for term in group):
+                    matched.add(i)
+                    break
+        return sorted(matched)
 
     def rank_candidates(self, query: str, candidates: List[str], threshold: float = 0.0) -> List[Dict[str, Any]]:
         """
@@ -436,6 +485,24 @@ class MiniLM:
         text = text.replace("press_and_hold", "press and hold")
         return text
 
+    def _sd_split_on_and_preserving_quotes(self, text: str) -> List[str]:
+        """Split on 'and' while keeping quoted phrases intact."""
+        local_quotes: List[str] = []
+
+        def _repl(match):
+            local_quotes.append(match.group(0))
+            return f"__LOCAL_QUOTE_{len(local_quotes)-1}__"
+
+        protected = re.sub(r"(['\"])(.*?)\1", _repl, text)
+        parts = [part.strip() for part in re.split(r"\band\b", protected, flags=re.I)]
+
+        restored_parts = []
+        for part in parts:
+            for i, quote in enumerate(local_quotes):
+                part = part.replace(f"__LOCAL_QUOTE_{i}__", quote)
+            restored_parts.append(part)
+        return restored_parts
+
     def _sd_clean_target(self, text: str) -> str:
         """Removes leading articles and prepositions (the, a, an, over, at, on, in, into, from, of)."""
         clean = re.sub(r"^(the|a|an|over|at|on|in|into|from|of)\s+", "", text, flags=re.I).strip()
@@ -496,22 +563,25 @@ class MiniLM:
         return clauses
 
     def _sd_handle_verify(
-        self, clause: str, real_clause: str, all_steps: List[Dict[str, str]]
+        self, clause: str, quotes: List[str], all_steps: List[Dict[str, str]]
     ) -> Tuple[bool, Optional[str]]:
         """Handles VERIFY patterns. Returns (handled, next_prev_target)."""
-        lower_real = real_clause.lower()
+        lower_clause = clause.lower()
         is_verify = (
             clause.startswith("VERIFY_FLAG ")
-            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_real)
-            or re.search(r"\bshould\b", lower_real)
+            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_clause)
+            or re.search(r"\bshould\b", lower_clause)
         )
         if not is_verify:
             return False, None
 
-        val = re.sub(r"^(VERIFY_FLAG\s+)", "", real_clause)
-        val = re.sub(r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", val, flags=re.I).strip()
+        protected_val = re.sub(r"^(VERIFY_FLAG\s+)", "", clause)
+        protected_val = re.sub(
+            r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", protected_val, flags=re.I
+        ).strip()
         # Split VERIFY on 'and' to emit separate VERIFY steps
-        for vp in re.split(r"\band\b", val, flags=re.I):
+        for vp in re.split(r"\band\b", protected_val, flags=re.I):
+            vp = self._sd_restore(vp, quotes)
             vp = re.sub(r"\s+", " ", vp).strip()
             if vp:
                 all_steps.append({"type": "VERIFY", "value": vp})
@@ -610,7 +680,7 @@ class MiniLM:
 
         # ── Multi-field fallback: "type first name john and last name doe" ──
         restored_target = self._sd_restore(ctx.target_area, ctx.quotes)
-        and_parts = re.split(r"\band\b", restored_target, flags=re.I) if restored_target else []
+        and_parts = self._sd_split_on_and_preserving_quotes(restored_target) if restored_target else []
         if len(and_parts) >= 2:
             return self._sd_handle_multi_field_type(ctx, and_parts)
 
@@ -756,7 +826,7 @@ class MiniLM:
             real_clause = self._sd_restore(clause, quotes)
             lower_real = real_clause.lower()
 
-            handled, nt = self._sd_handle_verify(clause, real_clause, all_steps)
+            handled, nt = self._sd_handle_verify(clause, quotes, all_steps)
             if handled:
                 prev_target = nt
                 continue

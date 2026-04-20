@@ -1,12 +1,6 @@
-"""
-Utility classes for the vizQA package.
-"""
+"""YAML loading helpers."""
 
 import yaml
-
-# ---------------------------------------------------------------------------
-# YAML Line Tracking
-# ---------------------------------------------------------------------------
 
 
 # pylint: disable=too-many-ancestors

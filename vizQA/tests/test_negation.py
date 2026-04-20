@@ -9,7 +9,7 @@ Checks the three required outcomes:
 
 import pytest
 
-from vizQA.parser import SemanticParser
+from vizQA.reasoning import SemanticParser
 
 # ---------------------------------------------------------------------------
 # Mock element sets

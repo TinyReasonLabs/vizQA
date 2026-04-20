@@ -4,3 +4,7 @@ __pycache__
 .env
 vizQA/weights
 .coverage
+.DS_Store
+.codex
+.claude
+.cursor

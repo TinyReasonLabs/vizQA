@@ -1,0 +1,15 @@
+name: "Dependency Login With MFA"
+url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+description: "Completes MFA and lands on the authenticated overview dashboard."
+
+requires:
+  - dependency_login_password
+
+artifacts:
+  mfa_code: "246810"
+
+steps:
+  - action: "Type {mfa_code} into the one-time code field"
+    expect: "The one-time code field should contain '246810'"
+  - action: "Click the 'Verify and Continue' button"
+    expect: "role 'Analyst'"

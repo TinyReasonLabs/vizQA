@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from vizQA.planner import StepPlanner
+from vizQA.planning import StepPlanner
 
 # A comprehensive suite of 50 diverse UI testing instructions to test the AST parser's ability
 # to extract relations (actions -> subjects, states -> subjects) and clean descriptions.
@@ -204,6 +204,10 @@ TEST_CASES = [
         [("FIND", "Submit button"), ("DO", "click")],
     ),
     (
+        "Click the 'Verify and Continue' button",
+        [("FIND", "'Verify and Continue' button"), ("DO", "click")],
+    ),
+    (
         "A red error toast 'Invalid credentials' should appear at the bottom right",
         [("VERIFY", "red error toast 'Invalid credentials' should appear at bottom right")],
     ),
@@ -260,3 +264,32 @@ def test_semantic_parser(planner, instruction, expected_steps):
     assert (
         actual_tuples == expected_tuples
     ), f"expected: {expected_tuples}, actual: {actual_tuples}, instruction: {instruction}"
+
+
+def test_semantic_parser_preserves_quoted_and_in_action_and_expectation(planner):
+    steps = planner.decompose(
+        [
+            {
+                "action": "Click the 'Verify and Continue' button",
+                "expect": (
+                    "The authenticated app shell should appear with the 'Overview Dashboard' view "
+                    "and the role chip should show '{role_name}'"
+                ),
+            }
+        ]
+    )
+
+    actual_tuples = []
+    for sub in steps[0].sub_steps:
+        parts = sub.instruction.split(": ", 1)
+        if len(parts) == 2:
+            actual_tuples.append((parts[0], normalize_text(parts[1])))
+
+    expected_tuples = [
+        ("FIND", normalize_text("'Verify and Continue' button")),
+        ("DO", normalize_text("click")),
+        ("VERIFY", normalize_text("authenticated app shell should appear with the 'Overview Dashboard' view")),
+        ("VERIFY", normalize_text("role chip should show '{role_name}'")),
+    ]
+
+    assert actual_tuples == expected_tuples

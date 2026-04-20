@@ -4,9 +4,9 @@ Looks at every tag merged into the given git ref and returns the **maximum** PEP
 version among tags whose names parse as versions after stripping a leading ``v``.
 If none match, returns ``0.1.0``.
 
-Used by CI via ``python -m vizQA.merged_tag_version``; optional second CLI argument is
-the git working tree (e.g. a ``base_repo`` checkout) so the command can run from the PR
-workspace while inspecting another clone.
+Used by CI via ``python -m vizQA.app.support.merged_tag_version``; optional second CLI
+argument is the git working tree (e.g. a ``base_repo`` checkout) so the command can run
+from the PR workspace while inspecting another clone.
 
 This anchors HF weights to the newest release tag still contained in the branch
 history, without reading ``pyproject.toml`` (which may be bumped on the PR only).

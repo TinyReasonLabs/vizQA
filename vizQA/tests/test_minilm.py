@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def model():
-    from vizQA.minilm import MiniLM  # pylint: disable=import-outside-toplevel
+    from vizQA.reasoning import MiniLM  # pylint: disable=import-outside-toplevel
 
     return MiniLM(MODEL_DIR)
 
@@ -52,6 +52,30 @@ class TestSemanticMatch:
         matched_loose = model.semantic_match("login button", ["login button"], threshold=0.50)
         # High threshold may not match, but loose must
         assert 0 in matched_loose
+
+    def test_or_matches_any_clause(self, model):
+        matched = model.semantic_match("login or cancel", ["login", "cancel", "spinner"])
+        assert set(matched) == {0, 1}
+
+    def test_and_requires_all_clauses(self, model):
+        matched = model.semantic_match(
+            "invalid and credentials", ["invalid credentials", "invalid", "credentials", "spinner"]
+        )
+        assert matched == [0]
+
+    def test_mixed_or_and_respects_grouping(self, model):
+        matched = model.semantic_match(
+            "login or invalid and credentials",
+            ["login", "invalid credentials", "invalid", "credentials", "spinner"],
+        )
+        assert set(matched) == {0, 1}
+
+    def test_quoted_and_is_not_split_inside_phrase(self, model):
+        matched = model.semantic_match(
+            "'Verify and Continue' or resume",
+            ["Verify and Continue", "resume", "Continue", "spinner"],
+        )
+        assert set(matched) == {0, 1}
 
 
 # ---------------------------------------------------------------------------

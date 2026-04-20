@@ -1,0 +1,28 @@
+name: "Dependency SSO Error Recovery"
+url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+description: "Forces the simulated SSO callback into an error state and verifies recovery messaging."
+
+requires:
+  - dependency_sso_simulated
+
+artifacts:
+  username: "analyst.user"
+  password: "AnalystPass!23"
+
+steps:
+  - action: "Click the 'Toggle SSO error' debug button"
+    expect: "A toast should confirm that SSO callback failure was enabled"
+  - action: "Click the 'Sign Out' button"
+    expect: "The public landing page should appear again"
+  - action: "Click the 'Continue with SSO' button"
+    expect: "A 'Select identity provider' modal should appear"
+  - action: "Click the 'Continue with Acme Identity Cloud' button"
+    expect: "A corporate identity provider sign in modal should appear"
+  - action: "Type {username} into the corporate username field"
+    expect: "The corporate username field should contain 'analyst.user'"
+  - action: "Type {password} into the corporate password field"
+    expect: "The corporate password field should be filled"
+  - action: "Click the 'Continue to Consent' button"
+    expect: "A 'Consent required' modal should appear"
+  - action: "Click the 'Approve Consent' button"
+    expect: "An error banner should appear saying that the SSO callback failed"

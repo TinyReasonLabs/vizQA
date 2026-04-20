@@ -1,6 +1,6 @@
 import pytest
 
-from vizQA.parser import SemanticParser
+from vizQA.reasoning import SemanticParser
 
 
 def test_semantic_history_matching():

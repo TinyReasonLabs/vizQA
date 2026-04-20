@@ -2,17 +2,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vizQA.exceptions import TestDefinitionError
-from vizQA.memory import StepStatus
-from vizQA.minilm import MiniLM
-from vizQA.planner import StepPlanner
+from vizQA.app.exceptions import TestDefinitionError
+from vizQA.app.memory import StepStatus
+from vizQA.planning import StepPlanner
+from vizQA.reasoning import MiniLM
 
 
 @pytest.fixture
 def mock_minilm():
     with (
-        patch("vizQA.minilm.ort.InferenceSession") as mock_session,
-        patch("vizQA.minilm.Tokenizer.from_file") as mock_tokenizer,
+        patch("vizQA.reasoning.minilm.ort.InferenceSession") as mock_session,
+        patch("vizQA.reasoning.minilm.Tokenizer.from_file") as mock_tokenizer,
     ):
 
         # Mock tokenizer

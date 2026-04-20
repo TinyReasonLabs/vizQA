@@ -1,0 +1,1726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HelixID Dependency Auth Lab</title>
+    <style>
+        :root {
+            --bg: #f4efe6;
+            --panel: rgba(255, 252, 247, 0.82);
+            --panel-strong: #fffaf2;
+            --text: #1d1a16;
+            --muted: #6f665d;
+            --accent: #c4542f;
+            --accent-strong: #8f3417;
+            --teal: #1f6f78;
+            --green: #28745d;
+            --gold: #b98524;
+            --red: #b44343;
+            --line: rgba(29, 26, 22, 0.12);
+            --shadow: 0 24px 60px rgba(70, 44, 28, 0.16);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Georgia, "Times New Roman", serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(196, 84, 47, 0.14), transparent 28%),
+                radial-gradient(circle at top right, rgba(31, 111, 120, 0.15), transparent 26%),
+                linear-gradient(135deg, #f7f0e2 0%, #f2e8d7 45%, #efe3d0 100%);
+        }
+
+        body.app-shell-open {
+            overflow: hidden;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        button {
+            border: 1px solid transparent;
+            border-radius: 999px;
+            padding: 0.8rem 1.3rem;
+            cursor: pointer;
+            transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.45;
+            transform: none;
+        }
+
+        .button-primary {
+            background: var(--accent);
+            color: #fff8f3;
+            box-shadow: 0 14px 28px rgba(196, 84, 47, 0.22);
+        }
+
+        .button-secondary {
+            background: rgba(255, 255, 255, 0.62);
+            color: var(--text);
+            border-color: var(--line);
+        }
+
+        .button-ghost {
+            background: transparent;
+            color: var(--teal);
+            border-color: rgba(31, 111, 120, 0.25);
+        }
+
+        .layout {
+            padding: 2rem;
+        }
+
+        .hero-shell,
+        .app-shell,
+        .footer-debug {
+            width: min(1180px, calc(100vw - 2.5rem));
+            margin: 0 auto;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.1rem 0 1.6rem;
+        }
+
+        .brand-block h1,
+        .hero-card h2,
+        .panel-card h3,
+        .modal-card h2 {
+            margin: 0;
+            letter-spacing: 0.01em;
+        }
+
+        .brand-block p,
+        .subtle,
+        .panel-label,
+        .meta-row,
+        .small-text {
+            color: var(--muted);
+        }
+
+        .brand-block p {
+            margin: 0.2rem 0 0;
+        }
+
+        .status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 0.7rem;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.55);
+            padding: 0.45rem 0.8rem;
+            border-radius: 999px;
+            font-size: 0.92rem;
+        }
+
+        .chip.role-chip {
+            background: rgba(31, 111, 120, 0.12);
+            color: var(--teal);
+        }
+
+        .chip.warning-chip {
+            background: rgba(185, 133, 36, 0.12);
+            color: #8f640e;
+        }
+
+        .hero-card,
+        .panel-card,
+        .modal-card,
+        .banner,
+        .footer-debug,
+        .loader-card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(14px);
+        }
+
+        .hero-card {
+            display: grid;
+            grid-template-columns: 1.35fr 0.95fr;
+            gap: 1.5rem;
+            border-radius: 34px;
+            padding: 2rem;
+        }
+
+        .hero-card p {
+            line-height: 1.6;
+        }
+
+        .hero-actions,
+        .stacked-actions,
+        .row-actions,
+        .nav-grid {
+            display: flex;
+            gap: 0.85rem;
+            flex-wrap: wrap;
+        }
+
+        .signal-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.9rem;
+            margin-top: 1.3rem;
+        }
+
+        .signal-box,
+        .auth-side-card,
+        .summary-card,
+        .metric-card {
+            background: rgba(255, 255, 255, 0.66);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            padding: 1rem;
+        }
+
+        .signal-box strong,
+        .metric-card strong {
+            display: block;
+            font-size: 1.4rem;
+        }
+
+        .app-shell {
+            display: none;
+            grid-template-columns: 270px minmax(0, 1fr);
+            gap: 1.4rem;
+            padding-bottom: 1rem;
+        }
+
+        .app-shell.active {
+            display: grid;
+        }
+
+        .sidebar {
+            border-radius: 28px;
+            background: rgba(255, 250, 242, 0.78);
+            border: 1px solid var(--line);
+            padding: 1.2rem;
+            box-shadow: var(--shadow);
+            align-self: start;
+            position: sticky;
+            top: 1rem;
+        }
+
+        .sidebar h2 {
+            margin: 0 0 0.4rem;
+            font-size: 1.35rem;
+        }
+
+        .sidebar nav {
+            display: grid;
+            gap: 0.55rem;
+            margin-top: 1rem;
+        }
+
+        .nav-button {
+            text-align: left;
+            background: transparent;
+            border-color: var(--line);
+            border-radius: 18px;
+            color: var(--text);
+        }
+
+        .nav-button.active {
+            background: rgba(196, 84, 47, 0.12);
+            border-color: rgba(196, 84, 47, 0.34);
+            color: var(--accent-strong);
+        }
+
+        .workspace {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .banner {
+            display: none;
+            border-radius: 22px;
+            padding: 1rem 1.2rem;
+        }
+
+        .banner.active {
+            display: block;
+        }
+
+        .banner.success {
+            border-color: rgba(40, 116, 93, 0.24);
+            color: #194e3d;
+        }
+
+        .banner.warning {
+            border-color: rgba(185, 133, 36, 0.24);
+            color: #785611;
+        }
+
+        .banner.error {
+            border-color: rgba(180, 67, 67, 0.24);
+            color: #7a2d2d;
+        }
+
+        .workspace-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .panel-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+        }
+
+        .panel-card {
+            border-radius: 28px;
+            padding: 1.3rem;
+        }
+
+        .panel-card.full {
+            grid-column: 1 / -1;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.9rem;
+        }
+
+        .metric-card {
+            min-height: 120px;
+        }
+
+        .table-shell {
+            overflow-x: auto;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.68);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: 0.9rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+        }
+
+        th {
+            color: var(--muted);
+            font-size: 0.88rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.28rem 0.7rem;
+            font-size: 0.85rem;
+            border: 1px solid currentColor;
+        }
+
+        .badge.pending {
+            color: #9a6b10;
+            background: rgba(185, 133, 36, 0.08);
+        }
+
+        .badge.approved,
+        .badge.success {
+            color: #165341;
+            background: rgba(40, 116, 93, 0.08);
+        }
+
+        .badge.cancelled,
+        .badge.error {
+            color: #812f2f;
+            background: rgba(180, 67, 67, 0.08);
+        }
+
+        .catalog-card {
+            display: grid;
+            gap: 0.8rem;
+        }
+
+        .modal-scrim,
+        .loading-overlay,
+        .toast {
+            position: fixed;
+            z-index: 50;
+        }
+
+        .modal-scrim,
+        .loading-overlay {
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(30, 20, 14, 0.45);
+            backdrop-filter: blur(8px);
+        }
+
+        .modal-scrim.active,
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .modal-card {
+            width: min(560px, calc(100vw - 2rem));
+            border-radius: 30px;
+            padding: 1.6rem;
+        }
+
+        .modal-card input,
+        .modal-card select,
+        .inline-field input,
+        .inline-field select {
+            width: 100%;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            padding: 0.82rem 0.95rem;
+            background: rgba(255, 255, 255, 0.72);
+            color: var(--text);
+            margin-top: 0.4rem;
+        }
+
+        .field-grid {
+            display: grid;
+            gap: 0.95rem;
+            margin: 1rem 0;
+        }
+
+        .remember-row,
+        .helper-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            font-size: 0.95rem;
+        }
+
+        .helper-row button {
+            padding: 0;
+            background: transparent;
+            border: none;
+            color: var(--teal);
+        }
+
+        .inline-field {
+            display: grid;
+            gap: 0.45rem;
+        }
+
+        .panel-note {
+            padding: 0.9rem 1rem;
+            border-radius: 18px;
+            background: rgba(31, 111, 120, 0.08);
+            color: var(--teal);
+        }
+
+        .footer-debug {
+            margin-top: 1.2rem;
+            margin-bottom: 1.4rem;
+            border-radius: 26px;
+            padding: 1rem 1.2rem;
+        }
+
+        .debug-controls {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 0.7rem;
+            margin-top: 0.8rem;
+        }
+
+        .debug-controls button {
+            border-radius: 18px;
+            min-height: 60px;
+            background: rgba(255, 255, 255, 0.68);
+            color: var(--text);
+            border-color: var(--line);
+        }
+
+        .toast {
+            right: 1.4rem;
+            bottom: 1.4rem;
+            min-width: 260px;
+            max-width: 360px;
+            padding: 1rem 1.2rem;
+            border-radius: 22px;
+            color: #fff7f2;
+            background: #b44343;
+            display: none;
+            box-shadow: 0 18px 35px rgba(83, 30, 30, 0.3);
+        }
+
+        .toast.active {
+            display: block;
+        }
+
+        .toast.success {
+            background: var(--green);
+        }
+
+        .toast.warning {
+            background: var(--gold);
+        }
+
+        .loader-card {
+            border-radius: 28px;
+            padding: 1.4rem;
+            min-width: 280px;
+            text-align: center;
+        }
+
+        .spinner {
+            width: 62px;
+            height: 62px;
+            margin: 0 auto 1rem;
+            border-radius: 50%;
+            border: 5px solid rgba(196, 84, 47, 0.18);
+            border-top-color: var(--accent);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 900px) {
+            .hero-card,
+            .app-shell,
+            .panel-grid,
+            .metric-grid,
+            .signal-grid,
+            .debug-controls {
+                grid-template-columns: 1fr;
+            }
+
+            .workspace-header,
+            .topbar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <div class="topbar hero-shell">
+            <div class="brand-block">
+                <h1>HelixID Dependency Auth Lab</h1>
+                <p>Single-page enterprise auth fixture for chained vizQA dependency tests.</p>
+            </div>
+            <div class="status-strip" id="status-strip">
+                <span class="chip">State mode: <strong id="session-mode-label">mixed</strong></span>
+                <span class="chip">Route: <strong id="route-label">landing</strong></span>
+                <span class="chip role-chip">Role: <strong id="role-label">Guest</strong></span>
+            </div>
+        </div>
+
+        <section class="hero-shell" id="landing-shell">
+            <div class="banner" id="public-banner" style="margin-bottom: 1rem;"></div>
+            <div class="hero-card">
+                <div>
+                    <p class="panel-label">Identity and access rehearsal</p>
+                    <h2>Public landing page with realistic auth branches</h2>
+                    <p>
+                        This demo intentionally combines password login, MFA, simulated SSO, session expiry,
+                        role elevation, approvals, checkout, and returns so dependency-based tests can branch
+                        from the same authenticated base state.
+                    </p>
+                    <div class="hero-actions">
+                        <button class="button-primary" id="open-sign-in" onclick="openPasswordLogin()">Sign In</button>
+                        <button class="button-secondary" id="open-sso" onclick="openSsoChooser()">Continue with SSO</button>
+                        <button class="button-ghost" id="open-magic-link" onclick="sendMagicLink()">Use Magic Link</button>
+                    </div>
+                    <div class="signal-grid">
+                        <div class="signal-box">
+                            <span class="panel-label">Flow chain</span>
+                            <strong>Password -> MFA</strong>
+                            <span class="small-text">For seed, login, and resume dependencies.</span>
+                        </div>
+                        <div class="signal-box">
+                            <span class="panel-label">Branching</span>
+                            <strong>Orders + Access</strong>
+                            <span class="small-text">Both branch from the same authenticated session.</span>
+                        </div>
+                        <div class="signal-box">
+                            <span class="panel-label">Recovery</span>
+                            <strong>SSO + Re-auth</strong>
+                            <span class="small-text">Includes callback failure and interrupted-session return.</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="auth-side-card">
+                    <h3>Demo accounts</h3>
+                    <p class="subtle">Use these to drive the dependency-auth examples.</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Role</th>
+                                <th>MFA</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>analyst.user</td>
+                                <td>Analyst</td>
+                                <td>246810</td>
+                            </tr>
+                            <tr>
+                                <td>manager.user</td>
+                                <td>Manager</td>
+                                <td>135790</td>
+                            </tr>
+                            <tr>
+                                <td>admin.user</td>
+                                <td>Admin</td>
+                                <td>975310</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="app-shell" id="app-shell">
+            <aside class="sidebar">
+                <h2>Operations Console</h2>
+                <p class="subtle" id="welcome-copy">Sign in to unlock orders, approvals, and security settings.</p>
+                <nav>
+                    <button class="nav-button" data-view="overview" onclick="navigateTo('overview')">Overview Dashboard</button>
+                    <button class="nav-button" data-view="catalog" onclick="navigateTo('catalog')">Catalog and Checkout</button>
+                    <button class="nav-button" data-view="orders" onclick="navigateTo('orders')">Orders and Returns</button>
+                    <button class="nav-button" data-view="access" onclick="navigateTo('access')">Access Requests</button>
+                    <button class="nav-button" data-view="approvals" onclick="navigateTo('approvals')">Manager Approvals</button>
+                    <button class="nav-button" data-view="security" onclick="navigateTo('security')">Security Settings</button>
+                </nav>
+            </aside>
+
+            <main class="workspace">
+                <div class="banner" id="inline-banner"></div>
+                <div class="workspace-header">
+                    <div>
+                        <p class="panel-label" id="view-kicker">Current workspace</p>
+                        <h2 id="view-title">Overview Dashboard</h2>
+                    </div>
+                    <div class="row-actions">
+                        <span class="chip role-chip" id="user-chip">Guest Session</span>
+                        <button class="button-ghost" id="sign-out" onclick="signOut()">Sign Out</button>
+                    </div>
+                </div>
+                <div id="view-content"></div>
+            </main>
+        </section>
+
+        <div class="footer-debug" id="debug-footer">
+            <strong>Debug controls</strong>
+            <p class="subtle">These controls deliberately expose edge cases for dependency tests.</p>
+            <div class="debug-controls">
+                <button id="expire-session-button" onclick="expireSession()">Expire current session</button>
+                <button id="rotate-mfa-button" onclick="rotateMfaChallenge()">Rotate MFA challenge</button>
+                <button id="toggle-sso-error-button" onclick="toggleSsoError()">Toggle SSO error</button>
+                <button id="cookie-only-button" onclick="setSessionMode('cookie')">Toggle cookie-only auth</button>
+                <button id="storage-only-button" onclick="setSessionMode('storage')">Toggle storage-only auth</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-scrim" id="modal-scrim">
+        <div class="modal-card" id="modal-card"></div>
+    </div>
+
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loader-card">
+            <div class="spinner"></div>
+            <h3 id="loading-title">Waiting on identity provider</h3>
+            <p class="subtle" id="loading-copy">Completing redirect and callback validation.</p>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const APP_FILE = "dependency_auth_lab.html";
+        const USERS = {
+            "analyst.user": {
+                password: "AnalystPass!23",
+                role: "Analyst",
+                name: "Avery Analyst",
+                mfaCode: "246810",
+                backupCode: "BACKUP-1357"
+            },
+            "manager.user": {
+                password: "ManagerPass!23",
+                role: "Manager",
+                name: "Mila Manager",
+                mfaCode: "135790",
+                backupCode: "BACKUP-2468"
+            },
+            "admin.user": {
+                password: "AdminPass!23",
+                role: "Admin",
+                name: "Soren Admin",
+                mfaCode: "975310",
+                backupCode: "BACKUP-9753"
+            }
+        };
+
+        const DEFAULT_STATE = {
+            auth: {
+                authenticated: false,
+                user: "",
+                role: "Guest",
+                name: "Guest Session",
+                method: "none",
+                rememberMe: false,
+                elevated: false,
+                lastProtectedView: "overview",
+                sessionExpired: false,
+                lockedAccounts: {},
+                failedAttempts: {},
+                sessionMode: "mixed"
+            },
+            app: {
+                currentView: "landing",
+                pendingView: "overview",
+                activeModal: "",
+                loadingLabel: "",
+                callbackBroken: false,
+                ssoError: false,
+                mfaChallenge: "246810",
+                cart: [],
+                orders: [],
+                accessRequests: [],
+                notifications: [],
+                lastAction: "",
+                callbackState: "relay-state-001",
+                magicLinkSent: false
+            }
+        };
+
+        let state = loadState();
+
+        function cloneDefaultState() {
+            return JSON.parse(JSON.stringify(DEFAULT_STATE));
+        }
+
+        function loadState() {
+            let parsed = cloneDefaultState();
+            try {
+                const stored = localStorage.getItem("vizqa.auth.lab");
+                if (stored) {
+                    parsed = JSON.parse(stored);
+                }
+            } catch (err) {
+                parsed = cloneDefaultState();
+            }
+
+            try {
+                const currentView = sessionStorage.getItem("vizqa.currentView");
+                const pendingView = sessionStorage.getItem("vizqa.pendingView");
+                const lastProtectedView = sessionStorage.getItem("vizqa.lastProtectedView");
+                if (currentView) parsed.app.currentView = currentView;
+                if (pendingView) parsed.app.pendingView = pendingView;
+                if (lastProtectedView) parsed.auth.lastProtectedView = lastProtectedView;
+            } catch (err) {
+                // Ignore missing sessionStorage in restrictive environments.
+            }
+
+            const cookieRole = readCookie("vizqa_role");
+            const cookieUser = readCookie("vizqa_user");
+            if (cookieRole && cookieUser) {
+                parsed.auth.user = cookieUser;
+                parsed.auth.role = cookieRole;
+                parsed.auth.authenticated = true;
+                parsed.auth.name = USERS[cookieUser] ? USERS[cookieUser].name : cookieUser;
+                parsed.app.currentView = parsed.app.currentView === "landing" ? "overview" : parsed.app.currentView;
+            }
+
+            return parsed;
+        }
+
+        function persistState() {
+            const mode = state.auth.sessionMode || "mixed";
+            try {
+                if (mode !== "cookie") {
+                    localStorage.setItem("vizqa.auth.lab", JSON.stringify(state));
+                } else {
+                    localStorage.removeItem("vizqa.auth.lab");
+                }
+            } catch (err) {
+                // Ignore unavailable localStorage.
+            }
+
+            try {
+                if (mode !== "cookie") {
+                    sessionStorage.setItem("vizqa.currentView", state.app.currentView);
+                    sessionStorage.setItem("vizqa.pendingView", state.app.pendingView);
+                    sessionStorage.setItem("vizqa.lastProtectedView", state.auth.lastProtectedView);
+                } else {
+                    sessionStorage.clear();
+                }
+            } catch (err) {
+                // Ignore unavailable sessionStorage.
+            }
+
+            if (mode !== "storage") {
+                writeCookie("vizqa_user", state.auth.authenticated ? state.auth.user : "", 1);
+                writeCookie("vizqa_role", state.auth.authenticated ? state.auth.role : "", 1);
+                writeCookie("vizqa_method", state.auth.method || "none", 1);
+            } else {
+                clearCookie("vizqa_user");
+                clearCookie("vizqa_role");
+                clearCookie("vizqa_method");
+            }
+        }
+
+        function writeCookie(name, value, days) {
+            const expires = new Date(Date.now() + days * 86400000).toUTCString();
+            document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
+        }
+
+        function readCookie(name) {
+            const entry = document.cookie.split("; ").find((part) => part.startsWith(`${name}=`));
+            return entry ? decodeURIComponent(entry.split("=").slice(1).join("=")) : "";
+        }
+
+        function clearCookie(name) {
+            document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+        }
+
+        function render() {
+            document.getElementById("session-mode-label").textContent = state.auth.sessionMode;
+            document.getElementById("route-label").textContent = state.app.currentView;
+            document.getElementById("role-label").textContent = state.auth.role;
+
+            const landing = document.getElementById("landing-shell");
+            const appShell = document.getElementById("app-shell");
+
+            if (state.auth.authenticated) {
+                landing.classList.add("hidden");
+                appShell.classList.add("active");
+                renderAppShell();
+            } else {
+                landing.classList.remove("hidden");
+                appShell.classList.remove("active");
+                renderBanner();
+            }
+
+            persistState();
+            syncModalFromState();
+        }
+
+        function renderAppShell() {
+            document.getElementById("welcome-copy").textContent = `${state.auth.name} is signed in via ${state.auth.method}.`;
+            document.getElementById("user-chip").textContent = `${state.auth.name} • ${state.auth.role}`;
+            document.getElementById("view-title").textContent = getViewMeta(state.app.currentView).title;
+            document.getElementById("view-kicker").textContent = getViewMeta(state.app.currentView).kicker;
+            document.querySelectorAll(".nav-button").forEach((button) => {
+                const view = button.getAttribute("data-view");
+                button.classList.toggle("active", view === state.app.currentView);
+                button.classList.toggle("hidden", !isViewVisible(view));
+            });
+
+            document.getElementById("debug-footer").classList.toggle("hidden", !(state.auth.authenticated && (state.auth.role === "Admin" || state.auth.role === "Manager" || state.auth.role === "Analyst")));
+
+            renderBanner();
+            renderViewContent();
+        }
+
+        function renderBanner() {
+            const message = state.app.notifications[state.app.notifications.length - 1];
+            const appBanner = document.getElementById("inline-banner");
+            const publicBanner = document.getElementById("public-banner");
+
+            [appBanner, publicBanner].forEach((banner) => {
+                banner.className = "banner";
+                banner.innerHTML = "";
+            });
+
+            if (!message) {
+                return;
+            }
+
+            const banner = state.auth.authenticated ? appBanner : publicBanner;
+            banner.className = `banner active ${message.type}`;
+            banner.innerHTML = `<strong>${message.title}</strong><p>${message.body}</p>`;
+        }
+
+        function renderViewContent() {
+            const root = document.getElementById("view-content");
+            switch (state.app.currentView) {
+                case "overview":
+                    root.innerHTML = renderOverview();
+                    break;
+                case "catalog":
+                    root.innerHTML = renderCatalog();
+                    break;
+                case "orders":
+                    root.innerHTML = renderOrders();
+                    break;
+                case "access":
+                    root.innerHTML = renderAccessRequests();
+                    break;
+                case "approvals":
+                    root.innerHTML = renderApprovals();
+                    break;
+                case "security":
+                    root.innerHTML = renderSecurity();
+                    break;
+                default:
+                    root.innerHTML = renderOverview();
+                    break;
+            }
+        }
+
+        function getViewMeta(view) {
+            const config = {
+                overview: { title: "Overview Dashboard", kicker: "Current workspace" },
+                catalog: { title: "Catalog and Checkout", kicker: "Protected commerce flow" },
+                orders: { title: "Orders and Returns", kicker: "Order history and post-purchase support" },
+                access: { title: "Access Requests", kicker: "Privilege escalation request queue" },
+                approvals: { title: "Manager Approvals", kicker: "Role-based approval center" },
+                security: { title: "Security Settings", kicker: "Admin controls and SSO configuration" }
+            };
+            return config[view] || config.overview;
+        }
+
+        function isViewVisible(view) {
+            if (view === "approvals") {
+                return state.auth.role === "Manager" || state.auth.role === "Admin";
+            }
+            if (view === "security") {
+                return state.auth.role === "Admin";
+            }
+            return true;
+        }
+
+        function renderOverview() {
+            const stepUpPanel = state.auth.role === "Analyst" ? `
+                <section class="panel-card full">
+                    <p class="panel-label">Analyst-only step-up path</p>
+                    <h3>Manager Step-Up Approval</h3>
+                    <p class="subtle">Elevate this analyst session to manager access using the current password and MFA code.</p>
+                    <div class="field-grid">
+                        <label class="inline-field">Manager step-up password
+                            <input id="stepup-password-field" type="password" placeholder="AnalystPass!23">
+                        </label>
+                        <label class="inline-field">Manager step-up one-time code
+                            <input id="stepup-mfa-field" type="text" placeholder="${state.app.mfaChallenge}" oninput="maybeSubmitStepUp()">
+                        </label>
+                    </div>
+                    <div class="helper-row">
+                        <button class="button-primary" onmousedown="submitStepUp()">Complete Manager Role Elevation</button>
+                    </div>
+                </section>
+            ` : "";
+
+            return `
+                ${stepUpPanel}
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <span class="panel-label">Identity posture</span>
+                        <strong>${state.auth.method === "sso" ? "SSO Verified" : "MFA Verified"}</strong>
+                        <span class="small-text">Current auth path: ${state.auth.method}</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="panel-label">Pending approvals</span>
+                        <strong>${state.app.accessRequests.filter((item) => item.status === "Pending Manager Approval").length}</strong>
+                        <span class="small-text">Requests waiting for manager action.</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="panel-label">Session orders</span>
+                        <strong>${state.app.orders.length}</strong>
+                        <span class="small-text">Orders created by this browser session.</span>
+                    </div>
+                </div>
+                <div class="panel-grid">
+                    <section class="panel-card">
+                        <h3>Identity assurance summary</h3>
+                        <p class="subtle">Role chips, session mode, and re-auth state are intentionally visible for vision-driven assertions.</p>
+                        <div class="row-actions">
+                            <span class="chip role-chip">Active role: ${state.auth.role}</span>
+                            <span class="chip">Session mode: ${state.auth.sessionMode}</span>
+                            <span class="chip warning-chip">${state.auth.sessionExpired ? "Expired session awaiting re-auth" : "Healthy authenticated session"}</span>
+                        </div>
+                    </section>
+                    <section class="panel-card">
+                        <h3>Fast navigation</h3>
+                        <div class="nav-grid">
+                            <button class="button-secondary" onclick="navigateTo('catalog')">Open Catalog and Checkout</button>
+                            <button class="button-secondary" onclick="navigateTo('orders')">Open Orders and Returns</button>
+                            <button class="button-secondary" onclick="navigateTo('access')">Open Access Requests</button>
+                        </div>
+                    </section>
+                </div>
+                <section class="panel-card full">
+                    <h3>Latest dependency-aware state</h3>
+                    <div class="table-shell">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>State key</th>
+                                    <th>Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Last action</td><td>${state.app.lastAction || "No actions recorded yet"}</td></tr>
+                                <tr><td>Return target</td><td>${state.auth.lastProtectedView}</td></tr>
+                                <tr><td>SSO callback state</td><td>${state.app.callbackState}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            `;
+        }
+
+        function renderCatalog() {
+            const hasItem = state.app.cart.length > 0;
+            return `
+                <div class="panel-grid">
+                    <section class="panel-card">
+                        <div class="catalog-card">
+                            <p class="panel-label">Featured secure hardware</p>
+                            <h3>Widget Pro Secure Key</h3>
+                            <p class="subtle">Bundled for the checkout -> returns dependency chain.</p>
+                            <div class="row-actions">
+                                <span class="badge success">In stock</span>
+                                <span class="chip">Qty in cart: ${state.app.cart.length}</span>
+                            </div>
+                            <button class="button-primary" onclick="addToCart()">Add Widget Pro Secure Key to Cart</button>
+                        </div>
+                    </section>
+                    <section class="panel-card">
+                        <h3>Checkout Summary</h3>
+                        <p class="subtle">This panel stays visible so dependent tests can confirm prior checkout state.</p>
+                        <div class="summary-card">
+                            <p>Cart items: <strong>${state.app.cart.length}</strong></p>
+                            <p>Total due today: <strong>$${(state.app.cart.length * 249).toFixed(2)}</strong></p>
+                            <button class="button-secondary" ${hasItem ? "" : "disabled"} onclick="completeCheckout()">Complete Checkout</button>
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderOrders() {
+            const latestOrder = state.app.orders[state.app.orders.length - 1];
+            const rows = state.app.orders.length
+                ? state.app.orders.map((order) => `
+                    <tr>
+                        <td>${order.id}</td>
+                        <td>${order.item}</td>
+                        <td><span class="badge ${order.statusClass}">${order.status}</span></td>
+                        <td>${order.returnStatus}</td>
+                    </tr>
+                `).join("")
+                : `<tr><td colspan="4">No orders yet. Complete checkout first.</td></tr>`;
+
+            return `
+                <div class="panel-grid">
+                    <section class="panel-card full">
+                        <h3>Most recent order</h3>
+                        <div class="row-actions">
+                            <span class="chip">${latestOrder ? latestOrder.id : "No recent order"}</span>
+                            <span class="chip">${latestOrder ? latestOrder.status : "Awaiting checkout"}</span>
+                            <button class="button-secondary" ${latestOrder ? "" : "disabled"} onclick="openReturnRequest()">Request Return for Latest Order</button>
+                        </div>
+                        <div class="table-shell" style="margin-top: 1rem;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Order ID</th>
+                                        <th>Item</th>
+                                        <th>Status</th>
+                                        <th>Return</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rows}</tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderAccessRequests() {
+            const rows = state.app.accessRequests.length
+                ? state.app.accessRequests.map((request) => `
+                    <tr>
+                        <td>${request.requestId}</td>
+                        <td>${request.requestedRole}</td>
+                        <td>${request.requestor}</td>
+                        <td><span class="badge ${request.statusClass}">${request.status}</span></td>
+                    </tr>
+                `).join("")
+                : `<tr><td colspan="4">No access requests have been created yet.</td></tr>`;
+
+            return `
+                <div class="panel-grid">
+                    <section class="panel-card">
+                        <h3>Request manager approval</h3>
+                        <p class="subtle">Use this to create dependency data for the approvals branch.</p>
+                        <button class="button-primary" onclick="createAccessRequest()">Request Admin Console Access</button>
+                    </section>
+                    <section class="panel-card">
+                        <h3>Current queue</h3>
+                        <div class="table-shell">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Request ID</th>
+                                        <th>Requested Role</th>
+                                        <th>Requestor</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rows}</tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderApprovals() {
+            const pending = state.app.accessRequests.filter((item) => item.status === "Pending Manager Approval");
+            const latest = pending[pending.length - 1];
+            return `
+                <div class="panel-grid">
+                    <section class="panel-card">
+                        <h3>Pending manager approvals</h3>
+                        <p class="subtle">${pending.length ? "A request is waiting for approval." : "No pending requests are waiting."}</p>
+                        <button class="button-primary" ${latest ? "" : "disabled"} onclick="approveLatestRequest()">Approve Latest Request</button>
+                    </section>
+                    <section class="panel-card">
+                        <h3>Approval evidence</h3>
+                        <div class="panel-note">
+                            ${latest ? `Latest request ${latest.requestId} from ${latest.requestor} is ready for manager approval.` : "Create an access request from the Access Requests view first."}
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function renderSecurity() {
+            return `
+                <div class="panel-grid">
+                    <section class="panel-card">
+                        <h3>Corporate SSO Configuration</h3>
+                        <p class="subtle">Visible only to Admin role. The SSO callback simulator reads these flags.</p>
+                        <div class="row-actions">
+                            <span class="chip">Provider: Acme Identity Cloud</span>
+                            <span class="chip">${state.app.ssoError ? "Callback failure enabled" : "Callback healthy"}</span>
+                        </div>
+                    </section>
+                    <section class="panel-card">
+                        <h3>Session storage policy</h3>
+                        <p class="subtle">Current mode controls whether auth persists in cookies, storage, or both.</p>
+                        <div class="row-actions">
+                            <button class="button-secondary" onclick="setSessionMode('mixed')">Use Mixed Session Mode</button>
+                            <button class="button-secondary" onclick="setSessionMode('cookie')">Use Cookie-only Session Mode</button>
+                            <button class="button-secondary" onclick="setSessionMode('storage')">Use Storage-only Session Mode</button>
+                        </div>
+                    </section>
+                </div>
+            `;
+        }
+
+        function navigateTo(view) {
+            if (!state.auth.authenticated) {
+                state.app.pendingView = view;
+                pushBanner("warning", "Protected route", "Please sign in before opening protected views.");
+                openPasswordLogin();
+                return;
+            }
+
+            if (!isViewVisible(view)) {
+                pushBanner("warning", "Role restricted", `${view} is not visible for the ${state.auth.role} role.`);
+                render();
+                return;
+            }
+
+            state.app.currentView = view;
+            state.auth.lastProtectedView = view;
+            state.app.lastAction = `Opened ${getViewMeta(view).title}`;
+            render();
+        }
+
+        function showModalHtml(html) {
+            document.body.classList.add("app-shell-open");
+            document.getElementById("modal-card").innerHTML = html;
+            document.getElementById("modal-scrim").classList.add("active");
+        }
+
+        function closeModal(clearState = true) {
+            if (clearState) {
+                state.app.activeModal = "";
+            }
+            document.body.classList.remove("app-shell-open");
+            document.getElementById("modal-scrim").classList.remove("active");
+            document.getElementById("modal-card").innerHTML = "";
+            persistState();
+        }
+
+        function syncModalFromState() {
+            if (state.app.activeModal === "password-login") {
+                showModalHtml(getPasswordLoginModalHtml());
+                return;
+            }
+            if (state.app.activeModal === "mfa-login") {
+                showModalHtml(getMfaModalHtml(false));
+                return;
+            }
+            closeModal(false);
+        }
+
+        function getPasswordLoginModalHtml() {
+            return `
+                <h2>Password Sign In</h2>
+                <p class="subtle">Use analyst.user with AnalystPass!23 for the dependency login flow.</p>
+                <div class="field-grid">
+                    <label class="inline-field">Username
+                        <input id="username-field" type="text" placeholder="analyst.user">
+                    </label>
+                    <label class="inline-field">Password
+                        <input id="password-field" type="password" placeholder="Enter password">
+                    </label>
+                </div>
+                <div class="remember-row">
+                    <label><input id="remember-checkbox" type="checkbox"> Remember me on this device</label>
+                    <span class="small-text">Failed attempts trigger a local lockout.</span>
+                </div>
+                <div class="helper-row" style="margin-top: 1rem;">
+                    <button onclick="closeModal()">Cancel</button>
+                    <button class="button-primary" onclick="submitPasswordLogin()">Continue to MFA</button>
+                </div>
+            `;
+        }
+
+        function getMfaModalHtml(isResume) {
+            const activeUser = USERS[state.auth.user];
+            return `
+                <h2>${isResume ? "Re-authenticate with MFA" : "Complete Multi-factor Authentication"}</h2>
+                <p class="subtle">Enter the current one-time code or use the backup code for ${state.auth.user}.</p>
+                <div class="field-grid">
+                    <label class="inline-field">One-time code
+                        <input id="mfa-code-field" type="text" placeholder="${state.app.mfaChallenge}">
+                    </label>
+                    <label class="inline-field">Backup code
+                        <input id="backup-code-field" type="text" placeholder="${activeUser ? activeUser.backupCode : "BACKUP-0000"}">
+                    </label>
+                </div>
+                <div class="helper-row">
+                    <button onclick="rotateMfaChallenge()">Resend code</button>
+                    <button class="button-primary" onclick="submitMfa(${isResume ? "true" : "false"})">${isResume ? "Resume Session" : "Verify and Continue"}</button>
+                </div>
+            `;
+        }
+
+        function openPasswordLogin() {
+            state.app.activeModal = "password-login";
+            render();
+        }
+
+        function submitPasswordLogin() {
+            const username = document.getElementById("username-field").value.trim();
+            const password = document.getElementById("password-field").value;
+            const rememberMe = document.getElementById("remember-checkbox").checked;
+            const profile = USERS[username];
+            const failedAttempts = state.auth.failedAttempts[username] || 0;
+
+            if (state.auth.lockedAccounts[username]) {
+                showToast("Account locked after repeated failures. Reset the demo state or use another user.", "warning");
+                return;
+            }
+
+            if (!profile || profile.password !== password) {
+                const nextCount = failedAttempts + 1;
+                state.auth.failedAttempts[username] = nextCount;
+                if (nextCount >= 3) {
+                    state.auth.lockedAccounts[username] = true;
+                    pushBanner("error", "Account locked", `The account ${username || "unknown user"} is locked for this demo.`);
+                    showToast("Account locked after three invalid password attempts.", "warning");
+                } else {
+                    showToast("Invalid credentials. Please try again.", "error");
+                }
+                persistState();
+                return;
+            }
+
+            state.auth.failedAttempts[username] = 0;
+            state.auth.user = username;
+            state.auth.name = profile.name;
+            state.auth.role = profile.role;
+            state.auth.rememberMe = rememberMe;
+            state.auth.method = "password";
+            state.app.pendingView = state.app.pendingView || "overview";
+            state.app.lastAction = "Completed password verification";
+            state.app.activeModal = "mfa-login";
+            render();
+        }
+
+        function openMfaModal(isResume) {
+            state.app.activeModal = isResume ? "" : "mfa-login";
+            showModalHtml(getMfaModalHtml(isResume));
+        }
+
+        function submitMfa(isResume) {
+            const code = document.getElementById("mfa-code-field").value.trim();
+            const backup = document.getElementById("backup-code-field").value.trim();
+            const profile = USERS[state.auth.user];
+            if (!profile) {
+                showToast("Unknown account for MFA verification.", "error");
+                return;
+            }
+
+            const expectedCode = state.app.mfaChallenge || profile.mfaCode;
+            const backupMatch = backup && backup === profile.backupCode;
+            if (!(code === expectedCode || backupMatch)) {
+                showToast("Invalid one-time code. Please try the current MFA challenge.", "error");
+                return;
+            }
+
+            state.auth.authenticated = true;
+            state.auth.sessionExpired = false;
+            state.auth.method = isResume ? "re-auth" : state.auth.method;
+            state.app.currentView = state.auth.lastProtectedView || state.app.pendingView || "overview";
+            state.app.pendingView = state.app.currentView;
+            state.app.activeModal = "";
+            state.app.lastAction = isResume ? "Re-authenticated and resumed session" : "Completed MFA and opened app shell";
+            state.app.notifications = [];
+            closeModal();
+            render();
+        }
+
+        function openStepUpModal() {
+            openModal(`
+                <h2>Manager Step-Up Approval</h2>
+                <p class="subtle">Elevate this analyst session to manager access using the current password and MFA code.</p>
+                <div class="field-grid">
+                    <label class="inline-field">Manager step-up password
+                        <input id="stepup-password-field" type="password" placeholder="AnalystPass!23">
+                    </label>
+                    <label class="inline-field">Manager step-up one-time code
+                        <input id="stepup-mfa-field" type="text" placeholder="${state.app.mfaChallenge}" oninput="maybeSubmitStepUp()">
+                    </label>
+                </div>
+                <div class="helper-row">
+                    <button onclick="closeModal()">Cancel</button>
+                    <button class="button-primary" onmousedown="submitStepUp()">Confirm Manager Step-Up</button>
+                </div>
+            `);
+        }
+
+        function submitStepUp() {
+            const password = document.getElementById("stepup-password-field").value;
+            const code = document.getElementById("stepup-mfa-field").value.trim();
+            const profile = USERS[state.auth.user];
+
+            if (!profile || password !== profile.password || code !== state.app.mfaChallenge) {
+                showToast("Step-up authentication failed. Check password and MFA challenge.", "error");
+                return;
+            }
+
+            state.auth.role = "Manager";
+            state.auth.elevated = true;
+            state.app.currentView = "approvals";
+            state.auth.lastProtectedView = "approvals";
+            state.app.lastAction = "Elevated session to Manager";
+            pushBanner("success", "Role elevated", "Manager role is now active and approvals are unlocked.");
+            closeModal();
+            render();
+        }
+
+        function maybeSubmitStepUp() {
+            const passwordField = document.getElementById("stepup-password-field");
+            const codeField = document.getElementById("stepup-mfa-field");
+            if (!passwordField || !codeField) {
+                return;
+            }
+
+            const password = passwordField.value;
+            const code = codeField.value.trim();
+            if (password && code.length >= 6) {
+                submitStepUp();
+            }
+        }
+
+        function openSsoChooser() {
+            openModal(`
+                <h2>Select identity provider</h2>
+                <p class="subtle">This is a simulated SSO branch rendered inside the same HTML page.</p>
+                <div class="field-grid">
+                    <button class="button-secondary" onclick="openSsoLogin()">Continue with Acme Identity Cloud</button>
+                    <button class="button-secondary" onclick="openSsoLogin('manager.user')">Continue with Manager IdP Hint</button>
+                </div>
+                <div class="helper-row">
+                    <button onclick="closeModal()">Cancel</button>
+                    <span class="small-text">Relay state: ${state.app.callbackState}</span>
+                </div>
+            `);
+        }
+
+        function openSsoLogin(defaultUser) {
+            openModal(`
+                <h2>Corporate identity provider sign in</h2>
+                <p class="subtle">Choose a corporate account, then continue to consent and callback.</p>
+                <div class="field-grid">
+                    <label class="inline-field">Corporate username
+                        <input id="sso-username-field" type="text" value="${defaultUser || "analyst.user"}" placeholder="analyst.user">
+                    </label>
+                    <label class="inline-field">Corporate password
+                        <input id="sso-password-field" type="password" placeholder="Enter password">
+                    </label>
+                </div>
+                <div class="helper-row">
+                    <button onclick="openSsoChooser()">Back</button>
+                    <button class="button-primary" onclick="submitSsoLogin()">Continue to Consent</button>
+                </div>
+            `);
+        }
+
+        function submitSsoLogin() {
+            const username = document.getElementById("sso-username-field").value.trim();
+            const password = document.getElementById("sso-password-field").value;
+            const profile = USERS[username];
+
+            if (!profile || profile.password !== password) {
+                showToast("Corporate identity provider rejected the credentials.", "error");
+                return;
+            }
+
+            state.auth.user = username;
+            state.auth.name = profile.name;
+            state.auth.role = profile.role;
+            state.auth.method = "sso";
+            openModal(`
+                <h2>Consent required</h2>
+                <p class="subtle">Allow the Operations Console to read role and profile claims?</p>
+                <div class="panel-note">Requested claims: profile, role, approvals.read, orders.write</div>
+                <div class="helper-row" style="margin-top: 1rem;">
+                    <button onclick="denySsoConsent()">Deny Consent</button>
+                    <button class="button-primary" onclick="approveSsoConsent()">Approve Consent</button>
+                </div>
+            `);
+        }
+
+        function denySsoConsent() {
+            closeModal();
+            pushBanner("error", "Consent denied", "The corporate identity provider denied consent for the app.");
+            showToast("SSO consent was denied.", "warning");
+            render();
+        }
+
+        function approveSsoConsent() {
+            closeModal();
+            showLoading("Completing callback", "Validating relay state and applying SSO session.");
+            setTimeout(() => {
+                hideLoading();
+                if (state.app.ssoError || state.app.callbackBroken) {
+                    pushBanner("error", "SSO callback failed", "The callback state was rejected by the application.");
+                    showToast("Broken callback state detected after SSO redirect.", "error");
+                    render();
+                    return;
+                }
+
+                state.auth.authenticated = true;
+                state.auth.sessionExpired = false;
+                state.app.currentView = "overview";
+                state.auth.lastProtectedView = "overview";
+                state.app.lastAction = "Completed SSO redirect and callback";
+                pushBanner("success", "SSO callback complete", "Corporate identity provider sign-in succeeded.");
+                render();
+            }, 900);
+        }
+
+        function sendMagicLink() {
+            state.app.magicLinkSent = true;
+            pushBanner("success", "Magic link sent", "A one-time sign-in link was sent to the demo inbox.");
+            showToast("Magic link sent to analyst.user inbox.", "success");
+            render();
+        }
+
+        function addToCart() {
+            state.app.cart.push({
+                sku: "widget-pro-secure-key",
+                item: "Widget Pro Secure Key",
+                price: 249
+            });
+            state.app.lastAction = "Added Widget Pro Secure Key to cart";
+            pushBanner("success", "Cart updated", "Widget Pro Secure Key was added to the cart.");
+            render();
+        }
+
+        function completeCheckout() {
+            if (!state.app.cart.length) {
+                return;
+            }
+
+            showLoading("Submitting checkout", "Writing order to the local dependency ledger.");
+            setTimeout(() => {
+                const orderId = `ORD-${1000 + state.app.orders.length + 1}`;
+                state.app.orders.push({
+                    id: orderId,
+                    item: "Widget Pro Secure Key",
+                    status: "Fulfillment scheduled",
+                    statusClass: "pending",
+                    returnStatus: "No return requested"
+                });
+                state.app.cart = [];
+                state.app.currentView = "orders";
+                state.auth.lastProtectedView = "orders";
+                state.app.lastAction = `Completed checkout for ${orderId}`;
+                pushBanner("success", "Checkout complete", `Order ${orderId} is now visible in the Orders and Returns view.`);
+                hideLoading();
+                render();
+            }, 800);
+        }
+
+        function openReturnRequest() {
+            const latestOrder = state.app.orders[state.app.orders.length - 1];
+            openModal(`
+                <h2>Request Return</h2>
+                <p class="subtle">The latest order ${latestOrder ? latestOrder.id : ""} can be returned for a visible dependency assertion.</p>
+                <div class="field-grid">
+                    <label class="inline-field">Return reason
+                        <select id="return-reason-field">
+                            <option>Damaged security key</option>
+                            <option>Wrong quantity delivered</option>
+                            <option>Order duplicated</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="helper-row">
+                    <button onclick="closeModal()">Cancel</button>
+                    <button class="button-primary" onclick="submitReturnRequest()">Submit Return Request</button>
+                </div>
+            `);
+        }
+
+        function submitReturnRequest() {
+            const latestOrder = state.app.orders[state.app.orders.length - 1];
+            if (!latestOrder) {
+                return;
+            }
+
+            const reason = document.getElementById("return-reason-field").value;
+            latestOrder.returnStatus = `Return requested: ${reason}`;
+            latestOrder.status = "Return under review";
+            latestOrder.statusClass = "pending";
+            state.app.lastAction = `Submitted return for ${latestOrder.id}`;
+            pushBanner("success", "Return submitted", `A return request was created for ${latestOrder.id}.`);
+            closeModal();
+            render();
+        }
+
+        function createAccessRequest() {
+            const requestId = `REQ-${200 + state.app.accessRequests.length + 1}`;
+            state.app.accessRequests.push({
+                requestId,
+                requestor: state.auth.name,
+                requestedRole: "Admin Console Access",
+                status: "Pending Manager Approval",
+                statusClass: "pending"
+            });
+            state.app.lastAction = `Created access request ${requestId}`;
+            pushBanner("success", "Access request submitted", `Request ${requestId} is now pending manager approval.`);
+            render();
+        }
+
+        function approveLatestRequest() {
+            const latest = [...state.app.accessRequests].reverse().find((item) => item.status === "Pending Manager Approval");
+            if (!latest) {
+                return;
+            }
+
+            latest.status = "Approved";
+            latest.statusClass = "approved";
+            state.app.lastAction = `Approved access request ${latest.requestId}`;
+            pushBanner("success", "Request approved", `Manager approval completed for ${latest.requestId}.`);
+            render();
+        }
+
+        function expireSession() {
+            if (!state.auth.authenticated) {
+                return;
+            }
+
+            state.auth.sessionExpired = true;
+            state.auth.authenticated = false;
+            state.app.pendingView = state.auth.lastProtectedView || state.app.currentView || "overview";
+            state.app.currentView = "landing";
+            state.app.lastAction = `Expired session while viewing ${state.app.pendingView}`;
+            persistState();
+            pushBanner("warning", "Session expired", `Re-authentication is required to resume ${getViewMeta(state.app.pendingView).title}.`);
+            openResumePrompt();
+            render();
+        }
+
+        function openResumePrompt() {
+            openModal(`
+                <h2>Session expired</h2>
+                <p class="subtle">Resume your protected work in ${getViewMeta(state.app.pendingView).title}.</p>
+                <div class="helper-row">
+                    <button onclick="closeModal()">Dismiss</button>
+                    <button class="button-primary" onclick="resumeWithPassword()">Re-authenticate now</button>
+                </div>
+            `);
+        }
+
+        function resumeWithPassword() {
+            closeModal();
+            openModal(`
+                <h2>Re-enter password</h2>
+                <p class="subtle">Confirm the password for ${state.auth.user || "analyst.user"} before MFA.</p>
+                <div class="field-grid">
+                    <label class="inline-field">Password
+                        <input id="resume-password-field" type="password" placeholder="Enter current password">
+                    </label>
+                </div>
+                <div class="helper-row">
+                    <button onclick="closeModal()">Cancel</button>
+                    <button class="button-primary" onclick="submitResumePassword()">Continue</button>
+                </div>
+            `);
+        }
+
+        function submitResumePassword() {
+            const password = document.getElementById("resume-password-field").value;
+            const username = state.auth.user || "analyst.user";
+            const profile = USERS[username];
+            if (!profile || password !== profile.password) {
+                showToast("Password verification failed during session resume.", "error");
+                return;
+            }
+
+            state.auth.user = username;
+            state.auth.name = profile.name;
+            state.auth.role = profile.role;
+            closeModal();
+            openMfaModal(true);
+        }
+
+        function rotateMfaChallenge() {
+            const allCodes = ["246810", "864202", "135790", "975310"];
+            const next = allCodes.find((code) => code !== state.app.mfaChallenge) || "246810";
+            state.app.mfaChallenge = next;
+            state.app.lastAction = `Rotated MFA challenge to ${next}`;
+            showToast(`New MFA challenge issued: ${next}`, "warning");
+            persistState();
+            render();
+        }
+
+        function toggleSsoError() {
+            state.app.ssoError = !state.app.ssoError;
+            state.app.callbackBroken = state.app.ssoError;
+            state.app.lastAction = state.app.ssoError ? "Enabled SSO callback failure" : "Disabled SSO callback failure";
+            showToast(state.app.ssoError ? "SSO callback failure enabled." : "SSO callback failure disabled.", "warning");
+            render();
+        }
+
+        function setSessionMode(mode) {
+            state.auth.sessionMode = mode;
+            state.app.lastAction = `Switched session mode to ${mode}`;
+            showToast(`Session mode updated to ${mode}.`, "success");
+            render();
+        }
+
+        function signOut() {
+            const preserved = {
+                lockedAccounts: state.auth.lockedAccounts,
+                failedAttempts: state.auth.failedAttempts,
+                sessionMode: state.auth.sessionMode
+            };
+            const appPreserved = {
+                ssoError: state.app.ssoError,
+                callbackBroken: state.app.callbackBroken,
+                mfaChallenge: state.app.mfaChallenge,
+                orders: state.app.orders,
+                accessRequests: state.app.accessRequests
+            };
+            state = cloneDefaultState();
+            state.auth.lockedAccounts = preserved.lockedAccounts;
+            state.auth.failedAttempts = preserved.failedAttempts;
+            state.auth.sessionMode = preserved.sessionMode;
+            state.app.ssoError = appPreserved.ssoError;
+            state.app.callbackBroken = appPreserved.callbackBroken;
+            state.app.mfaChallenge = appPreserved.mfaChallenge;
+            state.app.orders = appPreserved.orders;
+            state.app.accessRequests = appPreserved.accessRequests;
+            state.app.lastAction = "Signed out of the authenticated app shell";
+            persistState();
+            render();
+        }
+
+        function showLoading(title, copy) {
+            document.getElementById("loading-title").textContent = title;
+            document.getElementById("loading-copy").textContent = copy;
+            document.getElementById("loading-overlay").classList.add("active");
+        }
+
+        function hideLoading() {
+            document.getElementById("loading-overlay").classList.remove("active");
+        }
+
+        function showToast(message, type) {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.className = `toast active ${type}`;
+            setTimeout(() => {
+                toast.className = "toast";
+            }, 2600);
+        }
+
+        function pushBanner(type, title, body) {
+            state.app.notifications.push({ type, title, body });
+            if (state.app.notifications.length > 6) {
+                state.app.notifications = state.app.notifications.slice(-6);
+            }
+        }
+
+        if (location.pathname.indexOf(APP_FILE) === -1) {
+            console.warn("This page is designed to be opened directly from dependency_auth_lab.html");
+        }
+
+        render();
+    </script>
+</body>
+</html>
