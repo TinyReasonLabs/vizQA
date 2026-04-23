@@ -1,6 +1,6 @@
-name: "Nexus CRM: Global Navigation"
+name: "Nexus CRM: Multi-Viewport Sidebar Navigation"
 url: "file://${PWD}/demo_site/index.html"
-description: "Verifies that clicking sidebar items updates the view state."
+description: "A compact smoke test intended to be run with multiple viewport lanes so reporter output can be judged side by side."
 steps:
   - action: "Click on 'Customers' in the sidebar"
     expect: "Main page header 'Customers' and the sidebar item becomes active"

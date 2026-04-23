@@ -287,7 +287,6 @@ steps: []
                 ),
             ),
             patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
-            patch("vizQA.app.cli.print_session_header") as mock_print_session_header,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(test_path, automator, reporter)
@@ -296,7 +295,6 @@ steps: []
         automator.run_session.assert_not_called()
         reporter.on_session_start.assert_called_once()
         reporter.on_parent_step_start.assert_not_called()
-        mock_print_session_header.assert_not_called()
 
     asyncio.run(run_test())
 
@@ -340,7 +338,6 @@ steps: []
             patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
             patch("vizQA.app.cli._load_config", return_value={}),
             patch("vizQA.app.cli.BrowserStateCache.cache"),
-            patch("vizQA.app.cli.print_session_header"),
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(

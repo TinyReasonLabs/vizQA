@@ -1,5 +1,5 @@
 name: "Nexus CRM: Visual Regression & Theme Toggling"
-url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+url: "file://${PWD}/demo_site/index.html"
 description: "Verifies dark/light mode transition."
 steps:
   - action: "Verify the current background is dark"

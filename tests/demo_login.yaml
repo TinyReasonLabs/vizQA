@@ -1,5 +1,5 @@
 name: "Demo Login Test"
-url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+url: "file://${PWD}/demo_site/index.html"
 description: "A simple test to verify the login flow visually."
 steps:
   - action: "Type 'admin' into the username field"

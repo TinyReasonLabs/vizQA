@@ -1,5 +1,5 @@
 name: "Dependency Return Request"
-url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
 description: "Starts from a previously created order and submits a return request."
 
 requires:

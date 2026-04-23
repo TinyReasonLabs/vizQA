@@ -1,5 +1,5 @@
 name: "Dependency Auth Seed"
-url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
 description: "Seeds shared artifacts and verifies the public landing state for the dependency auth lab."
 
 artifacts:
