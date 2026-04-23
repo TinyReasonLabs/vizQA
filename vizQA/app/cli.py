@@ -26,13 +26,7 @@ from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.support.weights import inspect_weight_state
 from vizQA.app.viewport import ViewportSpec, load_viewport_config, resolve_viewports
 from vizQA.planning import DependencyResolver, StepPlanner
-from vizQA.rendering import (
-    STEP_STATUS_STYLES,
-    ProgressiveReporter,
-    format_step_prefix,
-    print_dependency_failure,
-    print_session_header,
-)
+from vizQA.rendering import STEP_STATUS_STYLES, ProgressiveReporter, format_step_prefix, print_dependency_failure
 from vizQA.utils import BrowserStateCache, LineLoader
 
 console = Console(highlight=False)
@@ -344,12 +338,14 @@ def _clean_run_artifacts(test_stems: Set[str], viewport_slugs: Optional[Set[str]
     return deleted
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 async def _run_single_dependency(
     dep_path: Path,
     automator: Automator,
     reporter: ProgressiveReporter,
     on_step_update: Optional[Any],
     interactive: bool,
+    viewport: Optional[ViewportSpec] = None,
 ) -> tuple[Dict[str, Any], bool, Dict[str, Any]]:
     """
     Run a single dependency test and return its result.
@@ -372,6 +368,7 @@ async def _run_single_dependency(
         on_step_update=on_step_update,
         interactive=interactive,
         is_dependency=True,
+        viewport=viewport,
     )
 
     last_session = reporter.sessions[-1] if reporter.sessions else None
@@ -388,12 +385,14 @@ async def _run_single_dependency(
     return dep_result, result, dep_artifacts
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 async def _run_test_dependencies(
     test_path: Path,
     automator: Automator,
     reporter: ProgressiveReporter,
     on_step_update: Optional[Any] = None,
     interactive: bool = False,
+    viewport: Optional[ViewportSpec] = None,
 ) -> tuple[bool, List[Dict[str, Any]], Dict[str, Any]]:
     """
     Resolve and run all dependencies for a test.
@@ -419,7 +418,7 @@ async def _run_test_dependencies(
     # Execute each dependency in order
     for dep_path in dependency_paths:
         dep_result, result, dep_artifacts = await _run_single_dependency(
-            dep_path, automator, reporter, on_step_update, interactive
+            dep_path, automator, reporter, on_step_update, interactive, viewport
         )
         inherited_artifacts.update(dep_artifacts)
         dependency_results.append(dep_result)
@@ -467,7 +466,7 @@ async def run_single_test(
 
     if not is_dependency:
         deps_passed, dependency_results, inherited_artifacts = await _run_test_dependencies(
-            test_path, automator, reporter, on_step_update, interactive
+            test_path, automator, reporter, on_step_update, interactive, viewport
         )
         if not deps_passed:
             # Mark this test as failed due to dependency failure
@@ -533,8 +532,8 @@ async def run_single_test(
     )
     reporter.register_session(session)
 
-    # Print session header with dependency info if present
-    print_session_header(console, session)
+    # Initialize the reporter's shared flow state before any step callbacks fire.
+    reporter.on_session_start(session)
     if dependency_results:
 
         latest_dependency = dependency_results[-1]

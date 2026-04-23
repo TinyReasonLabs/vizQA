@@ -249,6 +249,151 @@ steps: []
     asyncio.run(run_test())
 
 
+def test_run_single_test_calls_reporter_session_start_before_running_steps(tmp_path):
+    async def run_test():
+        test_path = _make_test_file(
+            tmp_path,
+            "main",
+            """
+name: "Main Test"
+url: "http://example.com/app"
+steps: []
+""".strip(),
+        )
+
+        reporter = SimpleNamespace(
+            register_session=MagicMock(),
+            sessions=[],
+            on_parent_step_start=MagicMock(),
+            on_parent_step_done=MagicMock(),
+            on_session_start=MagicMock(),
+        )
+
+        async def run_session(_session, on_step_update=None):
+            reporter.on_session_start.assert_called_once()
+            if on_step_update:
+                await on_step_update(TestStep(id="s1", instruction="VERIFY: ok", status=StepStatus.PASSED))
+            return True
+
+        automator = SimpleNamespace(
+            parser=object(),
+            minilm=None,
+            restore_browser_state=AsyncMock(),
+            page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
+            run_session=AsyncMock(side_effect=run_session),
+            capture_browser_state=AsyncMock(return_value={}),
+        )
+
+        with (
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli._load_config", return_value={}),
+            patch("vizQA.app.cli.BrowserStateCache.cache"),
+            patch("vizQA.app.cli.print_session_header"),
+        ):
+            mock_planner_cls.return_value.decompose.return_value = []
+            result = await run_single_test(
+                test_path,
+                automator,
+                reporter,
+                on_step_update=AsyncMock(),
+                viewport=ViewportSpec(name="mobile", width=390, height=844),
+            )
+
+        assert result is True
+
+    asyncio.run(run_test())
+
+
+def test_run_single_test_passes_viewport_to_dependency_runs(tmp_path):
+    async def run_test():
+        test_path = _make_test_file(
+            tmp_path,
+            "main",
+            """
+name: "Main Test"
+url: "http://example.com/app"
+requires:
+  - dependency_login_password
+steps: []
+""".strip(),
+        )
+
+        viewport = ViewportSpec(name="desktop", width=1440, height=900)
+        automator = SimpleNamespace(
+            parser=object(),
+            minilm=None,
+            restore_browser_state=AsyncMock(),
+            page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
+            run_session=AsyncMock(return_value=True),
+            capture_browser_state=AsyncMock(return_value={}),
+        )
+        reporter = SimpleNamespace(
+            register_session=MagicMock(),
+            sessions=[],
+            on_parent_step_start=MagicMock(),
+            on_parent_step_done=MagicMock(),
+            on_session_start=MagicMock(),
+        )
+
+        dependency_calls = []
+
+        async def fake_run_single_test(
+            dep_path,
+            _automator,
+            _reporter,
+            on_step_update=None,
+            interactive=False,
+            is_dependency=False,
+            viewport=None,
+        ):
+            dependency_calls.append(
+                {
+                    "dep_path": dep_path,
+                    "interactive": interactive,
+                    "is_dependency": is_dependency,
+                    "viewport": viewport,
+                    "has_callback": on_step_update is not None,
+                }
+            )
+            return True
+
+        with (
+            patch("vizQA.app.cli._resolve_dependencies", return_value=[tmp_path / "dependency_login_password.yaml"]),
+            patch("vizQA.app.cli._load_config", return_value={}),
+            patch("vizQA.app.cli._load_artifacts", return_value={}),
+            patch("vizQA.app.cli._load_test_data") as mock_load_test_data,
+            patch("vizQA.app.cli.run_single_test", side_effect=fake_run_single_test),
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli.BrowserStateCache.cache"),
+        ):
+
+            def fake_load_test_data(path):
+                if path == test_path:
+                    return {
+                        "name": "Main Test",
+                        "url": "http://example.com/app",
+                        "requires": ["dependency_login_password"],
+                        "steps": [],
+                    }
+                return {
+                    "name": "Dependency Login Password",
+                    "url": "http://example.com/login",
+                    "steps": [],
+                }
+
+            mock_load_test_data.side_effect = fake_load_test_data
+            mock_planner_cls.return_value.decompose.return_value = []
+
+            await run_single_test(test_path, automator, reporter, viewport=viewport)
+
+        assert len(dependency_calls) == 1
+        assert dependency_calls[0]["is_dependency"] is True
+        assert dependency_calls[0]["viewport"] == viewport
+        assert dependency_calls[0]["has_callback"] is False
+
+    asyncio.run(run_test())
+
+
 def test_count_top_level_results_excludes_dependency_sessions():
     sessions = [
         TestSession(

@@ -68,8 +68,13 @@ class ProgressiveReporter:
         self._completed_sub_steps = 0
         self._live: Optional[Live] = None
         self._renderable_lines: List[Any] = []
-        self._parent_map: Dict[str, int] = {}
-        self._lane_lines: Dict[str, int] = {}
+        self._lane_positions: Dict[str, int] = {}
+        self._lane_labels: Dict[str, str] = {}
+        self._lane_scopes: Dict[str, tuple[Any, ...]] = {}
+        self._lane_next_slot: Dict[str, int] = {}
+        self._lane_parent_slots: Dict[str, Dict[str, int]] = {}
+        self._scope_header_lines: Dict[tuple[Any, ...], int] = {}
+        self._scope_slot_lines: Dict[tuple[Any, ...], Dict[int, int]] = {}
 
     def register_session(self, session: TestSession) -> None:
         """Register a session so the reporter can count total sub-steps."""
@@ -107,9 +112,10 @@ class ProgressiveReporter:
         """Returns a subset of lines if they exceed terminal height to simulate scrolling."""
         term_height = shutil.get_terminal_size().lines
         max_lines = max(5, term_height - 6)
-        if len(self._renderable_lines) > max_lines:
-            return self._renderable_lines[-max_lines:]
-        return self._renderable_lines
+        rendered = [self._render_line(idx) for idx in range(len(self._renderable_lines))]
+        if len(rendered) > max_lines:
+            return rendered[-max_lines:]
+        return rendered
 
     def _lane_key(self, viewport: Optional["ViewportSpec"] = None, session: Optional[TestSession] = None) -> str:
         if viewport:
@@ -125,14 +131,59 @@ class ProgressiveReporter:
             return session.viewport_name
         return "default"
 
-    def _upsert_lane_line(self, lane_key: str, line: Text) -> None:
-        if lane_key in self._lane_lines:
-            idx = self._lane_lines[lane_key]
-            self._renderable_lines[idx] = line
-        else:
-            self._lane_lines[lane_key] = len(self._renderable_lines)
-            self._renderable_lines.append(line)
+    def _set_lane_position(self, lane_key: str, label: str, line_idx: int) -> None:
+        self._lane_positions[lane_key] = line_idx
+        self._lane_labels[lane_key] = label
         self._update_live()
+
+    def _session_scope(self, session: TestSession) -> tuple[Any, ...]:
+        dep_chain = tuple(dep.get("file_stem", dep.get("name")) for dep in session.dependency_results)
+        return (
+            session.file_stem or session.test_name,
+            session.test_name,
+            session.is_dependency,
+            dep_chain,
+        )
+
+    def _ensure_scope_header(self, scope_key: tuple[Any, ...], title: Text) -> int:
+        if scope_key in self._scope_header_lines:
+            return self._scope_header_lines[scope_key]
+
+        idx = len(self._renderable_lines)
+        self._renderable_lines.append(title)
+        self._scope_header_lines[scope_key] = idx
+        self._scope_slot_lines[scope_key] = {}
+        return idx
+
+    def _get_or_create_scope_slot(self, scope_key: tuple[Any, ...], slot: int, line: Text) -> int:
+        scope_lines = self._scope_slot_lines.setdefault(scope_key, {})
+        if slot in scope_lines:
+            idx = scope_lines[slot]
+            self._renderable_lines[idx] = line
+            return idx
+
+        idx = len(self._renderable_lines)
+        self._renderable_lines.append(line)
+        scope_lines[slot] = idx
+        return idx
+
+    def _lane_scope(self, lane_key: str) -> tuple[Any, ...]:
+        return self._lane_scopes[lane_key]
+
+    def _render_line(self, line_idx: int) -> Text:
+        base = Text(self._renderable_lines[line_idx].plain)
+        if hasattr(self._renderable_lines[line_idx], "spans"):
+            base = self._renderable_lines[line_idx].copy()
+
+        lane_tags = [
+            self._lane_labels[lane_key]
+            for lane_key, current_idx in self._lane_positions.items()
+            if current_idx == line_idx
+        ]
+        if lane_tags:
+            for lane_tag in sorted(lane_tags):
+                base.append(f"  [{lane_tag}]", style="bold cyan")
+        return base
 
     def on_step_done(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when an atomic step finishes."""
@@ -142,53 +193,101 @@ class ProgressiveReporter:
         self._completed_sub_steps += 1
         icon, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
         prefix_text = format_step_prefix(step.instruction)
+        lane_key = self._lane_key(viewport=viewport)
+        scope_key = self._lane_scope(lane_key)
+        slot = self._lane_next_slot.get(lane_key, 0)
 
         line = Text()
-        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
         line.append(f"{icon} ", style=color)
         line.append_text(prefix_text)
         if step.expectation:
             line.append(f" → {step.expectation}", style="dim")
-        self._upsert_lane_line(self._lane_key(viewport=viewport), line)
+
+        idx = self._get_or_create_scope_slot(scope_key, slot, line)
+        self._lane_next_slot[lane_key] = slot + 1
+        if viewport:
+            self._set_lane_position(
+                lane_key,
+                self._lane_label(viewport=viewport),
+                idx,
+            )
+        else:
+            self._update_live()
 
     def on_parent_step_start(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when a container step starts."""
+        lane_key = self._lane_key(viewport=viewport)
+        scope_key = self._lane_scope(lane_key)
+        slot = self._lane_next_slot.get(lane_key, 0)
+
         line = Text()
-        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
         line.append("● ", style="white")
         line.append(step.instruction, style="bold white")
         if step.expectation:
             line.append(f" → {step.expectation}", style="dim")
 
-        lane_key = self._lane_key(viewport=viewport)
-        self._parent_map[step.id] = self._lane_lines.get(lane_key, len(self._renderable_lines))
-        self._upsert_lane_line(lane_key, line)
+        idx = self._get_or_create_scope_slot(scope_key, slot, line)
+        self._lane_parent_slots.setdefault(lane_key, {})[step.id] = slot
+        self._lane_next_slot[lane_key] = slot + 1
+        if viewport:
+            self._set_lane_position(
+                lane_key,
+                self._lane_label(viewport=viewport),
+                idx,
+            )
+        else:
+            self._update_live()
 
     def on_session_start(self, session: TestSession) -> None:
         """Called when a test session starts. Displays dependency chain if present."""
-        line = Text()
-        line.append(f"[{self._lane_label(session=session)}] ", style="bold cyan")
-        line.append("● ", style="white")
-        line.append(session.test_name, style="bold white")
+        lane_key = self._lane_key(session=session)
+        scope_key = self._session_scope(session)
+        self._lane_scopes[lane_key] = scope_key
+        self._lane_next_slot[lane_key] = 0
+        self._lane_parent_slots[lane_key] = {}
+        self._lane_labels[lane_key] = self._lane_label(session=session)
 
+        title = Text()
+        title.append("● ", style="white")
+        title.append(session.test_name, style="bold white")
         if session.dependency_results:
             dep_chain = " → ".join([d["name"] for d in session.dependency_results])
-            line.append(f" [dependencies: {dep_chain}]", style="dim")
+            title.append(f" [dependencies: {dep_chain}]", style="dim")
 
-        self._upsert_lane_line(self._lane_key(session=session), line)
+        idx = self._ensure_scope_header(scope_key, title)
+        self._set_lane_position(lane_key, self._lane_label(session=session), idx)
 
     def on_parent_step_done(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when a container step finishes — updates its line color in-place."""
         _, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
+        lane_key = self._lane_key(viewport=viewport)
+        scope_key = self._lane_scope(lane_key)
+        slot = self._lane_parent_slots.get(lane_key, {}).get(step.id)
+        if slot is None:
+            slot = self._lane_next_slot.get(lane_key, 0)
+            self._lane_next_slot[lane_key] = slot + 1
 
         line = Text()
-        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
         line.append("● ", style=color)
         line.append(step.instruction, style=f"bold {color}")
         if step.expectation:
             line.append(f" → {step.expectation}", style=f"bold {color}")
 
-        self._upsert_lane_line(self._lane_key(viewport=viewport), line)
+        idx = self._get_or_create_scope_slot(scope_key, slot, line)
+        self._lane_parent_slots.get(lane_key, {}).pop(step.id, None)
+
+        if viewport:
+            current_idx = self._lane_positions.get(lane_key)
+            if current_idx is None or current_idx < idx:
+                self._set_lane_position(
+                    lane_key,
+                    self._lane_label(viewport=viewport),
+                    idx,
+                )
+            else:
+                self._update_live()
+        else:
+            self._update_live()
 
     def finalize(self) -> None:
         """Stops the Live display and clears any trailing footer."""
