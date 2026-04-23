@@ -108,6 +108,7 @@ vizqa run tests/
 | `--headless / --no-headless` | Run browser in headless mode. | `True` |
 | `-v, --verbose` | Increase output verbosity (-v steps, -vv timing/detail). | `0` |
 | `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
+| `--viewport` | Repeatable viewport profile name or raw `WIDTHxHEIGHT` size. | Configured app viewports or `desktop` |
 
 ---
 
@@ -116,13 +117,17 @@ vizqa run tests/
 vizQA supports global and per-test configuration, including custom HTTP headers for authentication or specialized testing.
 
 ### Global Configuration
-You can define global headers in your `pyproject.toml` or a `.ini` file in the current working directory: `pytest.ini`, `tox.ini`, `setup.cfg`, or `vizqa.ini`.
+You can define global headers and reusable viewport profiles in your `pyproject.toml` or a `.ini` file in the current working directory: `pytest.ini`, `tox.ini`, `setup.cfg`, or `vizqa.ini`.
 
 **`pyproject.toml`**
 ```toml
 [tool.vizqa.headers]
 Authorization = "Bearer global-api-token"
 X-Custom-Header = "GlobalValue"
+
+[tool.vizqa.viewports]
+app = "1280x720"
+mobile = "390x844"
 ```
 
 **`pytest.ini` / `tox.ini` / `setup.cfg` / `vizqa.ini`**
@@ -130,7 +135,19 @@ X-Custom-Header = "GlobalValue"
 [vizqa.headers]
 Authorization = Bearer global-api-token
 X-Custom-Header = GlobalValue
+
+[vizqa.viewports]
+app = 1280x720
+mobile = 390x844
 ```
+
+Built-in viewport profile names:
+- `mobile`
+- `tablet`
+- `desktop`
+- `widescreen`
+
+If you define viewport profiles for your app, `vizqa run ...` uses them by default when `--viewport` is omitted.
 
 ### Per-Test Overrides
 You can specify or override headers directly in your test YAML file. These take precedence over global settings.

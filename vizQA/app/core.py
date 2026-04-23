@@ -7,7 +7,7 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from playwright.async_api import Browser, Page, async_playwright
 
@@ -24,6 +24,10 @@ from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.app.support.weights import get_model_dir
 from vizQA.reasoning import MiniLM, SemanticParser
 
+if TYPE_CHECKING:
+    from vizQA.app.logger import SessionLogger
+    from vizQA.app.viewport import ViewportSpec
+
 
 # pylint: disable=too-many-instance-attributes
 class Automator:
@@ -31,7 +35,15 @@ class Automator:
     Main controller for browser automation and perception-integrated execution.
     """
 
-    def __init__(self, perception_client: PerceptionClient, verbosity: int = 0, headless: bool = True):
+    # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def __init__(
+        self,
+        perception_client: PerceptionClient,
+        verbosity: int = 0,
+        headless: bool = True,
+        viewport: Optional["ViewportSpec"] = None,
+        logger: Optional["SessionLogger"] = None,
+    ):
         """
         Initialises the Automator.
 
@@ -42,10 +54,11 @@ class Automator:
         self.client = perception_client
         self.verbosity = verbosity
         self.headless = headless
+        self.viewport = viewport
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
-        self._logger = get_logger()
+        self._logger = logger or get_logger(viewport.slug if viewport else None)
 
         model_dir = os.fspath(get_model_dir())
         try:
@@ -65,7 +78,12 @@ class Automator:
         """Initialises the Playwright browser and page."""
         self.playwright_mgr = await async_playwright().start()
         self.browser = await self.playwright_mgr.chromium.launch(headless=self.headless)
-        self.page = await self.browser.new_page()
+        if self.viewport:
+            self.page = await self.browser.new_page(
+                viewport={"width": self.viewport.width, "height": self.viewport.height}
+            )
+        else:
+            self.page = await self.browser.new_page()
         os.makedirs(".vizQA", exist_ok=True)
 
     async def stop(self):
@@ -888,7 +906,10 @@ class Automator:
 def _test_slug(session: TestSession) -> str:
     """Returns a filesystem-safe slug for the test session."""
     base = session.file_stem if session.file_stem else session.test_name
-    return base.replace(" ", "_").replace(":", "_").lower()
+    base_slug = base.replace(" ", "_").replace(":", "_").lower()
+    if session.viewport_slug:
+        return f"{session.viewport_slug}__{base_slug}"
+    return base_slug
 
 
 def _resolve_coords(target: Dict[str, Any], viewport: Dict[str, Any]) -> Tuple[float, float, float, float]:

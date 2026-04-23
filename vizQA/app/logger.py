@@ -20,7 +20,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 _LOG_DIR = ".vizQA"
-_INSTANCE: Optional["SessionLogger"] = None
+_INSTANCES: Dict[str, "SessionLogger"] = {}
+_RUN_TIMESTAMP: Optional[str] = None
 
 
 class SessionLogger:
@@ -35,13 +36,15 @@ class SessionLogger:
     - ERROR  — caught exceptions during step execution
     """
 
-    def __init__(self):
+    def __init__(self, log_suffix: Optional[str] = None, timestamp: Optional[str] = None):
         os.makedirs(_LOG_DIR, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = os.path.join(_LOG_DIR, f"run_{timestamp}.log")
+        run_timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = f"_{log_suffix}" if log_suffix else ""
+        log_path = os.path.join(_LOG_DIR, f"run_{run_timestamp}{suffix}.log")
         self.log_path = log_path
 
-        self._logger = logging.getLogger(f"vizqa.session.{timestamp}")
+        logger_name = f"vizqa.session.{run_timestamp}{suffix}"
+        self._logger = logging.getLogger(logger_name)
         self._logger.setLevel(logging.DEBUG)
         self._logger.propagate = False  # don't bubble up to the root logger
 
@@ -105,20 +108,28 @@ class SessionLogger:
         self._logger.debug("[%s] %s", step_id, message)
 
 
-def get_logger() -> SessionLogger:
+def get_logger(log_suffix: Optional[str] = None) -> SessionLogger:
     """
-    Returns the process-wide singleton SessionLogger, creating it on first call.
+    Returns a run-scoped SessionLogger, optionally namespaced by lane suffix.
 
-    The log file name is determined at creation time so a single log file
-    covers the whole vizQA run.
+    The timestamp portion is shared across the run so per-lane log files are
+    grouped together while remaining isolated.
     """
-    global _INSTANCE  # pylint: disable=global-statement
-    if _INSTANCE is None:
-        _INSTANCE = SessionLogger()
-    return _INSTANCE
+    global _RUN_TIMESTAMP  # pylint: disable=global-statement
+    key = log_suffix or ""
+    if key not in _INSTANCES:
+        if _RUN_TIMESTAMP is None:
+            _RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _INSTANCES[key] = SessionLogger(log_suffix=log_suffix, timestamp=_RUN_TIMESTAMP)
+    return _INSTANCES[key]
 
 
 def reset_logger() -> None:
     """Resets the singleton (mainly useful in tests)."""
-    global _INSTANCE  # pylint: disable=global-statement
-    _INSTANCE = None
+    global _RUN_TIMESTAMP  # pylint: disable=global-statement
+    for logger in _INSTANCES.values():
+        for handler in list(logger._logger.handlers):  # pylint: disable=protected-access
+            handler.close()
+            logger._logger.removeHandler(handler)  # pylint: disable=protected-access
+    _INSTANCES.clear()
+    _RUN_TIMESTAMP = None

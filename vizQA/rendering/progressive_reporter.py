@@ -1,13 +1,16 @@
 """Progressive rendering helpers for CLI reporting."""
 
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
 
 from vizQA.app.memory import StepStatus, TestSession, TestStep
+
+if TYPE_CHECKING:
+    from vizQA.app.viewport import ViewportSpec
 
 STEP_STATUS_STYLES = {
     StepStatus.RUNNING: ("▶", "yellow"),
@@ -31,7 +34,8 @@ def format_step_prefix(instr: str) -> Text:
 
 def print_session_header(console: Console, session: TestSession) -> None:
     """Prints a session header and dependency chain if present."""
-    console.print(f"\n[bold]● {session.test_name}[/] [dim]({session.id})[/]")
+    viewport_note = f" [{session.viewport_name}]" if session.viewport_name else ""
+    console.print(f"\n[bold]● {session.test_name}{viewport_note}[/] [dim]({session.id})[/]")
     if session.dependency_results:
         dep_names = " → ".join([d["name"] for d in session.dependency_results])
         console.print(f"[dim]dependencies: {dep_names}[/]")
@@ -65,6 +69,7 @@ class ProgressiveReporter:
         self._live: Optional[Live] = None
         self._renderable_lines: List[Any] = []
         self._parent_map: Dict[str, int] = {}
+        self._lane_lines: Dict[str, int] = {}
 
     def register_session(self, session: TestSession) -> None:
         """Register a session so the reporter can count total sub-steps."""
@@ -106,43 +111,63 @@ class ProgressiveReporter:
             return self._renderable_lines[-max_lines:]
         return self._renderable_lines
 
-    def on_step_done(self, step: TestStep, depth: int = 0) -> None:
+    def _lane_key(self, viewport: Optional["ViewportSpec"] = None, session: Optional[TestSession] = None) -> str:
+        if viewport:
+            return viewport.slug
+        if session and session.viewport_slug:
+            return session.viewport_slug
+        return "default"
+
+    def _lane_label(self, viewport: Optional["ViewportSpec"] = None, session: Optional[TestSession] = None) -> str:
+        if viewport:
+            return viewport.name
+        if session and session.viewport_name:
+            return session.viewport_name
+        return "default"
+
+    def _upsert_lane_line(self, lane_key: str, line: Text) -> None:
+        if lane_key in self._lane_lines:
+            idx = self._lane_lines[lane_key]
+            self._renderable_lines[idx] = line
+        else:
+            self._lane_lines[lane_key] = len(self._renderable_lines)
+            self._renderable_lines.append(line)
+        self._update_live()
+
+    def on_step_done(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when an atomic step finishes."""
         if step.status in (StepStatus.RUNNING, StepStatus.PENDING):
             return
 
         self._completed_sub_steps += 1
         icon, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
-        indent = "  " * depth
         prefix_text = format_step_prefix(step.instruction)
 
         line = Text()
-        line.append(f"{indent}{icon} ", style=color)
+        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
+        line.append(f"{icon} ", style=color)
         line.append_text(prefix_text)
         if step.expectation:
             line.append(f" → {step.expectation}", style="dim")
+        self._upsert_lane_line(self._lane_key(viewport=viewport), line)
 
-        if self.verbosity >= 1 and step.status == StepStatus.FAILED and step.failure_reason:
-            line.append(f"\n{indent}  ↳ {step.failure_reason}", style="red dim")
-
-        self._renderable_lines.append(line)
-        self._update_live()
-
-    def on_parent_step_start(self, step: TestStep) -> None:
+    def on_parent_step_start(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when a container step starts."""
         line = Text()
+        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
         line.append("● ", style="white")
         line.append(step.instruction, style="bold white")
         if step.expectation:
             line.append(f" → {step.expectation}", style="dim")
 
-        self._parent_map[step.id] = len(self._renderable_lines)
-        self._renderable_lines.append(line)
-        self._update_live()
+        lane_key = self._lane_key(viewport=viewport)
+        self._parent_map[step.id] = self._lane_lines.get(lane_key, len(self._renderable_lines))
+        self._upsert_lane_line(lane_key, line)
 
     def on_session_start(self, session: TestSession) -> None:
         """Called when a test session starts. Displays dependency chain if present."""
         line = Text()
+        line.append(f"[{self._lane_label(session=session)}] ", style="bold cyan")
         line.append("● ", style="white")
         line.append(session.test_name, style="bold white")
 
@@ -150,23 +175,20 @@ class ProgressiveReporter:
             dep_chain = " → ".join([d["name"] for d in session.dependency_results])
             line.append(f" [dependencies: {dep_chain}]", style="dim")
 
-        self._renderable_lines.append(line)
-        self._update_live()
+        self._upsert_lane_line(self._lane_key(session=session), line)
 
-    def on_parent_step_done(self, step: TestStep) -> None:
+    def on_parent_step_done(self, step: TestStep, viewport: Optional["ViewportSpec"] = None) -> None:
         """Called when a container step finishes — updates its line color in-place."""
-        if step.id in self._parent_map:
-            idx = self._parent_map[step.id]
-            _, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
+        _, color = STEP_STATUS_STYLES.get(step.status, ("?", "white"))
 
-            line = Text()
-            line.append("● ", style=color)
-            line.append(step.instruction, style=f"bold {color}")
-            if step.expectation:
-                line.append(f" → {step.expectation}", style=f"bold {color}")
+        line = Text()
+        line.append(f"[{self._lane_label(viewport=viewport)}] ", style="bold cyan")
+        line.append("● ", style=color)
+        line.append(step.instruction, style=f"bold {color}")
+        if step.expectation:
+            line.append(f" → {step.expectation}", style=f"bold {color}")
 
-            self._renderable_lines[idx] = line
-            self._update_live()
+        self._upsert_lane_line(self._lane_key(viewport=viewport), line)
 
     def finalize(self) -> None:
         """Stops the Live display and clears any trailing footer."""
@@ -186,8 +208,12 @@ class ProgressiveReporter:
                 if top_step.status == StepStatus.FAILED:
                     failed_step = _deepest_failed(top_step)
                     session_label = session.test_name
+                    if session.viewport_name:
+                        session_label = f"{session_label} [{session.viewport_name}]"
                     if session.is_dependency:
                         session_label = f"Dependency failure in {session.test_name}"
+                        if session.viewport_name:
+                            session_label = f"{session_label} [{session.viewport_name}]"
 
                     self.console.print(f"\n[bold red]FAILURE in {session_label} › {top_step.instruction}[/]")
                     if failed_step != top_step:

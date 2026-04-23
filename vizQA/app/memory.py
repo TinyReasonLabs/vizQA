@@ -87,6 +87,10 @@ class TestSession(BaseModel):
     parent_test_name: Optional[str] = None  # Which test this depends on (for reporting)
     is_dependency: bool = False  # Whether this session was executed as a dependency of another test
     dependency_results: List[Dict[str, Any]] = []  # [{name, status, session_id}, ...] for each dependency
+    viewport_name: Optional[str] = None
+    viewport_slug: Optional[str] = None
+    viewport_width: Optional[int] = None
+    viewport_height: Optional[int] = None
 
     __test__ = False
 

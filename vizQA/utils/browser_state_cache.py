@@ -11,31 +11,42 @@ class BrowserStateCache:
     CACHE_DIR = Path(".vizQA") / "browser_states"
 
     @staticmethod
-    def cache(test_stem: str, state_dict: Dict[str, Any]) -> Path:
+    def build_cache_key(test_stem: str, namespace: str | None = None) -> str:
+        """Build a stable cache key for a test, optionally namespaced by lane."""
+        if namespace:
+            return f"{namespace}__{test_stem}"
+        return test_stem
+
+    @staticmethod
+    def cache(test_stem: str, state_dict: Dict[str, Any], namespace: str | None = None) -> Path:
         """
         Cache browser state to disk for a test.
 
         :param test_stem: Stem of the test file (without extension)
         :param state_dict: Browser state dictionary to cache
+        :param namespace: Optional execution-lane namespace
         :return: Path to the cached state file
         """
         BrowserStateCache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-        cache_file = BrowserStateCache.CACHE_DIR / f"{test_stem}.json"
+        cache_key = BrowserStateCache.build_cache_key(test_stem, namespace=namespace)
+        cache_file = BrowserStateCache.CACHE_DIR / f"{cache_key}.json"
         with open(cache_file, "w", encoding="utf-8") as file:
             json.dump(state_dict, file, indent=2)
 
         return cache_file
 
     @staticmethod
-    def load(test_stem: str) -> Optional[Dict[str, Any]]:
+    def load(test_stem: str, namespace: str | None = None) -> Optional[Dict[str, Any]]:
         """
         Load cached browser state for a test.
 
         :param test_stem: Stem of the test file (without extension)
+        :param namespace: Optional execution-lane namespace
         :return: Browser state dictionary, or None if cache not found
         """
-        cache_file = BrowserStateCache.CACHE_DIR / f"{test_stem}.json"
+        cache_key = BrowserStateCache.build_cache_key(test_stem, namespace=namespace)
+        cache_file = BrowserStateCache.CACHE_DIR / f"{cache_key}.json"
 
         if not cache_file.exists():
             return None

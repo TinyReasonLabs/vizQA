@@ -15,6 +15,7 @@ from vizQA.app.exceptions import (
 )
 from vizQA.app.logger import SessionLogger, get_logger
 from vizQA.app.memory import ActionType, FailureType, StepStatus, TestSession, TestStep, TestSuite
+from vizQA.app.viewport import BUILTIN_VIEWPORTS, ViewportConfig, ViewportSpec, load_viewport_config, resolve_viewports
 
 __all__ = [
     "PerceptionClient",
@@ -38,4 +39,9 @@ __all__ = [
     "TestSession",
     "TestStep",
     "TestSuite",
+    "BUILTIN_VIEWPORTS",
+    "ViewportConfig",
+    "ViewportSpec",
+    "load_viewport_config",
+    "resolve_viewports",
 ]

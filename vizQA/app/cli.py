@@ -24,6 +24,7 @@ from vizQA.app.exceptions import TestDefinitionError, UserFacingException
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.support.weights import inspect_weight_state
+from vizQA.app.viewport import ViewportSpec, load_viewport_config, resolve_viewports
 from vizQA.planning import DependencyResolver, StepPlanner
 from vizQA.rendering import (
     STEP_STATUS_STYLES,
@@ -221,7 +222,11 @@ def _load_config() -> dict[str, str]:
     return {str(k): str(v) for k, v in headers.items()}
 
 
-def _count_top_level_results(sessions: List[TestSession], total_tests: int) -> tuple[int, int]:
+def _count_top_level_results(
+    sessions: List[TestSession],
+    total_tests: int,
+    total_viewports: int = 1,
+) -> tuple[int, int]:
     """
     Count pass/fail totals for user-invoked tests only.
 
@@ -229,7 +234,17 @@ def _count_top_level_results(sessions: List[TestSession], total_tests: int) -> t
     passing prerequisites does not produce negative failure counts.
     """
     top_level_sessions = [session for session in sessions if not session.is_dependency]
-    passed = sum(1 for session in top_level_sessions if all(step.status == StepStatus.PASSED for step in session.steps))
+    grouped: Dict[str, List[TestSession]] = {}
+    for session in top_level_sessions:
+        key = session.file_stem or session.test_name
+        grouped.setdefault(key, []).append(session)
+
+    passed = sum(
+        1
+        for lane_sessions in grouped.values()
+        if len(lane_sessions) == total_viewports
+        and all(all(step.status == StepStatus.PASSED for step in session.steps) for session in lane_sessions)
+    )
     failed = max(0, total_tests - passed)
     return passed, failed
 
@@ -279,7 +294,8 @@ def _collect_involved_test_stems(test_files: List[Path]) -> Set[str]:
     return stems
 
 
-def _clean_run_artifacts(test_stems: Set[str]) -> Dict[str, int]:
+# pylint: disable=too-many-branches
+def _clean_run_artifacts(test_stems: Set[str], viewport_slugs: Optional[Set[str]] = None) -> Dict[str, int]:
     """
     Remove stale screenshots, related browser-state caches, and prior run logs.
 
@@ -290,21 +306,40 @@ def _clean_run_artifacts(test_stems: Set[str]) -> Dict[str, int]:
     if not _ARTIFACT_DIR.exists():
         return deleted
 
-    for stem in test_stems:
-        for screenshot_path in _ARTIFACT_DIR.glob(f"{stem}_*.jpg"):
-            if screenshot_path.is_file():
-                screenshot_path.unlink()
-                deleted["screenshots"] += 1
+    if viewport_slugs:
+        for slug in viewport_slugs:
+            for stem in test_stems:
+                for screenshot_path in _ARTIFACT_DIR.glob(f"{slug}__{stem}_*.jpg"):
+                    if screenshot_path.is_file():
+                        screenshot_path.unlink()
+                        deleted["screenshots"] += 1
 
-        cache_path = BrowserStateCache.CACHE_DIR / f"{stem}.json"
-        if cache_path.exists():
-            cache_path.unlink()
-            deleted["browser_states"] += 1
+                cache_key = BrowserStateCache.build_cache_key(stem, namespace=slug)
+                cache_path = BrowserStateCache.CACHE_DIR / f"{cache_key}.json"
+                if cache_path.exists():
+                    cache_path.unlink()
+                    deleted["browser_states"] += 1
 
-    for log_path in _ARTIFACT_DIR.glob("run_*.log"):
-        if log_path.is_file():
-            log_path.unlink()
-            deleted["logs"] += 1
+            for log_path in _ARTIFACT_DIR.glob(f"run_*_{slug}.log"):
+                if log_path.is_file():
+                    log_path.unlink()
+                    deleted["logs"] += 1
+    else:
+        for stem in test_stems:
+            for screenshot_path in _ARTIFACT_DIR.glob(f"{stem}_*.jpg"):
+                if screenshot_path.is_file():
+                    screenshot_path.unlink()
+                    deleted["screenshots"] += 1
+
+            cache_path = BrowserStateCache.CACHE_DIR / f"{stem}.json"
+            if cache_path.exists():
+                cache_path.unlink()
+                deleted["browser_states"] += 1
+
+        for log_path in _ARTIFACT_DIR.glob("run_*.log"):
+            if log_path.is_file():
+                log_path.unlink()
+                deleted["logs"] += 1
 
     return deleted
 
@@ -397,7 +432,7 @@ async def _run_test_dependencies(
     return all_passed, dependency_results, inherited_artifacts
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,too-many-branches
 async def run_single_test(
     test_path: Path,
     automator: Automator,
@@ -405,9 +440,12 @@ async def run_single_test(
     on_step_update: Optional[Any] = None,
     interactive: bool = False,
     is_dependency: bool = False,
+    viewport: Optional[ViewportSpec] = None,
 ) -> bool:
     """
     Runs a single test file and updates the reporter.
+
+    TODO refactor this to smaller functions, reduce nesting
 
     :param test_path: Path to the test file
     :param automator: Automator instance
@@ -415,6 +453,7 @@ async def run_single_test(
     :param on_step_update: Callback for step updates
     :param interactive: Whether to run in interactive mode
     :param is_dependency: Whether this test is running as a dependency
+    :param viewport: ViewportSpec for this test run, if applicable
     :return: True if test passed, False otherwise
     """
     try:
@@ -445,6 +484,10 @@ async def run_single_test(
                 headers={},
                 is_dependency=is_dependency,
                 dependency_results=dependency_results,
+                viewport_name=viewport.name if viewport else None,
+                viewport_slug=viewport.slug if viewport else None,
+                viewport_width=viewport.width if viewport else None,
+                viewport_height=viewport.height if viewport else None,
             )
             reporter.register_session(session)
 
@@ -483,6 +526,10 @@ async def run_single_test(
         headers=merged_headers,
         is_dependency=is_dependency,
         dependency_results=dependency_results,
+        viewport_name=viewport.name if viewport else None,
+        viewport_slug=viewport.slug if viewport else None,
+        viewport_width=viewport.width if viewport else None,
+        viewport_height=viewport.height if viewport else None,
     )
     reporter.register_session(session)
 
@@ -491,7 +538,10 @@ async def run_single_test(
     if dependency_results:
 
         latest_dependency = dependency_results[-1]
-        latest_state = BrowserStateCache.load(latest_dependency["file_stem"])
+        if viewport:
+            latest_state = BrowserStateCache.load(latest_dependency["file_stem"], namespace=viewport.slug)
+        else:
+            latest_state = BrowserStateCache.load(latest_dependency["file_stem"])
         if latest_state:
             await automator.restore_browser_state(latest_state)
             if automator.page:
@@ -508,7 +558,10 @@ async def run_single_test(
         try:
             browser_state = await automator.capture_browser_state()
             session.browser_state = browser_state
-            BrowserStateCache.cache(test_path.stem, browser_state)
+            if viewport:
+                BrowserStateCache.cache(test_path.stem, browser_state, namespace=viewport.slug)
+            else:
+                BrowserStateCache.cache(test_path.stem, browser_state)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             console.print(f"[yellow]Warning: Failed to capture browser state: {exc}[/]")
 
@@ -582,7 +635,20 @@ def cli(ctx):
     default=False,
     help="Remove all cached browser states before running tests (default: False)",
 )
-def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool, clean_cache: bool):
+@click.option(
+    "--viewport",
+    "viewport",
+    multiple=True,
+    help="Viewport profile name or WIDTHxHEIGHT. Repeat to run a viewport matrix.",
+)
+def run(
+    paths: tuple[str, ...],
+    headless: bool,
+    verbose: int,
+    interactive: bool,
+    clean_cache: bool,
+    viewport: tuple[str, ...],
+):
     """
     Run UI tests from files or directories.
 
@@ -591,6 +657,7 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
     :param verbose: Verbosity level for output.
     :param interactive: Whether to run in interactive mode.
     :param clean_cache: Whether to clean cached browser states before running.
+    :param viewport: Viewport profile names or dimensions to run tests against.
     """
     if not paths:
         ctx = click.get_current_context()
@@ -603,6 +670,8 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
         count = BrowserStateCache.clean()
         console.print(f"[dim]Cleaned {count} cached browser states[/]")
 
+    viewport_config = load_viewport_config()
+    viewports = resolve_viewports(list(viewport), viewport_config)
     reporter = ProgressiveReporter(console=console, verbosity=verbose)
     test_files = discover_test_files(list(paths))
 
@@ -611,7 +680,7 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
         return
 
     involved_test_stems = _collect_involved_test_stems(test_files)
-    cleanup_counts = _clean_run_artifacts(involved_test_stems)
+    cleanup_counts = _clean_run_artifacts(involved_test_stems, viewport_slugs={item.slug for item in viewports})
 
     if verbose >= 1 and any(cleanup_counts.values()):
         console.print(
@@ -622,53 +691,70 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
         )
 
     async def main():
-        client = PerceptionClient()
-        automator = Automator(client, verbosity=verbose, headless=headless)
-        get_logger()
+        async def run_lane(viewport_spec: ViewportSpec) -> bool:
+            client = PerceptionClient()
+            logger = get_logger(viewport_spec.slug)
+            automator = Automator(
+                client,
+                verbosity=verbose,
+                headless=headless,
+                viewport=viewport_spec,
+                logger=logger,
+            )
+            lane_passed = True
+
+            try:
+                await automator.start()
+
+                for test_file in test_files:
+
+                    async def on_step_update(step: TestStep, lane_viewport: ViewportSpec = viewport_spec):
+                        """Called by core after every status change."""
+                        if step.sub_steps:
+                            if step.status == StepStatus.RUNNING:
+                                reporter.on_parent_step_start(step, viewport=lane_viewport)
+                            elif step.status not in (StepStatus.RUNNING, StepStatus.PENDING):
+                                reporter.on_parent_step_done(step, viewport=lane_viewport)
+                        else:
+                            reporter.on_step_done(step, viewport=lane_viewport)
+
+                    result = await run_single_test(
+                        test_file,
+                        automator,
+                        reporter,
+                        on_step_update=on_step_update,
+                        interactive=interactive,
+                        viewport=viewport_spec,
+                    )
+                    lane_passed = lane_passed and result
+
+            except click.Abort:
+                lane_passed = False
+            except UserFacingException as err:
+                lane_passed = False
+                console.print(f"\n[bold red]Error ({viewport_spec.name}):[/] {err.user_message}")
+                if verbose >= 1 and err.internal_detail:
+                    console.print(f"[dim]Details: {err.internal_detail}[/]")
+            except Exception as err:  # pylint: disable=broad-exception-caught
+                lane_passed = False
+                console.print(f"[red]An unexpected error occurred during execution ({viewport_spec.name}): {err}[/]")
+                if verbose >= 1:
+                    traceback.print_exc()
+            finally:
+                await automator.stop()
+
+            return lane_passed
 
         try:
-            await automator.start()
-
-            for test_file in test_files:
-
-                async def on_step_update(step: TestStep):
-                    """Called by core after every status change."""
-                    if step.sub_steps:
-                        # Container step
-                        if step.status == StepStatus.RUNNING:
-                            reporter.on_parent_step_start(step)
-                        elif step.status not in (StepStatus.RUNNING, StepStatus.PENDING):
-                            reporter.on_parent_step_done(step)
-                    else:
-                        reporter.on_step_done(step, depth=1)
-
-                await run_single_test(
-                    test_file,
-                    automator,
-                    reporter,
-                    on_step_update=on_step_update,
-                    interactive=interactive,
-                )
-
-        except UserFacingException as err:
-            reporter.finalize()
-            console.print(f"\n[bold red]Error:[/] {err.user_message}")
-            if verbose >= 1 and err.internal_detail:
-                console.print(f"[dim]Details: {err.internal_detail}[/]")
-        except Exception as err:  # pylint: disable=broad-exception-caught
-            reporter.finalize()
-            console.print(f"[red]An unexpected error occurred during execution: {err}[/]")
-            if verbose >= 1:
-                traceback.print_exc()
+            results = await asyncio.gather(*(run_lane(item) for item in viewports))
         finally:
             reporter.finalize()
-            await automator.stop()
 
         reporter.print_failures()
 
         # Summary line
         total = len(test_files)
-        passed, failed = _count_top_level_results(reporter.sessions, total)
+        passed, failed = _count_top_level_results(reporter.sessions, total, len(viewports))
 
         summary = Text.assemble(
             ("\nResults: ", "bold"),
@@ -678,8 +764,11 @@ def run(paths: tuple[str, ...], headless: bool, verbose: int, interactive: bool,
             (f" in {total} test{'s' if total != 1 else ''}", "dim"),
         )
         console.print(summary)
+        return all(results) and (not reporter.sessions or failed == 0)
 
-    asyncio.run(main())
+    success = asyncio.run(main())
+    if not success:
+        raise click.exceptions.Exit(1)
 
 
 @cli.command()
