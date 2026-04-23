@@ -88,6 +88,8 @@ steps:
     expect: "dashboard"
 ```
 
+YAML string values support environment-variable interpolation with `${VAR}`. If a referenced variable is not set, vizQA raises a test-definition error when loading the file.
+
 For the full YAML format and authoring guide, see [docs/test_cases.md](docs/test_cases.md).
 
 ### Run the Test

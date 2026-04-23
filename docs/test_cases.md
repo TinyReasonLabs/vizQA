@@ -75,6 +75,22 @@ url: "https://example.com/dashboard"
 - Optional.
 - Useful for open-source examples and longer-lived suites.
 
+### Environment Variables
+
+- Any YAML string value can reference an environment variable with `${VAR}`.
+- Interpolation happens when vizQA loads the test file, before dependency resolution and execution.
+- If a referenced variable is not set, vizQA raises a `TestDefinitionError`.
+
+Example:
+
+```yaml
+url: "${APP_URL}"
+headers:
+  Authorization: "Bearer ${API_TOKEN}"
+steps:
+  - action: "Open ${LANDING_PAGE}"
+```
+
 ### `headers`
 
 - Optional.

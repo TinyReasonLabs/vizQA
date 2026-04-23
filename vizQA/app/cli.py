@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import click
-import yaml
 from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
@@ -27,7 +26,7 @@ from vizQA.app.support.weights import inspect_weight_state
 from vizQA.app.viewport import ViewportSpec, load_viewport_config, resolve_viewports
 from vizQA.planning import DependencyResolver, StepPlanner
 from vizQA.rendering import STEP_STATUS_STYLES, ProgressiveReporter, format_step_prefix, print_dependency_failure
-from vizQA.utils import BrowserStateCache, LineLoader
+from vizQA.utils import BrowserStateCache, load_yaml_with_lines
 
 console = Console(highlight=False)
 _ARTIFACT_DIR = Path(".vizQA")
@@ -250,11 +249,7 @@ def _load_test_data(test_path: Path) -> dict[str, Any]:
     :param test_path: Path to the test file
     :return: Parsed test data
     """
-    try:
-        test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
-    except Exception as err:  # pylint: disable=broad-exception-caught
-        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err)) from err
-    return test_data
+    return load_yaml_with_lines(test_path)
 
 
 def _resolve_dependencies(test_path: Path) -> List[Path]:
@@ -455,10 +450,7 @@ async def run_single_test(
     :param viewport: ViewportSpec for this test run, if applicable
     :return: True if test passed, False otherwise
     """
-    try:
-        test_data = yaml.load(test_path.read_text(), Loader=LineLoader)
-    except Exception as err:  # pylint: disable=broad-exception-caught
-        raise TestDefinitionError(f"Failed to load test file {test_path.name}", internal_detail=str(err)) from err
+    test_data = _load_test_data(test_path)
 
     # Resolve and run dependencies (only if not already a dependency)
     dependency_results: List[Dict[str, Any]] = []
