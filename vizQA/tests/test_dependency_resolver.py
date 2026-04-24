@@ -101,6 +101,28 @@ class TestDependencyResolver:
 
         assert "not found" in str(exc_info.value)
 
+    def test_requires_supports_env_var_interpolation(self, temp_test_dir, monkeypatch):
+        """Test that environment variables are expanded before dependency resolution."""
+        self.create_test_file(temp_test_dir, "login")
+        test_file = temp_test_dir / "checkout.yaml"
+        test_file.write_text(
+            """
+name: "Checkout"
+url: "http://example.com"
+requires:
+  - "${LOGIN_DEP}"
+steps: []
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOGIN_DEP", "login")
+
+        resolver = DependencyResolver(temp_test_dir)
+        deps = resolver.resolve(test_file)
+
+        assert len(deps) == 1
+        assert deps[0].stem == "login"
+
     def test_multiple_dependencies(self, temp_test_dir):
         """Test resolving multiple independent dependencies."""
         self.create_test_file(temp_test_dir, "auth")

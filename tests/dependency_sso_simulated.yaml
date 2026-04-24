@@ -1,5 +1,5 @@
 name: "Dependency Simulated SSO"
-url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
 description: "Runs the local identity-provider simulation and completes the SSO callback."
 
 requires:

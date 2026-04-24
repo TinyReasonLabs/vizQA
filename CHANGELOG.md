@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependency-system documentation and a general YAML test authoring guide under `docs/`.
 - A local dependency auth lab fixture plus example dependency test flows covering password login, MFA, role elevation, checkout, returns, approvals, session resume, and simulated SSO.
 - Custom viewport profiles and viewport-matrix execution for `vizqa run`, including built-in viewport presets, config-defined app viewports, raw `WIDTHxHEIGHT` CLI overrides, and per-viewport browser-state, artifact, and debug-log isolation.
+- `${VAR}` environment-variable interpolation for YAML test files, including fail-fast validation for missing variables during test loading and dependency resolution.
 
 ### Changed
 

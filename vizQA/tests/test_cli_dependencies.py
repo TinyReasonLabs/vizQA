@@ -3,15 +3,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from vizQA.app.cli import (
     _clean_run_artifacts,
     _collect_involved_test_stems,
     _count_top_level_results,
+    _load_test_data,
     cli,
     run_single_test,
 )
+from vizQA.app.exceptions import TestDefinitionError
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
 
@@ -20,6 +23,55 @@ def _make_test_file(tmp_path: Path, name: str, body: str) -> Path:
     path = tmp_path / f"{name}.yaml"
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def test_load_test_data_expands_env_vars_in_yaml_strings(tmp_path, monkeypatch):
+    test_path = _make_test_file(
+        tmp_path,
+        "env_vars",
+        """
+name: "${TEST_NAME}"
+url: "${APP_URL}"
+headers:
+  Authorization: "Bearer ${API_TOKEN}"
+steps:
+  - action: "Open ${PAGE_NAME}"
+    expect: "See ${PAGE_NAME}"
+""".strip(),
+    )
+
+    monkeypatch.setenv("TEST_NAME", "Environment Variables Test")
+    monkeypatch.setenv("APP_URL", "http://example.com/app")
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    monkeypatch.setenv("PAGE_NAME", "Dashboard")
+
+    test_data = _load_test_data(test_path)
+
+    assert test_data["name"] == "Environment Variables Test"
+    assert test_data["url"] == "http://example.com/app"
+    assert test_data["headers"]["Authorization"] == "Bearer secret-token"
+    assert test_data["steps"][0]["action"] == "Open Dashboard"
+    assert test_data["steps"][0]["expect"] == "See Dashboard"
+
+
+def test_load_test_data_raises_for_missing_env_var(tmp_path, monkeypatch):
+    test_path = _make_test_file(
+        tmp_path,
+        "missing_env_var",
+        """
+name: "Missing Env Var Test"
+url: "${APP_URL}"
+steps: []
+""".strip(),
+    )
+
+    monkeypatch.delenv("APP_URL", raising=False)
+
+    with pytest.raises(TestDefinitionError) as exc_info:
+        _load_test_data(test_path)
+
+    assert exc_info.value.user_message == f"Failed to load test file {test_path.name}"
+    assert "APP_URL" in exc_info.value.internal_detail
 
 
 def test_run_single_test_restores_dependency_state_and_merges_artifacts(tmp_path):

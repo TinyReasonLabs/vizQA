@@ -1,5 +1,5 @@
 name: "Dependency SSO Error Recovery"
-url: "file:///Users/alieissa/Projects/Coding/vizQA/demo_site/dependency_auth_lab.html"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
 description: "Forces the simulated SSO callback into an error state and verifies recovery messaging."
 
 requires:

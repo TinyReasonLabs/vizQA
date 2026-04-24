@@ -1,5 +1,5 @@
 name: "Nexus CRM: Auth Flow"
-url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+url: "file://${PWD}/demo_site/index.html"
 description: "Verifies the login modal and error handling."
 steps:
   - action: "Click the primary Login button in the header"

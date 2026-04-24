@@ -5,10 +5,8 @@ Dependency resolver for test cases with support for circular dependency detectio
 from pathlib import Path
 from typing import Dict, List, Set
 
-import yaml
-
 from vizQA.app.exceptions import TestDefinitionError
-from vizQA.utils import LineLoader
+from vizQA.utils import load_yaml_with_lines
 
 
 # pylint: disable=too-few-public-methods
@@ -50,13 +48,7 @@ class DependencyResolver:
 
     def _load_test_data(self, test_path: Path) -> dict:
         """Load YAML test data from a file."""
-        try:
-            return yaml.load(test_path.read_text(encoding="utf-8"), Loader=LineLoader)
-        except Exception as err:
-            raise TestDefinitionError(
-                f"Failed to load test file {test_path.name}",
-                internal_detail=str(err),
-            ) from err
+        return load_yaml_with_lines(test_path)
 
     def _detect_circular_dependencies(
         self, test_name: str, visited: Set[str], rec_stack: Set[str], graph: Dict[str, List[str]]
