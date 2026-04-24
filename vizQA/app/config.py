@@ -18,11 +18,12 @@ def _normalize_base_url(value: str) -> str:
 class ParserConfig:
     """Configuration for SemanticParser thresholds and behavior."""
 
-    use_advanced_ranking: bool = False
-    intent_threshold: float = 0.6
-    action_threshold: float = 0.52
-    semantic_match_threshold: float = 0.70
-    verification_timeout: int = 15
+    use_advanced_ranking: bool
+    intent_threshold: float
+    action_threshold: float
+    semantic_match_threshold: float
+    verification_timeout: int
+    step_delay_seconds: float
 
 
 PERCEPTION_BACKEND = _normalize_base_url(os.environ.get("PERCEPTION_BACKEND", "localhost:8228"))
@@ -32,6 +33,7 @@ intent_threq = float(os.environ.get("VIZQA_INTENT_THRESHOLD", "0.6"))
 action_threq = float(os.environ.get("VIZQA_ACTION_THRESHOLD", "0.8"))
 semantic_threq = float(os.environ.get("VIZQA_SEMANTIC_THRESHOLD", "0.70"))
 verif_timeout = int(os.environ.get("VIZQA_VERIFICATION_TIMEOUT", "5"))
+step_delay = float(os.environ.get("VIZQA_STEP_DELAY_SECONDS", "0.5"))
 
 CONFIG = ParserConfig(
     use_advanced_ranking=use_adv,
@@ -39,4 +41,5 @@ CONFIG = ParserConfig(
     action_threshold=action_threq,
     semantic_match_threshold=semantic_threq,
     verification_timeout=verif_timeout,
+    step_delay_seconds=step_delay,
 )

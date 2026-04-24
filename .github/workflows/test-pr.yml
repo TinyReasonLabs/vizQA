@@ -31,37 +31,18 @@ jobs:
       - name: Install Dependencies
         run: poetry install
 
-      # huggingface_hub may be transitive only; ensure CLI + resolver deps exist.
-      - name: Install HF download helpers
-        run: poetry run pip install -U "huggingface_hub[cli]" packaging
-
-      - name: Resolve weights (PR head)
-        id: weights-head
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          V=$(poetry run python -m vizQA.app.support.merged_tag_version HEAD)
-          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.app.support.hf_revision "$V")
-          echo "package_version=$V" >> "$GITHUB_OUTPUT"
-          echo "revision=$REV" >> "$GITHUB_OUTPUT"
-          echo "PR head: max merged tag version=$V -> HF revision=$REV"
-
-      - name: Cache model weights (PR head)
-        id: cache-weights-head
+      - name: Cache vizQA runtime assets (PR head)
+        id: cache-runtime-head
         uses: actions/cache@v4
         with:
-          path: ./vizQA/weights
-          key: ${{ runner.os }}-hf-pr-head-${{ steps.weights-head.outputs.revision }}
+          path: |
+            ./vizQA/weights
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-vizqa-runtime-pr-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
 
-      - name: Download weights (PR head)
-        if: steps.cache-weights-head.outputs.cache-hit != 'true'
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - name: Install vizQA runtime (PR head)
         run: |
-          poetry run hf download alieissa/minilm-ui \
-            --revision "${{ steps.weights-head.outputs.revision }}" \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
+          poetry run vizqa install
 
       - name: Run Tests (PR Branch)
         run: |
@@ -79,38 +60,19 @@ jobs:
         working-directory: base_repo
         run: poetry install
 
-      - name: Install HF download helpers (base venv)
-        working-directory: base_repo
-        run: poetry run pip install -U "huggingface_hub[cli]" packaging
-
-      - name: Resolve weights (base branch)
-        id: weights-base
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          V=$(poetry run python -m vizQA.app.support.merged_tag_version HEAD "${{ github.workspace }}/base_repo")
-          REV=$(PYTHONPATH="${{ github.workspace }}" poetry run python -m vizQA.app.support.hf_revision "$V")
-          echo "package_version=$V" >> "$GITHUB_OUTPUT"
-          echo "revision=$REV" >> "$GITHUB_OUTPUT"
-          echo "Base branch: max merged tag version=$V -> HF revision=$REV"
-
-      - name: Cache model weights (base)
-        id: cache-weights-base
+      - name: Cache vizQA runtime assets (base)
+        id: cache-runtime-base
         uses: actions/cache@v4
         with:
-          path: base_repo/vizQA/weights
-          key: ${{ runner.os }}-hf-pr-base-${{ steps.weights-base.outputs.revision }}
+          path: |
+            base_repo/vizQA/weights
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-vizqa-runtime-base-${{ hashFiles('base_repo/pyproject.toml', 'base_repo/poetry.lock') }}
 
-      - name: Download weights (base)
-        if: steps.cache-weights-base.outputs.cache-hit != 'true'
+      - name: Install vizQA runtime (base)
         working-directory: base_repo
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          poetry run hf download alieissa/minilm-ui \
-            --revision "${{ steps.weights-base.outputs.revision }}" \
-            --local-dir "${{ github.workspace }}/base_repo/vizQA/weights" \
-            --token "$HF_TOKEN"
+          poetry run vizqa install
 
       - name: Run Tests (Base Branch)
         run: |

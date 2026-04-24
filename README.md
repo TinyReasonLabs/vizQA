@@ -102,6 +102,27 @@ vizqa tests/
 vizqa run tests/
 ```
 
+### Use As a Library
+
+You can also embed `vizQA` inside an existing Playwright test and mix DOM-based and visual steps:
+
+```python
+from vizQA import attach
+
+
+async def test_login(page):
+    vizqa = attach(page)
+
+    await page.get_by_label("Email").fill("analyst.user@example.com")
+    await page.get_by_label("Password").fill("AnalystPass!23")
+    await vizqa.click("Sign in button")
+    await vizqa.verify("Overview dashboard")
+```
+
+Library usage is artifact-light by default. If you want persistent screenshots for debugging, pass `debug_dir=...` when attaching.
+
+For the full library guide, see [docs/library_api.md](docs/library_api.md).
+
 ### CLI Arguments
 
 | Argument | Description | Default |
@@ -117,6 +138,8 @@ vizqa run tests/
 ## Configuration
 
 vizQA supports global and per-test configuration, including custom HTTP headers for authentication or specialized testing.
+
+For the broader configuration reference, including environment variables see [docs/configuration.md](docs/configuration.md).
 
 ### Global Configuration
 You can define global headers and reusable viewport profiles in your `pyproject.toml` or a `.ini` file in the current working directory: `pytest.ini`, `tox.ini`, `setup.cfg`, or `vizqa.ini`.
