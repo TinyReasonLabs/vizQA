@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-24
+
 ### Added
 
 - Community docs: Code of Conduct, security policy, changelog, and pull request template.
@@ -32,5 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial published release line (alpha). See the [README](README.md) for features
 and usage.
 
-[Unreleased]: https://github.com/Spospider/vizQA/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Spospider/vizQA/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Spospider/vizQA/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Spospider/vizQA/releases/tag/v0.1.0
