@@ -42,7 +42,7 @@ def test_planner_decomposition_with_minilm_fallback(mock_minilm):
     """Verifies that an encoder-only model (3D tensor) triggers the heuristic fallback."""
     _, mock_session = mock_minilm
 
-    planner = StepPlanner(model_name="minilm")
+    planner = StepPlanner(model_name="minilm", logger=MagicMock())  # Use a mock logger to suppress output
     raw_steps = [{"action": "Click Login"}]
 
     steps = planner.decompose(raw_steps)
@@ -63,7 +63,7 @@ def test_planner_decomposition_with_minilm_generative(mock_minilm):
     mock_session.run.return_value = [np.array([[1, 2, 3]])]
     mock_tokenizer.decode.return_value = '[{"type": "FIND", "value": "button"}]'
 
-    planner = StepPlanner(model_name="minilm")
+    planner = StepPlanner(model_name="minilm", logger=MagicMock())  # Use a mock logger to suppress output
     steps = planner.decompose([{"action": "test"}])
 
     assert len(steps[0].sub_steps) == 1
@@ -79,7 +79,7 @@ def test_minilm_deserialization_error(mock_minilm):
     mock_session.run.return_value = [np.array([[1, 2, 3]])]
     mock_tokenizer.decode.return_value = "invalid json"
 
-    planner = StepPlanner(model_name="minilm")
+    planner = StepPlanner(model_name="minilm", logger=MagicMock())  # Use a mock logger to suppress output
     with pytest.raises(TestDefinitionError) as exc:
         planner.decompose([{"action": "test"}])
     assert "not valid JSON" in str(exc.value.internal_detail)
@@ -94,7 +94,7 @@ def test_minilm_malformed_step_error(mock_minilm):
     mock_session.run.return_value = [np.array([[1, 2, 3]])]
     mock_tokenizer.decode.return_value = '[{"type": "FIND"}]'  # Missing "value"
 
-    planner = StepPlanner(model_name="minilm")
+    planner = StepPlanner(model_name="minilm", logger=MagicMock())  # Use a mock logger to suppress output
     with pytest.raises(TestDefinitionError) as exc:
         planner.decompose([{"action": "test"}])
     assert "malformed or missing keys" in str(exc.value.internal_detail)

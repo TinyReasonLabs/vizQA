@@ -462,7 +462,9 @@ async def run_single_test(
         )
         if not deps_passed:
             # Mark this test as failed due to dependency failure
-            planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
+            planner = StepPlanner(
+                model_name="minilm", parser=automator.parser, minilm=automator.minilm, logger=automator.logger
+            )
             steps = planner.decompose(test_data.get("steps", []))
 
             session = TestSession(
@@ -494,7 +496,9 @@ async def run_single_test(
             return False
 
     # Consolidate model choice: use the parser/minilm from automator
-    planner = StepPlanner(model_name="minilm", parser=automator.parser, minilm=automator.minilm)
+    planner = StepPlanner(
+        model_name="minilm", parser=automator.parser, minilm=automator.minilm, logger=automator.logger
+    )
 
     steps = planner.decompose(test_data.get("steps", []))
 
@@ -683,8 +687,8 @@ def run(
 
     async def main():
         async def run_lane(viewport_spec: ViewportSpec) -> bool:
-            client = PerceptionClient()
             logger = get_logger(viewport_spec.slug)
+            client = PerceptionClient(logger=logger)
             automator = Automator(
                 client,
                 verbosity=verbose,

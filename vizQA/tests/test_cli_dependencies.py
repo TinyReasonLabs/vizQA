@@ -91,6 +91,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
@@ -161,6 +162,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(
@@ -207,6 +209,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(
@@ -256,6 +259,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(return_value={}),
@@ -328,6 +332,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(side_effect=run_session),
@@ -371,6 +376,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
@@ -595,7 +601,7 @@ steps: []
         patch("vizQA.app.cli.Automator") as mock_automator_cls,
         patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
     ):
-        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
         result = runner.invoke(cli, ["run", str(test_path)])
@@ -623,7 +629,7 @@ steps: []
         patch("vizQA.app.cli.Automator") as mock_automator_cls,
         patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
     ):
-        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
         result = runner.invoke(cli, ["run", "-v", str(test_path)])

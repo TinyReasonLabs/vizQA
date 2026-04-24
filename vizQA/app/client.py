@@ -16,10 +16,10 @@ class PerceptionClient:
     A client for sending requests to the Vision Perception API.
     """
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None, logger: Optional[Any] = None):
         self.base_url = base_url or PERCEPTION_BACKEND
         self.session_id = None
-        self._logger = get_logger()
+        self._logger = logger or get_logger()
 
     async def perceive(self, image_path: str, query: Optional[str] = None) -> Dict[str, Any]:
         """Send a screenshot to the perception API."""

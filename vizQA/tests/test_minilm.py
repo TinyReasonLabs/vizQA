@@ -8,6 +8,7 @@ broken.
 """
 
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,7 +27,7 @@ pytestmark = pytest.mark.skipif(
 def model():
     from vizQA.reasoning import MiniLM  # pylint: disable=import-outside-toplevel
 
-    return MiniLM(MODEL_DIR)
+    return MiniLM(MODEL_DIR, logger=MagicMock())  # Pass a mock logger to avoid initializing a real logger in tests
 
 
 # ---------------------------------------------------------------------------

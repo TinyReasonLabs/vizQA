@@ -315,6 +315,8 @@ class ProgressiveReporter:
                             session_label = f"{session_label} [{session.viewport_name}]"
 
                     self.console.print(f"\n[bold red]FAILURE in {session_label} › {top_step.instruction}[/]")
+                    if session.viewport_name:
+                        self.console.print(f"  [bold]Viewport:[/] {session.viewport_name}")
                     if failed_step != top_step:
                         self.console.print(f"  [bold red]↳ Failed at:[/] {failed_step.instruction}")
 
