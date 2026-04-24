@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A local dependency auth lab fixture plus example dependency test flows covering password login, MFA, role elevation, checkout, returns, approvals, session resume, and simulated SSO.
 - Custom viewport profiles and viewport-matrix execution for `vizqa run`, including built-in viewport presets, config-defined app viewports, raw `WIDTHxHEIGHT` CLI overrides, and per-viewport browser-state, artifact, and debug-log isolation.
 - `${VAR}` environment-variable interpolation for YAML test files, including fail-fast validation for missing variables during test loading and dependency resolution.
+- An embedded Python library API for attaching `vizQA` to an existing Playwright `Page`, including `attach`, `click`, `type`, `verify`, `run_step`, and `run_steps`, plus dedicated library documentation.
 
 ### Changed
 
@@ -23,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI cleanup summaries are now shown only in verbose mode to keep default test output quieter.
 - Dependency-related reporting is clearer during execution, including skip messaging and cleaner output for dependency-caused failures.
 - Multi-viewport CLI reporting now renders a shared test flow with moving viewport cursors instead of duplicating the full step stream for each viewport lane.
+- Library API usage is now artifact-light by default, keeping persistent screenshots only when `debug_dir` is explicitly provided.
+- The small delay between interaction steps is now configurable through `VIZQA_STEP_DELAY_SECONDS` instead of being hardcoded.
 
 ## [0.1.0] - 2026-04-04
 

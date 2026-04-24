@@ -83,3 +83,35 @@ def test_wait_until_timeout(session):
         success = asyncio.run(automator._execute_verify(session, step, "success indicator", timeout=5))
         assert success is False
         assert step.status == StepStatus.FAILED
+
+
+def test_execute_interaction_uses_configured_step_delay():
+    automator = Automator(perception_client=MagicMock())
+    automator.page = MagicMock()
+    automator.page.mouse = MagicMock()
+    automator.page.mouse.click = AsyncMock()
+    automator.parser.config.step_delay_seconds = 0.2
+
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        asyncio.run(automator._execute_interaction("click", 10, 20, ""))
+
+    automator.page.mouse.click.assert_awaited_once_with(10, 20)
+    mock_sleep.assert_called_once_with(0.2)
+
+
+def test_execute_action_uses_configured_step_delay_without_persistent_artifacts(session):
+    automator = Automator(perception_client=MagicMock(), artifact_dir=None)
+    automator.page = MagicMock()
+    automator.page.screenshot = AsyncMock()
+    automator.parser.config.step_delay_seconds = 0.3
+
+    step = TestStep(
+        id="legacy",
+        instruction="Click the login button",
+        perception_result={"viewport": {"width": 1280, "height": 720}, "top_matches": [{"bounds": [1, 2, 3, 4]}]},
+    )
+
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        asyncio.run(automator._execute_action(session, step))
+
+    mock_sleep.assert_called_once_with(0.3)
