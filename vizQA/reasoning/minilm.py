@@ -146,8 +146,8 @@ class MiniLM:
     }
     _KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
 
-    def __init__(self, model_dir: str):
-        self._logger = get_logger()
+    def __init__(self, model_dir: str, logger: Optional[Any] = None):
+        self._logger = logger or get_logger()
         self.model_path = os.path.join(model_dir, "model.onnx")
         self.tokenizer_path = os.path.join(model_dir, "tokenizer.json")
 

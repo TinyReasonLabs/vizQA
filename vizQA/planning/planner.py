@@ -21,9 +21,10 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
         model_name: str = "minilm",
         parser: Optional[SemanticParser] = None,
         minilm: Optional[Any] = None,
+        logger: Optional[Any] = None,
     ):
         self.model_name = model_name
-        self._logger = get_logger()
+        self._logger = logger or get_logger()
 
         if parser:
             self.parser = parser
@@ -39,7 +40,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             if model_name == "minilm":
                 model_dir = Path(__file__).resolve().parents[1] / "weights" / "minilm"
                 try:
-                    self.minilm = MiniLM(str(model_dir))
+                    self.minilm = MiniLM(str(model_dir), logger=self._logger)
                     # Synergize with parser
                     self.parser.minilm = self.minilm
                 except (FileNotFoundError, RuntimeError, ImportError) as e:
