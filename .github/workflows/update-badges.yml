@@ -26,24 +26,18 @@ jobs:
       - name: Install Dependencies
         run: poetry install
 
-      - name: Cache Model Weights
-        id: cache-weights
+      - name: Cache vizQA runtime assets
+        id: cache-runtime
         uses: actions/cache@v4
         with:
-          path: ./vizQA/weights
-          # The key uses your release tag; if the tag changes, the cache misses and re-downloads
-          key: ${{ runner.os }}-hf-weights-v1.0
+          path: |
+            ./vizQA/weights
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-vizqa-runtime-badges-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
 
-      - name: Download Weights on Cache Miss
-        if: steps.cache-weights.outputs.cache-hit != 'true'
+      - name: Install vizQA runtime
         run: |
-          poetry run pip install -U "huggingface_hub[cli]"
-          poetry run hf download alieissa/minilm-ui \
-            --revision v1.0 \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          poetry run vizqa install
 
       - name: Run Tests & Coverage
         run: |
