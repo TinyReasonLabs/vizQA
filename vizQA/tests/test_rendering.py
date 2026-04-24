@@ -78,6 +78,43 @@ def test_print_failures_marks_dependency_sessions_clearly():
     assert "Dependency failure in Dependency Role Elevation" in printed
 
 
+def test_print_failures_marks_dependency_sessions_with_viewport_context():
+    console = MagicMock()
+    reporter = ProgressiveReporter(console=console)
+    reporter.sessions = [
+        TestSession(
+            id="dep-mobile-1",
+            test_name="Dependency Password Login",
+            url="http://example.com",
+            is_dependency=True,
+            viewport_name="mobile",
+            viewport_slug="mobile",
+            steps=[
+                TestStep(
+                    id="s1",
+                    instruction="Click 'Continue to MFA'",
+                    status=StepStatus.FAILED,
+                    sub_steps=[
+                        TestStep(
+                            id="s1-1",
+                            instruction="VERIFY: 'Complete Multi-factor Authentication' modal",
+                            status=StepStatus.FAILED,
+                            failure_reason="Verification failed after 6.2s",
+                        )
+                    ],
+                )
+            ],
+        )
+    ]
+
+    reporter.print_failures()
+
+    printed = "\n".join(call.args[0] for call in console.print.call_args_list if call.args)
+    assert "Dependency failure in Dependency Password Login [mobile]" in printed
+    assert "Viewport:" in printed
+    assert "mobile" in printed
+
+
 def test_progressive_reporter_moves_lane_tag_to_latest_line_only():
     console = MagicMock()
     reporter = ProgressiveReporter(console=console)

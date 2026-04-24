@@ -1,4 +1,5 @@
 import re
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -240,7 +241,7 @@ def normalize_text(text: str) -> str:
 
 @pytest.fixture(scope="module")
 def planner():
-    return StepPlanner(model_name="minilm")
+    return StepPlanner(model_name="minilm", logger=MagicMock())  # Use a mock logger to suppress output
 
 
 @pytest.mark.parametrize("instruction, expected_steps", TEST_CASES)

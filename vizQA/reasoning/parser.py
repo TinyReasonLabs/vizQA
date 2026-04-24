@@ -29,12 +29,12 @@ class SemanticParser:
     Optionally enhanced with MiniLM embeddings for robust intent classification.
     """
 
-    def __init__(self, minilm: Optional[SemanticModel] = None):
+    def __init__(self, minilm: Optional[SemanticModel] = None, logger: Optional[Any] = None):
         """Initialise the parser."""
         self.minilm = minilm
         self.config = CONFIG
         self._ranking_engine = RankingEngine(minilm) if minilm else None
-        self._logger = get_logger()
+        self._logger = logger or get_logger()
 
         # Cache length-sorted action synonyms for stable regex fallback
         self._action_synonyms_ordered = []

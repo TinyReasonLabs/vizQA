@@ -7,6 +7,7 @@ and the substring fallback path (no MiniLM).
 """
 
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -93,7 +94,7 @@ class TestWithMiniLM:
             print("Model not found, skipping...")
             return
 
-        model = MiniLM(model_dir)
+        model = MiniLM(model_dir, logger=MagicMock())  # Pass a mock logger to avoid initializing a real logger in tests
         return SemanticParser(minilm=model)
 
     def test_semantic_match_used(self):

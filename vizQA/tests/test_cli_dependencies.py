@@ -39,6 +39,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
@@ -109,6 +110,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(
@@ -155,6 +157,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(
@@ -204,6 +207,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(return_value={}),
@@ -235,7 +239,6 @@ steps: []
                 ),
             ),
             patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
-            patch("vizQA.app.cli.print_session_header") as mock_print_session_header,
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(test_path, automator, reporter)
@@ -244,7 +247,6 @@ steps: []
         automator.run_session.assert_not_called()
         reporter.on_session_start.assert_called_once()
         reporter.on_parent_step_start.assert_not_called()
-        mock_print_session_header.assert_not_called()
 
     asyncio.run(run_test())
 
@@ -278,6 +280,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(side_effect=run_session),
@@ -288,7 +291,6 @@ steps: []
             patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
             patch("vizQA.app.cli._load_config", return_value={}),
             patch("vizQA.app.cli.BrowserStateCache.cache"),
-            patch("vizQA.app.cli.print_session_header"),
         ):
             mock_planner_cls.return_value.decompose.return_value = []
             result = await run_single_test(
@@ -322,6 +324,7 @@ steps: []
         automator = SimpleNamespace(
             parser=object(),
             minilm=None,
+            logger=MagicMock(),
             restore_browser_state=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
@@ -546,7 +549,7 @@ steps: []
         patch("vizQA.app.cli.Automator") as mock_automator_cls,
         patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
     ):
-        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
         result = runner.invoke(cli, ["run", str(test_path)])
@@ -574,7 +577,7 @@ steps: []
         patch("vizQA.app.cli.Automator") as mock_automator_cls,
         patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
     ):
-        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
         result = runner.invoke(cli, ["run", "-v", str(test_path)])
