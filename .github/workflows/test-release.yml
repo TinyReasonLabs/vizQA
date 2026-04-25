@@ -49,27 +49,6 @@ jobs:
           curl -sSL https://install.python-poetry.org | python3 -
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Cache Model Weights
-        id: cache-weights
-        uses: actions/cache@v4
-        with:
-          path: ./vizQA/weights
-          key: ${{ runner.os }}-hf-weights-v${{ github.event.inputs.version }}
-
-      - name: Download Weights on Cache Miss
-        if: steps.cache-weights.outputs.cache-hit != 'true'
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          PACKAGE_VERSION: ${{ github.event.inputs.version }}
-        run: |
-          poetry run pip install -U "huggingface_hub[cli]" packaging
-          REV=$(PYTHONPATH="$GITHUB_WORKSPACE" poetry run python -m vizQA.app.support.hf_revision "$PACKAGE_VERSION")
-          echo "Using HF weights revision: $REV"
-          poetry run hf download alieissa/minilm-ui \
-            --revision "$REV" \
-            --local-dir ./vizQA/weights \
-            --token "$HF_TOKEN"
-
       - name: Set Version
         run: poetry version ${{ github.event.inputs.version }}
 
@@ -91,6 +70,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -108,8 +89,28 @@ jobs:
       - name: Verify CLI version
         run: vizqa --version
 
-      - name: Verify weights install
-        run: vizqa install
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install test dependencies
+        run: poetry install --with dev
+
+      - name: Cache vizQA runtime assets
+        id: cache-runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./vizQA/weights
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-vizqa-runtime-test-release-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
+
+      - name: Install vizQA runtime
+        run: poetry run vizqa install
+
+      - name: Run test suite
+        run: poetry run pytest
 
   # ── 4. Publish to TestPyPI (gate) ───────────────────────────────────────────
   publish-test-pypi:
