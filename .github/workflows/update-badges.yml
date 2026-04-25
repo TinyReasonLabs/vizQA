@@ -7,8 +7,12 @@ on:
 jobs:
   update-badges:
     runs-on: ubuntu-latest
+    concurrency:
+      group: update-badges-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -82,8 +86,16 @@ jobs:
             sed -i "s|\[!\[Build Status\](https://img.shields.io/badge/build-.*-.*.svg)\]()|[![Build Status](https://img.shields.io/badge/build-failing-red.svg)]()|" README.md
           fi
 
-      - name: Commit Badge Changes
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Create or Update Badge PR
+        uses: peter-evans/create-pull-request@v8
         with:
           commit_message: "docs: update README badges [skip ci]"
-          file_pattern: README.md
+          add-paths: README.md
+          branch: automation/update-badges/${{ github.ref_name }}
+          base: ${{ github.ref_name }}
+          delete-branch: false
+          title: "docs: update README badges"
+          body: |
+            Automated badge refresh for `${{ github.ref_name }}`.
+
+            This PR is maintained by the badge workflow and is updated in place when new badge changes are generated.
