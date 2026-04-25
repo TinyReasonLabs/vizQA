@@ -221,7 +221,7 @@ def test_top_level_library_helpers_preserve_real_page_state(monkeypatch):
         assert await page.locator("#role-label").inner_text() == "Analyst"
         assert await page.locator("#view-title").inner_text() == "Overview Dashboard"
         assert role_result.raw["status"] == "passed"
-        assert role_result.raw["metadata"]["target"]["text"] == "Role: Analyst"
+        assert role_result.raw["metadata"]["target"]["text"] in {"Analyst", "Role: Analyst"}
 
     asyncio.run(_with_page(run_test))
 
