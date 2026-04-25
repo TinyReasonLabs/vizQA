@@ -1,7 +1,7 @@
 
 [project]
 name = "vizQA"
-version = "0.1.0"
+version = "0.2.0"
 description = "Vision-driven UI Testing Framework"
 authors = [
     {name = "Spospider", email = "64846609+Spospider@users.noreply.github.com"}
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vizqa = "vizQA.cli:cli"
+vizqa = "vizQA.app.cli:cli"
 
 [tool.pytest.ini_options]
 pythonpath = ["vizQA", ".github/scripts"]

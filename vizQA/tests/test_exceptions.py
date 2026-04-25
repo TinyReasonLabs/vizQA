@@ -4,17 +4,17 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from vizQA.client import PerceptionClient
-from vizQA.exceptions import (
+from vizQA.app import PerceptionClient
+from vizQA.app.exceptions import (
     ActionExecutionError,
     ElementNotFoundError,
     PerceptionServiceError,
     TestDefinitionError,
     UserFacingException,
 )
-from vizQA.memory import StepStatus, TestStep
-from vizQA.minilm import MiniLM
-from vizQA.planner import StepPlanner
+from vizQA.app.memory import StepStatus, TestStep
+from vizQA.planning import StepPlanner
+from vizQA.reasoning import MiniLM
 
 
 def test_exception_hierarchy():
@@ -27,7 +27,7 @@ def test_exception_hierarchy():
 
 def test_perception_service_error_wrapping():
     """Verify that PerceptionClient wraps httpx errors correctly."""
-    client = PerceptionClient(base_url="http://invalid")
+    client = PerceptionClient(base_url="http://invalid", logger=MagicMock())  # Use a mock logger to suppress output
 
     with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Connection refused")):
         with patch("builtins.open", MagicMock()):
@@ -46,7 +46,7 @@ def test_perception_service_error_wrapping():
 
 def test_planner_line_reporting():
     """Verify that StepPlanner reports line numbers from YAML metadata."""
-    planner = StepPlanner()
+    planner = StepPlanner(logger=MagicMock())  # Use a mock logger to suppress output
     raw_steps = [{"action": "drag onto unknown", "__line__": 42}]
 
     # "drag onto" without a source element should raise ValueError in minilm,
@@ -64,7 +64,7 @@ def test_minilm_deterministic_failure():
     if not os.path.exists(model_dir):
         pytest.skip("MiniLM weights not found, skipping deterministic failure test")
 
-    m = MiniLM(model_dir)
+    m = MiniLM(model_dir, logger=MagicMock())  # Use a mock logger to suppress output
     with pytest.raises(ValueError) as excinfo:
         # "drag onto" with nothing before "onto"
         m.predict("drag onto button")

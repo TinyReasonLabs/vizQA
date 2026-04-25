@@ -1,5 +1,5 @@
 name: "Artifact Support Test"
-url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+url: "file://${PWD}/demo_site/index.html"
 description: "Verifies artifact loading and usage in the vizQA framework."
 artifacts:
   user_name: "test_user"

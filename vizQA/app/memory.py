@@ -83,6 +83,14 @@ class TestSession(BaseModel):
     metadata: Dict[str, Any] = {}
     artifacts: Dict[str, Any] = {}
     headers: Dict[str, str] = {}
+    browser_state: Dict[str, Any] = {}  # Persisted browser state (localStorage, cookies, sessionStorage)
+    parent_test_name: Optional[str] = None  # Which test this depends on (for reporting)
+    is_dependency: bool = False  # Whether this session was executed as a dependency of another test
+    dependency_results: List[Dict[str, Any]] = []  # [{name, status, session_id}, ...] for each dependency
+    viewport_name: Optional[str] = None
+    viewport_slug: Optional[str] = None
+    viewport_width: Optional[int] = None
+    viewport_height: Optional[int] = None
 
     __test__ = False
 

@@ -1,0 +1,24 @@
+name: "Dependency Simulated SSO"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Runs the local identity-provider simulation and completes the SSO callback."
+
+requires:
+  - dependency_auth_seed
+
+artifacts:
+  username: "analyst.user"
+  password: "AnalystPass!23"
+
+steps:
+  - action: "Click the 'Continue with SSO' button"
+    expect: "A 'Select identity provider' modal should appear"
+  - action: "Click the 'Continue with Acme Identity Cloud' button"
+    expect: "A corporate identity provider sign in modal should appear"
+  - action: "Type {username} into the corporate username field"
+    expect: "The corporate username field should contain 'analyst.user'"
+  - action: "Type {password} into the corporate password field"
+    expect: "The corporate password field should be filled"
+  - action: "Click the 'Continue to Consent' button"
+    expect: "A 'Consent required' modal should appear"
+  - action: "Click the 'Approve Consent' button"
+    expect: "A success banner should confirm that the SSO callback completed and the overview dashboard should load"

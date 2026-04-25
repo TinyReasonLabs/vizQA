@@ -1,0 +1,15 @@
+name: "Dependency Invalid MFA"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Uses a valid password step and verifies that the MFA guard rejects a wrong one-time code."
+
+requires:
+  - dependency_login_password
+
+artifacts:
+  invalid_mfa_code: "111111"
+
+steps:
+  - action: "Type {invalid_mfa_code} into the one-time code field"
+    expect: "The one-time code field should contain '111111'"
+  - action: "Click the 'Verify and Continue' button"
+    expect: "A red error toast should appear saying invalid one-time code"

@@ -1,0 +1,16 @@
+name: "Dependency Auth Seed"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Seeds shared artifacts and verifies the public landing state for the dependency auth lab."
+
+artifacts:
+  username: "analyst.user"
+  password: "AnalystPass!23"
+  mfa_code: "246810"
+  backup_code: "BACKUP-1357"
+  manager_name: "Mila Manager"
+  item_name: "Widget Pro Secure Key"
+  manager_password: "ManagerPass!23"
+
+steps:
+  - action: "find 'HelixID Dependency Auth Lab' title"
+    expect: "The public landing page should show Sign In, Continue with SSO, and Use Magic Link buttons"

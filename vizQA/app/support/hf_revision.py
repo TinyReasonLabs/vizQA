@@ -16,7 +16,8 @@ revision that is safe to ship with a given *package* version:
    newer than the package version, return ``"main"``. Callers should treat that as
    best-effort; private repos may need a valid ``HF_TOKEN`` for ``list_repo_refs``.
 
-Used by :mod:`vizQA.install` and by release workflows via ``python -m vizQA.hf_revision``.
+Used by :mod:`vizQA.app.support.install` and by release workflows via
+``python -m vizQA.app.support.hf_revision``.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ def resolve_weights_revision(package_version: str, *, token: Optional[str] = Non
 def main() -> None:
     """CLI for CI: print one revision line to stdout; read token from ``HF_TOKEN``."""
     if len(sys.argv) != 2:
-        print("usage: python -m vizQA.hf_revision <package-version>", file=sys.stderr)
+        print("usage: python -m vizQA.app.support.hf_revision <package-version>", file=sys.stderr)
         sys.exit(2)
     token = os.environ.get("HF_TOKEN") or None
     print(resolve_weights_revision(sys.argv[1], token=token))

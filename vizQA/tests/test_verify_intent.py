@@ -8,7 +8,7 @@ and semantic slow-path), and combined cases — all without requiring MiniLM
 
 import pytest
 
-from vizQA.parser import SemanticParser
+from vizQA.reasoning import SemanticParser
 
 # ---------------------------------------------------------------------------
 # (instruction, expected_intent_subset)

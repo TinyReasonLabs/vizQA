@@ -1,0 +1,14 @@
+name: "Dependency Return Request"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Starts from a previously created order and submits a return request."
+
+requires:
+  - dependency_checkout
+
+steps:
+  - action: "Click the 'Request Return for Latest Order' button"
+    expect: "A 'Request Return' modal should appear"
+  - action: "Click the return reason dropdown"
+    expect: "The return reason should be ready for selection"
+  - action: "Click the 'Submit Return Request' button"
+    expect: "A success banner should confirm that a return request was created for the latest order"

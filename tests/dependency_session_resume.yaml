@@ -1,0 +1,27 @@
+name: "Dependency Session Resume"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Expires an authenticated session and verifies re-auth resumes the protected workspace."
+
+requires:
+  - dependency_login_mfa
+
+artifacts:
+  password: "AnalystPass!23"
+  mfa_code: "246810"
+  resume_view: "Orders and Returns"
+
+steps:
+  - action: "Click the 'Orders and Returns' navigation button"
+    expect: "The 'Orders and Returns' view should load"
+  - action: "Click the 'Expire current session' debug button"
+    expect: "A session expired modal should appear"
+  - action: "Click the 'Re-authenticate now' button"
+    expect: "A 'Re-enter password' modal should appear"
+  - action: "Type {password} into the password field"
+    expect: "The password field should be filled"
+  - action: "Click the 'Continue' button"
+    expect: "A 'Re-authenticate with MFA' modal should appear"
+  - action: "Type {mfa_code} into the one-time code field"
+    expect: "The one-time code field should contain '246810'"
+  - action: "Click the 'Resume Session' button"
+    expect: "'{resume_view}' view"

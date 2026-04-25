@@ -1,0 +1,24 @@
+name: "Dependency Account Lockout"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Triggers repeated password failures until the local demo account is locked."
+
+requires:
+  - dependency_auth_seed
+
+artifacts:
+  username: "analyst.user"
+  invalid_password: "WrongPassword!99"
+
+steps:
+  - action: "Click the 'Sign In' button"
+    expect: "A centered Password Sign In modal should appear"
+  - action: "Type {username} into the username field"
+    expect: "The username field should contain 'analyst.user'"
+  - action: "Type {invalid_password} into the password field"
+    expect: "The password field should be filled"
+  - action: "Click the 'Continue to MFA' button"
+    expect: "A red error toast should appear saying invalid credentials"
+  - action: "Click the 'Continue to MFA' button"
+    expect: "A red error toast should appear saying invalid credentials"
+  - action: "Click the 'Continue to MFA' button"
+    expect: "A warning banner should appear saying that the account {username} is locked for this demo"

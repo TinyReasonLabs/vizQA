@@ -1,0 +1,16 @@
+name: "Dependency Role Elevation"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Uses step-up authentication to elevate an analyst session into manager access."
+
+requires:
+  - dependency_login_mfa
+
+artifacts:
+  password: "AnalystPass!23"
+  mfa_code: "246810"
+
+steps:
+  - action: "Type {password} into the manager step-up password field"
+    expect: "The manager step-up password field should be filled"
+  - action: "Type {mfa_code} into the manager step-up one-time code field"
+    expect: "'Role: Manager' should appear"

@@ -6,23 +6,29 @@ Core execution engine for vision-driven UI automation.
 import asyncio
 import os
 import re
+import tempfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from playwright.async_api import Browser, Page, async_playwright
 
-from vizQA.client import PerceptionClient
-from vizQA.exceptions import (
+from vizQA.app.client import PerceptionClient
+from vizQA.app.exceptions import (
     ActionExecutionError,
     ArtifactError,
     ElementNotFoundError,
     UserFacingException,
     VerificationError,
 )
-from vizQA.logger import get_logger
-from vizQA.memory import FailureType, StepStatus, TestSession, TestStep
-from vizQA.minilm import MiniLM
-from vizQA.parser import SemanticParser
+from vizQA.app.logger import get_logger
+from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.app.support.weights import get_model_dir
+from vizQA.reasoning import MiniLM, SemanticParser
+
+if TYPE_CHECKING:
+    from vizQA.app.logger import SessionLogger
+    from vizQA.app.viewport import ViewportSpec
 
 
 # pylint: disable=too-many-instance-attributes
@@ -31,7 +37,17 @@ class Automator:
     Main controller for browser automation and perception-integrated execution.
     """
 
-    def __init__(self, perception_client: PerceptionClient, verbosity: int = 0, headless: bool = True):
+    # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def __init__(
+        self,
+        perception_client: PerceptionClient,
+        verbosity: int = 0,
+        headless: bool = True,
+        viewport: Optional["ViewportSpec"] = None,
+        logger: Optional["SessionLogger"] = None,
+        page: Optional[Page] = None,
+        artifact_dir: Optional[str] = ".vizQA",
+    ):
         """
         Initialises the Automator.
 
@@ -42,20 +58,25 @@ class Automator:
         self.client = perception_client
         self.verbosity = verbosity
         self.headless = headless
+        self.viewport = viewport
         self.playwright_mgr: Optional[Any] = None
         self.browser: Optional[Browser] = None
-        self.page: Optional[Page] = None
-        self._logger = get_logger()
+        self.page: Optional[Page] = page
+        self._owns_browser = page is None
+        self.artifact_dir = artifact_dir
+        self.logger = logger or get_logger(viewport.slug if viewport else None)
+        if self.artifact_dir:
+            os.makedirs(self.artifact_dir, exist_ok=True)
 
-        model_dir = os.path.join(os.path.dirname(__file__), "weights", "minilm")
+        model_dir = os.fspath(get_model_dir())
         try:
-            self.minilm: Optional[MiniLM] = MiniLM(model_dir)
+            self.minilm: Optional[MiniLM] = MiniLM(model_dir, logger=self.logger)
         except (FileNotFoundError, RuntimeError):
             self.minilm = None
-            self._logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
+            self.logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        self.parser = SemanticParser(minilm=self.minilm)
+        self.parser = SemanticParser(minilm=self.minilm, logger=self.logger)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -63,34 +84,157 @@ class Automator:
 
     async def start(self):
         """Initialises the Playwright browser and page."""
+        if self.page:
+            if self.artifact_dir:
+                os.makedirs(self.artifact_dir, exist_ok=True)
+            return
         self.playwright_mgr = await async_playwright().start()
         self.browser = await self.playwright_mgr.chromium.launch(headless=self.headless)
-        self.page = await self.browser.new_page()
-        os.makedirs(".vizQA", exist_ok=True)
+        if self.viewport:
+            self.page = await self.browser.new_page(
+                viewport={"width": self.viewport.width, "height": self.viewport.height}
+            )
+        else:
+            self.page = await self.browser.new_page()
+        if self.artifact_dir:
+            os.makedirs(self.artifact_dir, exist_ok=True)
 
     async def stop(self):
         """Closes the browser and stops the Playwright manager."""
-        if self.page:
+        if self.page and self._owns_browser:
             await self.page.close()
-        if self.browser:
+        if self.browser and self._owns_browser:
             await self.browser.close()
-        if self.playwright_mgr:
+        if self.playwright_mgr and self._owns_browser:
             await self.playwright_mgr.stop()
+
+    # ------------------------------------------------------------------
+    # Browser state persistence
+    # ------------------------------------------------------------------
+
+    async def capture_browser_state(self) -> Dict[str, Any]:
+        """
+        Captures the current browser state including localStorage, sessionStorage, and cookies.
+
+        :return: Dictionary containing browser state with keys: 'localStorage', 'sessionStorage', 'cookies'
+        """
+        if not self.page:
+            return {}
+
+        state = {}
+
+        try:
+            # Capture localStorage
+            local_storage = await self.page.evaluate(
+                """() => {
+                    const items = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        items[key] = localStorage.getItem(key);
+                    }
+                    return items;
+                }"""
+            )
+            state["localStorage"] = local_storage
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("capture_state", f"Failed to capture localStorage: {exc}")
+            state["localStorage"] = {}
+
+        try:
+            # Capture sessionStorage
+            session_storage = await self.page.evaluate(
+                """() => {
+                    const items = {};
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        items[key] = sessionStorage.getItem(key);
+                    }
+                    return items;
+                }"""
+            )
+            state["sessionStorage"] = session_storage
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("capture_state", f"Failed to capture sessionStorage: {exc}")
+            state["sessionStorage"] = {}
+
+        try:
+            # Capture cookies
+            cookies = await self.page.context.cookies()
+            state["cookies"] = cookies
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("capture_state", f"Failed to capture cookies: {exc}")
+            state["cookies"] = []
+
+        return state
+
+    async def restore_browser_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restores previously captured browser state (localStorage, sessionStorage, cookies) to the current page.
+
+        :param state: Dictionary with keys 'localStorage', 'sessionStorage', 'cookies'
+        """
+        if not self.page:
+            return
+
+        try:
+            # Restore localStorage
+            local_storage = state.get("localStorage", {})
+            if local_storage:
+                await self.page.evaluate(
+                    """(items) => {
+                        localStorage.clear();
+                        for (const [key, value] of Object.entries(items)) {
+                            localStorage.setItem(key, value);
+                        }
+                    }""",
+                    local_storage,
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("restore_state", f"Failed to restore localStorage: {exc}")
+
+        try:
+            # Restore sessionStorage
+            session_storage = state.get("sessionStorage", {})
+            if session_storage:
+                await self.page.evaluate(
+                    """(items) => {
+                        sessionStorage.clear();
+                        for (const [key, value] of Object.entries(items)) {
+                            sessionStorage.setItem(key, value);
+                        }
+                    }""",
+                    session_storage,
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("restore_state", f"Failed to restore sessionStorage: {exc}")
+
+        try:
+            # Restore cookies
+            cookies = state.get("cookies", [])
+            if cookies:
+                await self.page.context.add_cookies(cookies)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.log_warning("restore_state", f"Failed to restore cookies: {exc}")
 
     # ------------------------------------------------------------------
     # Session runner
     # ------------------------------------------------------------------
 
-    async def run_session(self, session: TestSession, on_step_update: Optional[Any] = None) -> bool:
+    async def run_session(
+        self, session: TestSession, on_step_update: Optional[Any] = None, preserve_page: bool = False
+    ) -> bool:
         """Main execution loop for a test session."""
         if not self.page:
             await self.start()
 
-        self._logger.log_session(session.id, "start", f"url={session.url!r}")
-        self._logger.log_debug("", f"Steps: {[x.sub_steps for x in session.steps]}")
+        self.logger.log_session(session.id, "start", f"url={session.url!r}")
+        self.logger.log_debug("", f"Steps: {[x.sub_steps for x in session.steps]}")
         if session.headers:
             await self.page.set_extra_http_headers(session.headers)
-        await self.page.goto(session.url)
+
+        # Skip navigation if this test has dependencies (page is already at the right location)
+        if not preserve_page and not session.dependency_results:
+            await self.page.goto(session.url)
 
         failed = False
         for step in session.steps:
@@ -103,7 +247,7 @@ class Automator:
                 failed = True
 
         session.end_time = datetime.now()
-        self._logger.log_session(session.id, "end", f"duration={session.duration:.1f}s")
+        self.logger.log_session(session.id, "end", f"duration={session.duration:.1f}s")
         return not failed
 
     # ------------------------------------------------------------------
@@ -135,7 +279,7 @@ class Automator:
         finally:
             step.end_time = datetime.now()
             instr_prefix = step.instruction.split(":")[0] if ":" in step.instruction else "STEP"
-            self._logger.log_step(step.id, instr_prefix, step.status, step.failure_reason)
+            self.logger.log_step(step.id, instr_prefix, step.status, step.failure_reason)
             if on_step_update:
                 await on_step_update(step)
 
@@ -177,9 +321,9 @@ class Automator:
 
     def _handle_user_facing_exception(self, step: TestStep, exc: UserFacingException) -> bool:
         """Handles expected user-facing exceptions with proper mapping to FailureType."""
-        self._logger.log_debug(step.id, f"User-facing error: {exc.user_message}")
+        self.logger.log_debug(step.id, f"User-facing error: {exc.user_message}")
         if exc.internal_detail:
-            self._logger.log_debug(step.id, f"Detail: {exc.internal_detail}")
+            self.logger.log_debug(step.id, f"Detail: {exc.internal_detail}")
 
         step.status = StepStatus.FAILED
         if isinstance(exc, ElementNotFoundError):
@@ -196,7 +340,7 @@ class Automator:
 
     def _handle_system_exception(self, step: TestStep, exc: Exception) -> bool:
         """Handles unexpected system exceptions."""
-        self._logger.log_exception(step.id, exc)
+        self.logger.log_exception(step.id, exc)
         step.status = StepStatus.FAILED
         step.failure_type = FailureType.SYSTEM_ERROR
         step.failure_reason = "An unexpected error occurred during step execution."
@@ -216,9 +360,10 @@ class Automator:
         :return: True if the step was executed successfully, False otherwise.
         """
         test_slug = _test_slug(session)
-        path = f".vizQA/{test_slug}_{step.id}_before.jpg"
+        path, persistent = self._artifact_path(test_slug, f"{step.id}_before")
         await self.page.screenshot(path=path, type="jpeg")
-        step.screenshot_before = path
+        if persistent:
+            step.screenshot_before = path
 
         # Check if the query refers to an artifact
         artifact_match = re.fullmatch(r"\{([a-zA-Z0-9_]+)\}", query)
@@ -229,12 +374,16 @@ class Automator:
                 session.metadata["target"] = {"type": "artifact", "name": art_name, "value": artifact}
                 step.status = StepStatus.PASSED
                 return True
-            self._logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
+            self.logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
             raise ValueError(f"Artifact '{art_name}' not found in session.")
 
-        perception = await self.client.perceive(path, query=query)
-        step.perception_result = perception
-        self._logger.log_perception(step.id, query, perception)
+        try:
+            perception = await self.client.perceive(path, query=query)
+            step.perception_result = perception
+            self.logger.log_perception(step.id, query, perception)
+        finally:
+            if not persistent:
+                self._cleanup_temporary_artifact(path)
 
         target = None
         if perception.get("top_matches"):
@@ -251,7 +400,7 @@ class Automator:
             history = session.metadata.setdefault("history", {})
             if norm_subj not in history:
                 history[norm_subj] = {"target": target, "elements": perception.get("elements", [])}
-                self._logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
+                self.logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
 
             step.status = StepStatus.PASSED
             return True
@@ -319,7 +468,7 @@ class Automator:
             else:
                 wait_time = val
 
-        self._logger.log_debug(step.id, f"Waiting for {wait_time}s (parsed from '{payload}')")
+        self.logger.log_debug(step.id, f"Waiting for {wait_time}s (parsed from '{payload}')")
         await asyncio.sleep(wait_time)
         step.status = StepStatus.PASSED
         return True
@@ -362,7 +511,9 @@ class Automator:
         :param rect: [x, y, width, height] of the target.
         :param viewport: viewport dimensions dictionary.
         """
-        action_path = f".vizQA/{_test_slug(session)}_{step.id}_{action}.jpg"
+        action_path, persistent = self._artifact_path(_test_slug(session), f"{step.id}_{action}")
+        if not persistent:
+            return
         vw, vh = viewport.get("width", 1280), viewport.get("height", 720)
 
         # Only clip if we have a valid bounding box
@@ -380,7 +531,7 @@ class Automator:
                 step.action_screenshot = action_path
             except Exception as e:  # pylint: disable=broad-exception-caught
                 # Fallback to full page screenshot if clipping fails
-                self._logger.log_warning(session.id, f"Failed to capture action screenshot (clipped): {e}")
+                self.logger.log_warning(session.id, f"Failed to capture action screenshot (clipped): {e}")
                 await self.page.screenshot(path=action_path, type="jpeg")
                 step.action_screenshot = action_path
         else:
@@ -412,14 +563,14 @@ class Automator:
         px, py, pw, ph = _resolve_coords(target, viewport)
         cx, cy = px + pw / 2, py + ph / 2
 
-        self._logger.log_debug(
+        self.logger.log_debug(
             step.id, f"Artifact drop target: {target.get('text') or target.get('label')} at ({cx}, {cy})"
         )
         return await self._perform_file_upload(session, step, art_data["value"])
 
     async def _perform_file_upload(self, session: TestSession, step: TestStep, file_path: str) -> bool:
         """Helper to perform Playwright file upload."""
-        self._logger.log_debug(step.id, f"Uploading file artifact: {file_path}")
+        self.logger.log_debug(step.id, f"Uploading file artifact: {file_path}")
         try:
             input_selector = "input[type=file]"
             count = await self.page.locator(input_selector).count()
@@ -440,7 +591,7 @@ class Automator:
             step.status = StepStatus.PASSED
             return True
         except Exception as e:  # pylint: disable=broad-exception-caught
-            self._logger.log_warning(session.id, f"File upload failed: {e}")
+            self.logger.log_warning(session.id, f"File upload failed: {e}")
             raise ArtifactError(f"Failed to upload file artifact for '{file_path}'", internal_detail=str(e)) from e
 
     async def _execute_verify(
@@ -453,16 +604,21 @@ class Automator:
 
         # Parse intent once at the beginning
         intent = self.parser.parse_verify_intent(query)
-        self._logger.log_debug(step.id, f"Parsed intent: {intent}")
+        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
         perc_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
-            path = f".vizQA/{test_slug}_{step.id}_verify.jpg"
+            path, persistent = self._artifact_path(test_slug, f"{step.id}_verify")
             await self.page.screenshot(path=path, type="jpeg")
-            step.screenshot_after = path
+            if persistent:
+                step.screenshot_after = path
 
-            perception = await self.client.perceive(path, query=perc_query)
-            step.perception_result = perception
+            try:
+                perception = await self.client.perceive(path, query=perc_query)
+                step.perception_result = perception
+            finally:
+                if not persistent:
+                    self._cleanup_temporary_artifact(path)
 
             match_found, reasoning = self._check_verification_match(session, intent, perception)
             if match_found:
@@ -533,13 +689,18 @@ class Automator:
         :return: True if the step was executed successfully, False otherwise.
         """
         test_slug = _test_slug(session)
-        before_path = f".vizQA/{test_slug}_{step.id}_before.jpg"
+        before_path, persistent = self._artifact_path(test_slug, f"{step.id}_before")
         await self.page.screenshot(path=before_path, type="jpeg")
-        step.screenshot_before = before_path
+        if persistent:
+            step.screenshot_before = before_path
 
-        perception = await self.client.perceive(before_path, query=step.instruction)
-        step.perception_result = perception
-        self._logger.log_perception(step.id, step.instruction, perception)
+        try:
+            perception = await self.client.perceive(before_path, query=step.instruction)
+            step.perception_result = perception
+            self.logger.log_perception(step.id, step.instruction, perception)
+        finally:
+            if not persistent:
+                self._cleanup_temporary_artifact(before_path)
 
         await self._execute_action(session, step)
 
@@ -647,7 +808,7 @@ class Automator:
             # Basic scroll - we could use mouse.wheel if payload specified delta
             await self.page.evaluate(f"window.scrollTo({{top: {y}, behavior: 'smooth'}})")
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(self.parser.config.step_delay_seconds)
 
     async def _skip_step_recursive(self, step: TestStep, on_step_update: Optional[Any]):
         """Recursively marks a step and its sub-steps as skipped.
@@ -692,14 +853,17 @@ class Automator:
                     clip = {"x": nx * vw, "y": ny * vh, "width": nw * vw, "height": nh * vh}
 
         if clip:
-            action_path = f".vizQA/{test_slug}_{step.id}_{action}.jpg"
+            action_path, persistent = self._artifact_path(test_slug, f"{step.id}_{action}")
+            if not persistent:
+                await asyncio.sleep(self.parser.config.step_delay_seconds)
+                return
             try:
                 await self.page.screenshot(path=action_path, type="jpeg", clip=clip)
                 step.action_screenshot = action_path
             except Exception as e:
-                self._logger.log_warning(session.id, f"Failed to capture action screenshot (legacy): {e}")
+                self.logger.log_warning(session.id, f"Failed to capture action screenshot (legacy): {e}")
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(self.parser.config.step_delay_seconds)
 
     def _parse_action(self, instruction: str) -> str:
         """Heuristic to determine the action type from an instruction string.
@@ -734,33 +898,34 @@ class Automator:
         test_slug = _test_slug(session)
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
-            path = f".vizQA/{test_slug}_{step.id}_after.jpg"
+            path, persistent = self._artifact_path(test_slug, f"{step.id}_after")
             await self.page.screenshot(path=path, type="jpeg")
 
             try:
                 result = await self.client.perceive(path, query=step.expectation)
-                self._logger.log_perception(step.id, step.expectation, result)
+                self.logger.log_perception(step.id, step.expectation, result)
 
                 match_found = False
-                if result.get("top_matches") or result.get("salience", 0) > 0.7:
-                    match_found = True
-                else:
-                    q = step.expectation.lower()
-                    for el in result.get("elements", []):
-                        text = (el.get("placeholder") or el.get("text", "")).lower()
-                        label = el.get("label", "").lower()
-                        name = el.get("name", "").lower()
-                        if (q in text or q in label or q in name) or any(
-                            word in text or word in label or word in name for word in q.split() if len(word) > 3
-                        ):
-                            match_found = True
-                            break
+                q = step.expectation.lower()
+                for el in result.get("elements", []):
+                    text = (el.get("placeholder") or el.get("text", "")).lower()
+                    label = el.get("label", "").lower()
+                    name = el.get("name", "").lower()
+                    if (q in text or q in label or q in name) or any(
+                        word in text or word in label or word in name for word in q.split() if len(word) > 3
+                    ):
+                        match_found = True
+                        break
 
                 if match_found:
-                    step.screenshot_after = path
+                    if persistent:
+                        step.screenshot_after = path
                     return StepStatus.PASSED
             except Exception:
                 pass
+            finally:
+                if not persistent:
+                    self._cleanup_temporary_artifact(path)
 
             await asyncio.sleep(1)
 
@@ -771,6 +936,24 @@ class Automator:
         step.failure_reason = reason
         return StepStatus.FAILED
 
+    def _artifact_path(self, test_slug: str, name: str) -> Tuple[str, bool]:
+        """Returns a screenshot path and whether it should be kept as an artifact."""
+        if self.artifact_dir:
+            return str(Path(self.artifact_dir) / f"{test_slug}_{name}.jpg"), True
+
+        temp_file = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with
+            prefix=f"vizqa_{test_slug}_{name}_", suffix=".jpg", delete=False
+        )
+        temp_file.close()
+        return temp_file.name, False
+
+    def _cleanup_temporary_artifact(self, path: str) -> None:
+        """Removes a non-persistent screenshot used only for perception."""
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
 
 # ------------------------------------------------------------------
 # Module-level pure helpers
@@ -780,7 +963,10 @@ class Automator:
 def _test_slug(session: TestSession) -> str:
     """Returns a filesystem-safe slug for the test session."""
     base = session.file_stem if session.file_stem else session.test_name
-    return base.replace(" ", "_").replace(":", "_").lower()
+    base_slug = base.replace(" ", "_").replace(":", "_").lower()
+    if session.viewport_slug:
+        return f"{session.viewport_slug}__{base_slug}"
+    return base_slug
 
 
 def _resolve_coords(target: Dict[str, Any], viewport: Dict[str, Any]) -> Tuple[float, float, float, float]:

@@ -1,5 +1,5 @@
 name: "Nexus CRM: Global Navigation"
-url: "file://d:/Manually%20Transferred/Projects/Coding/UI_testing/demo_site/index.html"
+url: "file://${PWD}/demo_site/index.html"
 description: "Verifies that clicking sidebar items updates the view state."
 steps:
   - action: "Click on 'Customers' in the sidebar"
