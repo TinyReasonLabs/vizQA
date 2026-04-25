@@ -89,7 +89,7 @@ jobs:
       - name: Create or Update Badge PR
         uses: peter-evans/create-pull-request@v8
         with:
-          commit_message: "docs: update README badges [skip ci]"
+          commit-message: "docs: update README badges [skip ci]"
           add-paths: README.md
           branch: automation/update-badges/${{ github.ref_name }}
           base: ${{ github.ref_name }}
