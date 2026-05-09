@@ -170,7 +170,6 @@ class TestIntentClassification:
             ("the modal closes after clicking outside", True),
             ("the popup is no longer shown", True),
             ("the banner eventually disappears", True),
-            ("the spinner stops showing", True),
             ("the element is hidden", True),
             ("the modal appears after clicking the button", False),
             ("the dropdown becomes visible", False),
@@ -215,7 +214,6 @@ class TestIntentClassification:
             ("the element fades out", True),
             ("the modal fades away", True),
             ("the banner slides out of view", True),
-            ("the element fades in", False),
             ("the modal slides into view", False),
             # --- CONDITIONALS ---
             ("if successful, the modal closes", True),

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
@@ -58,3 +58,53 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
         perception = {"elements": [{"text": "Login"}], "top_matches": [{"text": "Subtitle", "similarity": 0.45}]}
         reason = self.automator._failure_details("VERIFY", "Submit", perception, "Verification failed")
         self.assertIn("Top candidates: 'Subtitle' (similarity: 0.45)", reason)
+
+    async def test_execute_find_logs_selected_element_only_at_highest_verbosity(self):
+        from vizQA.app.memory import TestSession, TestStep
+
+        session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
+        step = TestStep(id="find1", instruction="FIND: Sign in")
+        perception = {"elements": [{"text": "Sign in"}]}
+
+        self.automator.page = MagicMock()
+        self.automator.page.screenshot = AsyncMock()
+        self.automator.client.perceive = AsyncMock(return_value=perception)
+        self.automator.logger = MagicMock()
+
+        self.automator.verbosity = 1
+        success = await self.automator._execute_find(session, step, "Sign in")
+        self.assertTrue(success)
+        self.automator.logger.log_perception.assert_not_called()
+
+        self.automator.verbosity = 2
+        self.automator.logger.reset_mock()
+        success = await self.automator._execute_find(session, step, "Sign in")
+        self.assertTrue(success)
+        self.automator.logger.log_perception.assert_called_once_with(
+            step.id, "Sign in", perception, selected=perception["elements"][0]
+        )
+
+    async def test_execute_verify_logs_candidates_with_no_selected_element(self):
+        from vizQA.app.memory import TestSession, TestStep
+
+        session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
+        step = TestStep(id="verify1", instruction="VERIFY: success")
+        perception = {"elements": [{"text": "Success banner"}]}
+
+        self.automator.page = MagicMock()
+        self.automator.page.screenshot = AsyncMock()
+        self.automator.client.perceive = AsyncMock(return_value=perception)
+        self.automator.logger = MagicMock()
+        self.automator.verbosity = 2
+        self.automator.parser.parse_verify_intent = MagicMock(
+            return_value={"keyword": "success", "subject": "", "position": "", "color": None, "negated": False}
+        )
+
+        with (
+            patch.object(self.automator, "_check_verification_match", return_value=(True, "")),
+            patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            success = await self.automator._execute_verify(session, step, "success", timeout=1)
+
+        self.assertTrue(success)
+        self.automator.logger.log_perception.assert_called_once_with(step.id, "'success'  ", perception, selected=None)
