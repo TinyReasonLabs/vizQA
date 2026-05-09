@@ -22,6 +22,6 @@ steps:
   - action: "Click the 'Continue' button"
     expect: "A 'Re-authenticate with MFA' modal should appear"
   - action: "Type {mfa_code} into the one-time code field"
-    expect: "The one-time code field should contain '246810'"
+    expect: "The one-time code field should contain {mfa_code}"
   - action: "Click the 'Resume Session' button"
     expect: "'{resume_view}' view"

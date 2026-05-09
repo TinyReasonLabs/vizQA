@@ -380,7 +380,6 @@ class Automator:
         try:
             perception = await self.client.perceive(path, query=query)
             step.perception_result = perception
-            self.logger.log_perception(step.id, query, perception)
         finally:
             if not persistent:
                 self._cleanup_temporary_artifact(path)
@@ -390,6 +389,8 @@ class Automator:
             target = perception["top_matches"][0]
         elif perception.get("elements"):
             target = perception["elements"][0]
+
+        self._log_perception_summary(step.id, query, perception, selected=target)
 
         if target:
             session.metadata["target"] = target
@@ -620,6 +621,7 @@ class Automator:
                 if not persistent:
                     self._cleanup_temporary_artifact(path)
 
+            self._log_perception_summary(step.id, perc_query, perception, selected=None)
             match_found, reasoning = self._check_verification_match(session, intent, perception)
             if match_found:
                 step.status = StepStatus.PASSED
@@ -697,11 +699,13 @@ class Automator:
         try:
             perception = await self.client.perceive(before_path, query=step.instruction)
             step.perception_result = perception
-            self.logger.log_perception(step.id, step.instruction, perception)
         finally:
             if not persistent:
                 self._cleanup_temporary_artifact(before_path)
 
+        self._log_perception_summary(
+            step.id, step.instruction, perception, selected=self._select_perception_target(perception)
+        )
         await self._execute_action(session, step)
 
         if step.expectation:
@@ -903,7 +907,7 @@ class Automator:
 
             try:
                 result = await self.client.perceive(path, query=step.expectation)
-                self.logger.log_perception(step.id, step.expectation, result)
+                self._log_perception_summary(step.id, step.expectation, result, selected=None)
 
                 match_found = False
                 q = step.expectation.lower()
@@ -935,6 +939,26 @@ class Automator:
             reason += " (Timed out while polling Perception API)"
         step.failure_reason = reason
         return StepStatus.FAILED
+
+    def _log_perception_summary(
+        self,
+        step_id: str,
+        query: str,
+        perception: Dict[str, Any],
+        selected: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Logs compact perception details only at the highest verbosity."""
+        if self.verbosity >= 2:
+            self.logger.log_perception(step_id, query, perception, selected=selected)
+
+    @staticmethod
+    def _select_perception_target(perception: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Returns the runtime-selected candidate from a perception result."""
+        if perception.get("top_matches"):
+            return perception["top_matches"][0]
+        if perception.get("elements"):
+            return perception["elements"][0]
+        return None
 
     def _artifact_path(self, test_slug: str, name: str) -> Tuple[str, bool]:
         """Returns a screenshot path and whether it should be kept as an artifact."""

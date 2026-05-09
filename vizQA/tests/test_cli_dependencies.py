@@ -15,6 +15,7 @@ from vizQA.app.cli import (
     run_single_test,
 )
 from vizQA.app.exceptions import TestDefinitionError
+from vizQA.app.logger import reset_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
 
@@ -674,3 +675,60 @@ steps: []
 
     assert result.exit_code == 0
     assert mock_automator_cls.call_count == 2
+
+
+def test_run_logs_playwright_errors_without_printing_them(tmp_path, monkeypatch):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    artifact_dir = tmp_path / ".vizQA"
+    monkeypatch.setattr("vizQA.app.cli._ARTIFACT_DIR", artifact_dir)
+    monkeypatch.setattr("vizQA.app.logger._LOG_DIR", str(artifact_dir))
+    reset_logger()
+
+    class FakePlaywrightError(Exception):
+        pass
+
+    FakePlaywrightError.__module__ = "playwright._impl._errors"
+
+    runner = CliRunner()
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.inspect_weight_state") as mock_weight_state,
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
+    ):
+        mock_weight_state.return_value = SimpleNamespace(
+            installed_revision="0.1.0",
+            expected_revision="0.1.0",
+            status="aligned",
+            assumed_revision=False,
+            package_version="0.1.0",
+        )
+        mock_automator_cls.return_value = SimpleNamespace(
+            start=AsyncMock(side_effect=FakePlaywrightError("browser crashed")),
+            stop=AsyncMock(),
+        )
+
+        result = runner.invoke(cli, ["run", str(test_path)])
+
+    try:
+        assert result.exit_code == 1
+        assert "browser crashed" not in result.output
+        assert "An unexpected error occurred during execution" not in result.output
+
+        log_files = sorted(artifact_dir.glob("run_*.log"))
+        assert len(log_files) == 1
+        log_text = log_files[0].read_text(encoding="utf-8")
+        assert "Playwright lane failure" in log_text
+        assert "browser crashed" in log_text
+    finally:
+        reset_logger()

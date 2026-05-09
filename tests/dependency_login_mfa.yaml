@@ -10,6 +10,6 @@ artifacts:
 
 steps:
   - action: "Type {mfa_code} into the one-time code field"
-    expect: "The one-time code field should contain '246810'"
+    expect: "The one-time code field should contain {mfa_code}"
   - action: "Click the 'Verify and Continue' button"
     expect: "role 'Analyst'"

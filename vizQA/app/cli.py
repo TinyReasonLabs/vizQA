@@ -32,6 +32,20 @@ console = Console(highlight=False)
 _ARTIFACT_DIR = Path(".vizQA")
 
 
+def _is_playwright_error(err: BaseException) -> bool:
+    """Return True when an exception originated from Playwright internals."""
+    current: Optional[BaseException] = err
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if current.__class__.__module__.startswith("playwright"):
+            return True
+        current = current.__cause__ or current.__context__
+
+    return False
+
+
 def get_package_version() -> str:
     """Return the installed vizQA version, with a repo fallback for local runs."""
     try:
@@ -686,8 +700,10 @@ def run(
         )
 
     async def main():
+        lane_loggers = {item.slug: get_logger(item.slug) for item in viewports}
+
         async def run_lane(viewport_spec: ViewportSpec) -> bool:
-            logger = get_logger(viewport_spec.slug)
+            logger = lane_loggers[viewport_spec.slug]
             client = PerceptionClient(logger=logger)
             automator = Automator(
                 client,
@@ -727,39 +743,58 @@ def run(
                 lane_passed = False
             except UserFacingException as err:
                 lane_passed = False
-                console.print(f"\n[bold red]Error ({viewport_spec.name}):[/] {err.user_message}")
-                if verbose >= 1 and err.internal_detail:
-                    console.print(f"[dim]Details: {err.internal_detail}[/]")
+                logger.log_exception("lane", err)
+                if _is_playwright_error(err):
+                    logger.log_warning("lane", f"Playwright lane failure on {viewport_spec.name}; closing gracefully.")
+                else:
+                    console.print(f"\n[bold red]Error ({viewport_spec.name}):[/] {err.user_message}")
+                    if verbose >= 1 and err.internal_detail:
+                        console.print(f"[dim]Details: {err.internal_detail}[/]")
             except Exception as err:  # pylint: disable=broad-exception-caught
                 lane_passed = False
-                console.print(f"[red]An unexpected error occurred during execution ({viewport_spec.name}): {err}[/]")
-                if verbose >= 1:
-                    traceback.print_exc()
+                logger.log_exception("lane", err)
+                if _is_playwright_error(err):
+                    logger.log_warning("lane", f"Playwright lane failure on {viewport_spec.name}; closing gracefully.")
+                else:
+                    console.print(
+                        f"[red]An unexpected error occurred during execution ({viewport_spec.name}): {err}[/]"
+                    )
+                    if verbose >= 1:
+                        traceback.print_exc()
             finally:
                 await automator.stop()
 
             return lane_passed
 
         try:
-            results = await asyncio.gather(*(run_lane(item) for item in viewports))
-        finally:
-            reporter.finalize()
+            try:
+                results = await asyncio.gather(*(run_lane(item) for item in viewports))
+            finally:
+                reporter.finalize()
 
-        reporter.print_failures()
+            reporter.print_failures()
 
-        # Summary line
-        total = len(test_files)
-        passed, failed = _count_top_level_results(reporter.sessions, total, len(viewports))
+            # Summary line
+            total = len(test_files)
+            passed, failed = _count_top_level_results(reporter.sessions, total, len(viewports))
 
-        summary = Text.assemble(
-            ("\nResults: ", "bold"),
-            (f"{passed} passed", "green") if passed else "",
-            (", " if passed and failed else ""),
-            (f"{failed} failed", "red") if failed else "",
-            (f" in {total} test{'s' if total != 1 else ''}", "dim"),
-        )
-        console.print(summary)
-        return all(results) and (not reporter.sessions or failed == 0)
+            summary = Text.assemble(
+                ("\nResults: ", "bold"),
+                (f"{passed} passed", "green") if passed else "",
+                (", " if passed and failed else ""),
+                (f"{failed} failed", "red") if failed else "",
+                (f" in {total} test{'s' if total != 1 else ''}", "dim"),
+            )
+            console.print(summary)
+            return all(results) and (not reporter.sessions or failed == 0)
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            for logger in lane_loggers.values():
+                logger.log_exception("run", err)
+                if _is_playwright_error(err):
+                    logger.log_warning("run", "Playwright run failure; closing gracefully.")
+            if not _is_playwright_error(err):
+                raise
+            return False
 
     success = asyncio.run(main())
     if not success:

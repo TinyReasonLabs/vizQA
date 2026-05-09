@@ -197,7 +197,7 @@ class ProgressiveReporter:
         scope_key = self._lane_scope(lane_key)
         slot = self._lane_next_slot.get(lane_key, 0)
 
-        line = Text("  ")
+        line = Text("   ")
         line.append(f"{icon} ", style=color)
         line.append_text(prefix_text)
         if step.expectation:
@@ -221,7 +221,7 @@ class ProgressiveReporter:
         slot = self._lane_next_slot.get(lane_key, 0)
 
         line = Text()
-        line.append("● ", style="white")
+        line.append("  ", style="white")
         line.append(step.instruction, style="bold white")
         if step.expectation:
             line.append(f" → {step.expectation}", style="grey70")
@@ -268,7 +268,7 @@ class ProgressiveReporter:
             self._lane_next_slot[lane_key] = slot + 1
 
         line = Text()
-        line.append("● ", style=color)
+        line.append("  ", style=color)
         line.append(step.instruction, style=f"bold {color}")
         if step.expectation:
             line.append(f" → {step.expectation}", style=f"bold {color}")
