@@ -35,7 +35,7 @@ Modern UI automation has moved beyond brittle selectors and test-only frontend i
 - **Visual Assertions**: Verify UI state and visibility.
 - **Multi-Viewport Runs**: Test multiple window sizes in parallel to catch responsive issues faster.
 - **Artifact Variables**: Load strings, file contents, or paths as variables (e.g., `{user_name}`) for dynamic test data.
-- **Test Dependencies**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
+- **Test Pre-requisites**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
 - **Repeatable Test Runs**: Optimized for stable, idempotent YAML test cases that can be run consistently in CI and local workflows.
 - **Lightweight & Fast**: CPU-only execution with a minimal **~250 MB** memory footprint and sub-second latency.
 ---

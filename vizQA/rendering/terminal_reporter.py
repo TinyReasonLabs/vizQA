@@ -73,7 +73,7 @@ class TerminalReporter:
     def _build_failure_entry(self, display_path: str, session) -> "_FailureEntry":
         label = session.test_name if session.is_dependency else display_path
         if session.is_dependency:
-            label = f"Dependency failure in {session.file_stem or label}"
+            label = f"Pre-requisite failure in {session.file_stem or label}"
         if session.viewport_name:
             label = f"{label} [{session.viewport_name}]"
 
