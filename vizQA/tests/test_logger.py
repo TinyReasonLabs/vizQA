@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from vizQA.app.logger import get_logger, reset_logger
+from vizQA.app.logger import configure_logging, get_logger, reset_logger
 
 
 def test_get_logger_uses_shared_timestamp_with_viewport_suffixes(tmp_path, monkeypatch):
@@ -85,3 +85,18 @@ def test_log_perception_falls_back_to_elements_and_handles_missing_metadata(tmp_
         in lines[1]
     )
     assert "selected=none" in lines[2]
+
+
+def test_configure_logging_hides_debug_entries_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("vizQA.app.logger._LOG_DIR", str(tmp_path))
+    reset_logger()
+    configure_logging(debug_enabled=False)
+
+    logger = get_logger()
+    logger.log_perception("step-3", "search box", {"elements": [{"text": "Search"}]}, selected=None)
+    logger.log_session("session-1", "start", "url='http://example.com'")
+    reset_logger()
+
+    lines = Path(logger.log_path).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "SESSION" in lines[0]

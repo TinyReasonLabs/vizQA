@@ -22,6 +22,7 @@ _LOG_DIR = ".vizQA"
 _INSTANCES: Dict[str, "SessionLogger"] = {}
 _RUN_TIMESTAMP: Optional[str] = None
 _PERCEPTION_CANDIDATE_LIMIT = 5
+_DEBUG_ENABLED = True
 
 
 class SessionLogger:
@@ -45,11 +46,11 @@ class SessionLogger:
 
         logger_name = f"vizqa.session.{run_timestamp}{suffix}"
         self._logger = logging.getLogger(logger_name)
-        self._logger.setLevel(logging.DEBUG)
+        self._logger.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         self._logger.propagate = False  # don't bubble up to the root logger
 
         handler = logging.FileHandler(log_path, encoding="utf-8")
-        handler.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         fmt = logging.Formatter(
             fmt="%(asctime)s  %(levelname)-8s  %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S",
@@ -191,12 +192,20 @@ def get_logger(log_suffix: Optional[str] = None) -> SessionLogger:
     return _INSTANCES[key]
 
 
+def configure_logging(*, debug_enabled: bool) -> None:
+    """Configure whether new run loggers should emit DEBUG entries."""
+
+    global _DEBUG_ENABLED  # pylint: disable=global-statement
+    _DEBUG_ENABLED = debug_enabled
+
+
 def reset_logger() -> None:
     """Resets the singleton (mainly useful in tests)."""
-    global _RUN_TIMESTAMP  # pylint: disable=global-statement
+    global _RUN_TIMESTAMP, _DEBUG_ENABLED  # pylint: disable=global-statement
     for logger in _INSTANCES.values():
         for handler in list(logger._logger.handlers):  # pylint: disable=protected-access
             handler.close()
             logger._logger.removeHandler(handler)  # pylint: disable=protected-access
     _INSTANCES.clear()
     _RUN_TIMESTAMP = None
+    _DEBUG_ENABLED = True

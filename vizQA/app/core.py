@@ -6,6 +6,7 @@ Core execution engine for vision-driven UI automation.
 import asyncio
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ class Automator:
         self,
         perception_client: PerceptionClient,
         verbosity: int = 0,
+        debug_logging: Optional[bool] = None,
         headless: bool = True,
         viewport: Optional["ViewportSpec"] = None,
         logger: Optional["SessionLogger"] = None,
@@ -57,6 +59,7 @@ class Automator:
         """
         self.client = perception_client
         self.verbosity = verbosity
+        self.debug_logging = debug_logging
         self.headless = headless
         self.viewport = viewport
         self.playwright_mgr: Optional[Any] = None
@@ -786,9 +789,9 @@ class Automator:
         elif any(verb in norm_action for verb in ["type", "enter", "input"]):
             # Focus and clear
             await self.page.mouse.click(x, y)
-            await self.page.keyboard.down("Control")
-            await self.page.keyboard.press("a")
-            await self.page.keyboard.up("Control")
+            # Use Meta on macOS, Control elsewhere
+            modifier = "Meta" if sys.platform == "darwin" else "Control"
+            await self.page.keyboard.press(f"{modifier}+A")
             await self.page.keyboard.press("Backspace")
 
             # Type the actual text
@@ -948,7 +951,8 @@ class Automator:
         selected: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Logs compact perception details only at the highest verbosity."""
-        if self.verbosity >= 2:
+        should_log = self.debug_logging if self.debug_logging is not None else self.verbosity >= 2
+        if should_log:
             self.logger.log_perception(step_id, query, perception, selected=selected)
 
     @staticmethod
