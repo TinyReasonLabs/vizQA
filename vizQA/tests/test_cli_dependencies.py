@@ -1,8 +1,10 @@
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -10,6 +12,7 @@ from vizQA.app.cli import (
     _clean_run_artifacts,
     _collect_involved_test_stems,
     _count_top_level_results,
+    _emit_report_event,
     _load_test_data,
     cli,
     run_single_test,
@@ -18,6 +21,7 @@ from vizQA.app.exceptions import TestDefinitionError
 from vizQA.app.logger import reset_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
+from vizQA.rendering.events import StepStartedEvent
 
 
 def _make_test_file(tmp_path: Path, name: str, body: str) -> Path:
@@ -245,6 +249,30 @@ steps: []
     asyncio.run(run_test())
 
 
+def test_emit_report_event_passes_legacy_viewport_to_step_callbacks():
+    step = TestStep(id="step-1", instruction="VERIFY: Dashboard", status=StepStatus.RUNNING)
+    reporter = SimpleNamespace(
+        sessions=[
+            TestSession(
+                id="session-1",
+                test_name="Dashboard",
+                file_stem="dashboard",
+                url="http://example.com",
+                steps=[],
+                viewport_name="Desktop",
+                viewport_width=1440,
+                viewport_height=900,
+            )
+        ],
+        on_parent_step_start=MagicMock(),
+    )
+
+    _emit_report_event(reporter, StepStartedEvent(session_id="session-1", step=step))
+
+    viewport = reporter.on_parent_step_start.call_args.kwargs["viewport"]
+    assert viewport == ViewportSpec(name="Desktop", width=1440, height=900)
+
+
 def test_run_single_test_stops_when_dependency_fails(tmp_path):
     async def run_test():
         test_path = _make_test_file(
@@ -397,6 +425,7 @@ steps: []
             dep_path,
             _automator,
             _reporter,
+            owner_key=None,
             on_step_update=None,
             interactive=False,
             is_dependency=False,
@@ -405,6 +434,7 @@ steps: []
             dependency_calls.append(
                 {
                     "dep_path": dep_path,
+                    "owner_key": owner_key,
                     "interactive": interactive,
                     "is_dependency": is_dependency,
                     "viewport": viewport,
@@ -583,7 +613,7 @@ def test_clean_run_artifacts_removes_namespaced_lane_files(tmp_path, monkeypatch
     assert (browser_state_dir / "other__main.json").exists()
 
 
-def test_run_hides_cleanup_message_when_not_verbose(tmp_path):
+def test_run_shows_cleanup_message_in_debug_log_mode(tmp_path):
     test_path = _make_test_file(
         tmp_path,
         "main",
@@ -605,13 +635,59 @@ steps: []
         automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
-        result = runner.invoke(cli, ["run", str(test_path)])
+        result = runner.invoke(cli, ["run", str(test_path), "--debug-log"])
+
+    assert result.exit_code == 0
+    assert "Cleaned 2 screenshots, 1 browser states, 1 old run logs" in result.output
+
+
+def test_run_hides_cleanup_message_in_silent_mode(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 2, "browser_states": 1, "logs": 1}),
+        patch("vizQA.app.cli.get_logger"),
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=AsyncMock(return_value=True)),
+    ):
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
+        mock_automator_cls.return_value = automator
+
+        result = runner.invoke(cli, ["run", "--silent", str(test_path)])
 
     assert result.exit_code == 0
     assert "Cleaned 2 screenshots" not in result.output
 
 
-def test_run_shows_cleanup_message_in_verbose_mode(tmp_path):
+def test_run_rejects_removed_verbose_flags(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "-v", str(test_path)])
+
+    assert result.exit_code != 0
+    assert "No such option: -v" in result.output
+
+
+def test_run_debug_log_configures_logger(tmp_path):
     test_path = _make_test_file(
         tmp_path,
         "main",
@@ -624,7 +700,8 @@ steps: []
 
     runner = CliRunner()
     with (
-        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 2, "browser_states": 1, "logs": 1}),
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.configure_logging") as mock_configure_logging,
         patch("vizQA.app.cli.get_logger"),
         patch("vizQA.app.cli.PerceptionClient"),
         patch("vizQA.app.cli.Automator") as mock_automator_cls,
@@ -633,10 +710,10 @@ steps: []
         automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
         mock_automator_cls.return_value = automator
 
-        result = runner.invoke(cli, ["run", "-v", str(test_path)])
+        result = runner.invoke(cli, ["run", "--debug-log", str(test_path)])
 
     assert result.exit_code == 0
-    assert "Cleaned 2 screenshots, 1 browser states, 1 old run logs" in result.output
+    mock_configure_logging.assert_called_once_with(debug_enabled=True)
 
 
 def test_run_creates_one_automator_per_viewport_lane(tmp_path):
@@ -675,6 +752,80 @@ steps: []
 
     assert result.exit_code == 0
     assert mock_automator_cls.call_count == 2
+
+
+def test_run_interactive_cancels_other_viewports_on_first_abort(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    automator_instances = [
+        SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+        SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+    ]
+    cancellation_seen = {"mobile": False}
+
+    async def fake_run_single_test(
+        _test_file,
+        _automator,
+        _reporter,
+        owner_key=None,
+        on_step_update=None,
+        interactive=False,
+        is_dependency=False,
+        viewport=None,
+    ):
+        del owner_key
+        del on_step_update
+        del is_dependency
+        assert interactive is True
+        if viewport.name == "desktop":
+            raise click.Abort()
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancellation_seen["mobile"] = True
+            raise
+        return True
+
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.inspect_weight_state") as mock_weight_state,
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.get_logger", side_effect=[MagicMock(), MagicMock()]),
+        patch("vizQA.app.cli.load_viewport_config"),
+        patch(
+            "vizQA.app.cli.resolve_viewports",
+            return_value=[
+                ViewportSpec(name="mobile", width=390, height=844),
+                ViewportSpec(name="desktop", width=1440, height=900),
+            ],
+        ),
+        patch("vizQA.app.cli.Automator", side_effect=automator_instances),
+        patch("vizQA.app.cli.run_single_test", side_effect=fake_run_single_test),
+    ):
+        mock_weight_state.return_value = SimpleNamespace(
+            installed_revision="0.1.0",
+            expected_revision="0.1.0",
+            status="aligned",
+            assumed_revision=False,
+        )
+        started = time.perf_counter()
+        result = runner.invoke(cli, ["run", "-x", "--viewport", "desktop", "--viewport", "mobile", str(test_path)])
+        elapsed = time.perf_counter() - started
+
+    assert result.exit_code != 0
+    assert elapsed < 2
+    assert cancellation_seen["mobile"] is True or elapsed < 2
+    assert automator_instances[0].stop.await_count == 1
+    assert automator_instances[1].stop.await_count == 1
 
 
 def test_run_logs_playwright_errors_without_printing_them(tmp_path, monkeypatch):
