@@ -35,7 +35,7 @@ Modern UI automation has moved beyond brittle selectors and test-only frontend i
 - **Visual Assertions**: Verify UI state and visibility.
 - **Multi-Viewport Runs**: Test multiple window sizes in parallel to catch responsive issues faster.
 - **Artifact Variables**: Load strings, file contents, or paths as variables (e.g., `{user_name}`) for dynamic test data.
-- **Test Dependencies**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
+- **Test Pre-requisites**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
 - **Repeatable Test Runs**: Optimized for stable, idempotent YAML test cases that can be run consistently in CI and local workflows.
 - **Lightweight & Fast**: CPU-only execution with a minimal **~250 MB** memory footprint and sub-second latency.
 ---
@@ -132,7 +132,7 @@ For the full library guide, see [docs/library_api.md](docs/library_api.md).
 | --- | --- | --- |
 | `paths` | One or more paths to test files or directories. | Required for a run (omit to print help). |
 | `--headless / --no-headless` | Run browser in headless mode. | `True` |
-| `--silent` | Use the compact terminal reporter instead of the default rich live view. | `False` |
+| `-s, --silent` | Use the compact terminal reporter instead of the default rich live view. | `False` |
 | `--debug-log` | Keep the same terminal UI, but write richer DEBUG diagnostics to `.vizQA/run_*.log`. | `False` |
 | `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
 | `--viewport` | Repeatable built-in viewport name (`mobile`, `tablet`, `desktop`, `widescreen`), custom configured profile name, or raw `WIDTHxHEIGHT` size such as `390x844`. Specify it multiple times to run several sizes in parallel. | Configured default viewports, otherwise `desktop` |

@@ -13,6 +13,7 @@ from vizQA.app.memory import FailureType
 from vizQA.rendering.layout import compose_layout
 from vizQA.rendering.models import DisplayMode, RunStatus
 from vizQA.rendering.store import RunStateStore
+from vizQA.rendering.theme import FAILURE_BOLD_STYLE
 
 
 class TerminalReporter:
@@ -48,17 +49,18 @@ class TerminalReporter:
         failed_entries: list[_FailureEntry] = []
         for run in snapshot.top_level_runs:
             for session in [*run.dependencies, *run.sessions]:
-                if session.status not in (RunStatus.FAILED, RunStatus.BLOCKED):
+                has_failure_details = bool(session.blocked_reason or session.failure_step_text)
+                if session.status not in (RunStatus.FAILED, RunStatus.BLOCKED) and not has_failure_details:
                     continue
                 failed_entries.append(self._build_failure_entry(run.display_path, session))
 
         if not failed_entries:
             return
 
-        self.console.print("\n[bold red]Failures[/]")
+        self.console.print(f"\n[{FAILURE_BOLD_STYLE}]Failures[/]")
         for entry in failed_entries:
             self.console.print("")
-            self.console.print(f"[bold red]✘[/] {entry.label}")
+            self.console.print(f"[{FAILURE_BOLD_STYLE}]✘[/] {entry.label}")
             if self.display_mode == DisplayMode.SILENT:
                 continue
             if entry.step:
@@ -71,7 +73,7 @@ class TerminalReporter:
     def _build_failure_entry(self, display_path: str, session) -> "_FailureEntry":
         label = session.test_name if session.is_dependency else display_path
         if session.is_dependency:
-            label = f"Dependency failure in {session.file_stem or label}"
+            label = f"Pre-requisite failure in {session.file_stem or label}"
         if session.viewport_name:
             label = f"{label} [{session.viewport_name}]"
 

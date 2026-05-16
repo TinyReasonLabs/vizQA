@@ -21,7 +21,7 @@ from vizQA.app.exceptions import TestDefinitionError
 from vizQA.app.logger import reset_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
-from vizQA.rendering.events import StepStartedEvent
+from vizQA.rendering.events import RunFinishedEvent, StepStartedEvent
 
 
 def _make_test_file(tmp_path: Path, name: str, body: str) -> Path:
@@ -826,6 +826,120 @@ steps: []
     assert cancellation_seen["mobile"] is True or elapsed < 2
     assert automator_instances[0].stop.await_count == 1
     assert automator_instances[1].stop.await_count == 1
+
+
+def test_run_interactive_abort_does_not_emit_run_finished_event(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    reporter = MagicMock()
+    reporter.store.snapshot.return_value = SimpleNamespace(passed_top_level=0, failed_top_level=0)
+
+    async def fake_run_single_test(
+        _test_file,
+        _automator,
+        _reporter,
+        owner_key=None,
+        on_step_update=None,
+        interactive=False,
+        is_dependency=False,
+        viewport=None,
+    ):
+        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport
+        assert interactive is True
+        raise click.Abort()
+
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.inspect_weight_state") as mock_weight_state,
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.get_logger", return_value=MagicMock()),
+        patch("vizQA.app.cli.load_viewport_config"),
+        patch("vizQA.app.cli.resolve_viewports", return_value=[ViewportSpec(name="desktop", width=1440, height=900)]),
+        patch(
+            "vizQA.app.cli.Automator",
+            return_value=SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+        ),
+        patch("vizQA.app.cli.TerminalReporter", return_value=reporter),
+        patch("vizQA.app.cli.run_single_test", side_effect=fake_run_single_test),
+    ):
+        mock_weight_state.return_value = SimpleNamespace(
+            installed_revision="0.1.0",
+            expected_revision="0.1.0",
+            status="aligned",
+            assumed_revision=False,
+            package_version="0.1.0",
+        )
+        result = runner.invoke(cli, ["run", "-x", str(test_path)])
+
+    assert result.exit_code != 0
+    assert reporter.finalize.call_count == 1
+    emitted_events = [call.args[0] for call in reporter.handle.call_args_list if call.args]
+    assert not any(isinstance(event, RunFinishedEvent) for event in emitted_events)
+
+
+def test_run_interactive_abort_prints_failure_details(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    reporter = MagicMock()
+    reporter.store.snapshot.return_value = SimpleNamespace(passed_top_level=0, failed_top_level=1)
+
+    async def fake_run_single_test(
+        _test_file,
+        _automator,
+        _reporter,
+        owner_key=None,
+        on_step_update=None,
+        interactive=False,
+        is_dependency=False,
+        viewport=None,
+    ):
+        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport
+        assert interactive is True
+        raise click.Abort()
+
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.inspect_weight_state") as mock_weight_state,
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.get_logger", return_value=MagicMock()),
+        patch("vizQA.app.cli.load_viewport_config"),
+        patch("vizQA.app.cli.resolve_viewports", return_value=[ViewportSpec(name="desktop", width=1440, height=900)]),
+        patch(
+            "vizQA.app.cli.Automator",
+            return_value=SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+        ),
+        patch("vizQA.app.cli.TerminalReporter", return_value=reporter),
+        patch("vizQA.app.cli.run_single_test", side_effect=fake_run_single_test),
+    ):
+        mock_weight_state.return_value = SimpleNamespace(
+            installed_revision="0.1.0",
+            expected_revision="0.1.0",
+            status="aligned",
+            assumed_revision=False,
+            package_version="0.1.0",
+        )
+        result = runner.invoke(cli, ["run", "-x", str(test_path)])
+
+    assert result.exit_code != 0
+    reporter.print_failures.assert_called_once()
 
 
 def test_run_logs_playwright_errors_without_printing_them(tmp_path, monkeypatch):

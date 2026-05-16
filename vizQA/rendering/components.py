@@ -7,8 +7,12 @@ from rich.text import Text
 
 from vizQA.rendering.models import RunSnapshot, RunStatus, SessionViewState, StepRowState, TopLevelRunView
 from vizQA.rendering.theme import (
+    FAILURE_BOLD_STYLE,
+    FAILURE_STYLE,
     PREREQUISITE_CURSOR_STYLE,
     PROGRESS_STYLE,
+    SUCCESS_BOLD_STYLE,
+    SUCCESS_STYLE,
     VIEWPORT_CURSOR_STYLE,
     format_step_prefix,
     status_icon,
@@ -51,7 +55,7 @@ def build_failed_viewport_markers(row: StepRowState) -> Text:
 
     text = Text()
     for viewport in failed:
-        text.append(f"   [{viewport.label}]", style="red")
+        text.append(f"   [{viewport.label}]", style=FAILURE_STYLE)
     return text
 
 
@@ -59,10 +63,14 @@ def _failure_badges(run: TopLevelRunView) -> list[str]:
     badges: list[str] = []
     seen: set[str] = set()
     for session in run.sessions:
-        if session.status not in (RunStatus.FAILED, RunStatus.BLOCKED):
+        if session.status not in (RunStatus.PASSED, RunStatus.FAILED, RunStatus.BLOCKED):
             continue
         label = session.viewport_name or "default"
-        badge = f"[{label}] FAIL"
+        badge = (
+            f"[{label}] FAIL"
+            if session.status == RunStatus.FAILED
+            else f"[{label}] BLOCKED" if session.status == RunStatus.BLOCKED else "PASS"
+        )
         if badge not in seen:
             seen.add(badge)
             badges.append(badge)
@@ -77,7 +85,7 @@ def _append_right_badges(line: Text, badges: list[str], *, width: int | None) ->
     for index, badge in enumerate(badges):
         if index:
             badge_text.append("  ")
-        badge_text.append(badge, style="bold red")
+        badge_text.append(badge, style="not bold")
 
     spacing = "   "
     if width:
@@ -102,7 +110,9 @@ def build_step_line(row: StepRowState) -> Text:
             line.append(f" ➜ {row.expectation}", style="white")
     else:
         text_style = (
-            "white" if row.status == RunStatus.RUNNING else ("red" if row.status == RunStatus.FAILED else "white")
+            "white"
+            if row.status == RunStatus.RUNNING
+            else (FAILURE_STYLE if row.status == RunStatus.FAILED else "white")
         )
         line.append(row.text, style=text_style)
     line.append_text(build_viewport_markers(row))
@@ -131,14 +141,14 @@ def _dedup_dependency_sessions(run: TopLevelRunView) -> list[SessionViewState]:
 
 
 def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int) -> Group | None:
-    """Render the dependency section for the focused run."""
+    """Render the pre-requisite section for the focused run."""
 
     dependency_sessions = _dedup_dependency_sessions(run)
     if not dependency_sessions:
         return None
 
     total_dependencies = run.dependency_total or len(dependency_sessions)
-    header_label = f"Running {total_dependencies} dependenc{'y' if total_dependencies == 1 else 'ies'}..."
+    header_label = f"Running {total_dependencies} pre-requisite{'s' if total_dependencies != 1 else ''}..."
     completed = sum(
         1
         for session in dependency_sessions
@@ -154,13 +164,11 @@ def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int
     window_sessions = dependency_sessions[-max_lines:]
     for session in window_sessions:
         style = (
-            VIEWPORT_CURSOR_STYLE
-            if active_dependency and session.session_id == active_dependency.session_id
-            else "white"
+            VIEWPORT_CURSOR_STYLE if active_dependency and session.session_id == active_dependency.session_id else "dim"
         )
         line = Text.assemble(("› ", style), (_dependency_display_name(session), style))
         if session.blocked_reason:
-            line.append(f"  {session.blocked_reason}", style="red")
+            line.append(f"  {session.blocked_reason}", style=FAILURE_STYLE)
         lines.append(line)
 
         if active_dependency and session.session_id == active_dependency.session_id:
@@ -180,7 +188,7 @@ def _build_dependency_actions(session: SessionViewState, *, max_lines: int) -> l
         text_style = (
             PREREQUISITE_CURSOR_STYLE
             if row.status == RunStatus.RUNNING
-            else ("green" if row.status == RunStatus.PASSED else "white")
+            else (SUCCESS_STYLE if row.status == RunStatus.PASSED else "white")
         )
         line = Text("  ")
         line.append(f"{icon} ", style)
@@ -196,7 +204,7 @@ def _build_dependency_actions(session: SessionViewState, *, max_lines: int) -> l
             )
             dots = "." * max(1, completed_children)
             dot_line = Text("    ")
-            dot_line.append(dots, style="green")
+            dot_line.append(dots, style=SUCCESS_STYLE)
             dot_line.append_text(active_markers)
             lines.append(dot_line)
     return lines
@@ -207,9 +215,9 @@ def build_compact_run_row(run: TopLevelRunView, *, focused: bool = False, width:
 
     compact_status = run.summary_status
     status_styles = {
-        RunStatus.PASSED: "bold green",
-        RunStatus.FAILED: "bold red",
-        RunStatus.BLOCKED: "bold red",
+        RunStatus.PASSED: SUCCESS_BOLD_STYLE,
+        RunStatus.FAILED: FAILURE_BOLD_STYLE,
+        RunStatus.BLOCKED: FAILURE_BOLD_STYLE,
         RunStatus.SKIPPED: "dim",
         RunStatus.RUNNING: "white",
         RunStatus.PENDING: "white",
@@ -224,13 +232,19 @@ def build_compact_run_row(run: TopLevelRunView, *, focused: bool = False, width:
 def build_step_list(run: TopLevelRunView, *, max_lines: int) -> Group:
     """Render the merged step list for the focused run."""
 
-    rows = run.merged_step_rows
+    rows = [row for row in run.merged_step_rows if row.status != RunStatus.SKIPPED]
     active_rows = [row for row in rows if any(viewport.active for viewport in row.viewport_status.values())]
     expanded_parent_id: str | None = None
     active_lane_keys: set[str] = set()
     if active_rows:
         latest_active = max(active_rows, key=lambda item: item.order)
-        active_lane_keys = {key for key, viewport in latest_active.viewport_status.items() if viewport.active}
+        active_lane_keys = {
+            key
+            for key, viewport in latest_active.viewport_status.items()
+            if viewport.active and viewport.status == RunStatus.RUNNING
+        }
+        if not active_lane_keys:
+            active_lane_keys = {key for key, viewport in latest_active.viewport_status.items() if viewport.active}
         if latest_active.depth > 0:
             expanded_parent_id = latest_active.parent_step_id
         elif latest_active.kind == "parent":

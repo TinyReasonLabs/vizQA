@@ -1,4 +1,6 @@
-# Test Dependencies
+# Test Pre-requisites
+
+This guide covers the user-facing pre-requisite flow powered by vizQA's internal dependency system.
 
 vizQA lets one test depend on another with `requires`. This is useful for flows like:
 - login -> MFA
@@ -7,7 +9,7 @@ vizQA lets one test depend on another with `requires`. This is useful for flows 
 
 ## Simple Usage
 
-Define the prerequisite test:
+Define the pre-requisite test:
 
 ```yaml
 # login.yaml
@@ -25,7 +27,7 @@ steps:
     expect: "The dashboard should load"
 ```
 
-Then declare a dependent test:
+Then declare a test that depends on it:
 
 ```yaml
 # returns.yaml
@@ -56,39 +58,39 @@ vizQA will:
 ## Notes For Writing Tests
 
 - `requires` entries reference file stems, not full filenames.
-- Keep each test valid on its own. A dependency should represent a meaningful checkpoint.
-- If a test uses `{artifacts}`, define them in that file even if a dependency also defines them.
-- Use dependencies for stateful setup, not for grouping unrelated assertions.
+- Keep each test valid on its own. A pre-requisite should represent a meaningful checkpoint.
+- If a test uses `{artifacts}`, define them in that file even if a pre-requisite also defines them.
+- Use pre-requisites for stateful setup, not for grouping unrelated assertions.
 
 ## Technical Details
 
 ### Resolution
 
-- Dependencies are resolved from the same directory as the test file.
-- vizQA builds a dependency graph and runs dependencies in topological order.
-- Circular dependencies and missing dependency names raise a `TestDefinitionError`.
+- Pre-requisites are resolved from the same directory as the test file.
+- vizQA builds an internal dependency graph and runs pre-requisites in topological order.
+- Circular references and missing pre-requisite names raise a `TestDefinitionError`.
 
 ### Execution Model
 
-- Dependency tests are executed before the requested test.
-- If any dependency fails, the requested test is skipped.
-- Dependency sessions are reported in the output, but summary pass/fail counts only include top-level requested tests.
+- Pre-requisite tests are executed before the requested test.
+- If any pre-requisite fails, the requested test is skipped.
+- Pre-requisite sessions are reported in the output, but summary pass/fail counts only include top-level requested tests.
 
 ### Artifacts
 
-- Artifacts from dependencies are loaded and inherited in dependency order.
+- Artifacts from pre-requisites are loaded and inherited in pre-requisite order.
 - Local artifacts override inherited artifacts with the same name.
 - In practice, explicit local artifacts are recommended for readability.
 
 ### Browser State
 
-- After a successful dependency, vizQA caches browser state from:
+- After a successful pre-requisite, vizQA caches browser state from:
   - `localStorage`
   - `sessionStorage`
   - cookies
-- Before the dependent test starts, vizQA restores the latest dependency state and reloads the page so storage-driven UI can rehydrate.
+- Before the dependent test starts, vizQA restores the latest pre-requisite state and reloads the page so storage-driven UI can rehydrate.
 
 ### Limits
 
 - Only persisted browser state is transferred automatically. If an app keeps important UI state only in live memory, that state should also be reflected in storage or cookies.
-- Dependencies are file-based; there is no separate suite manifest.
+- Pre-requisites are file-based; there is no separate suite manifest.
