@@ -2,7 +2,7 @@
 
 This guide is the main reference for authoring `vizQA` test files.
 
-For dependency-specific behavior, see [test_dependencies.md](test_dependencies.md).
+For pre-requisite-specific behavior, see [test_dependencies.md](test_dependencies.md).
 
 ## Minimal Example
 
@@ -62,7 +62,7 @@ name: "Checkout Flow"
 
 - The page to open when the test starts.
 - Can be `https://...` or `file:///...`.
-- For dependency-driven tests, the initial navigation may be skipped if state is restored from a dependency.
+- For pre-requisite-driven tests, the initial navigation may be skipped if state is restored from a pre-requisite.
 
 Example:
 
@@ -78,7 +78,7 @@ url: "https://example.com/dashboard"
 ### Environment Variables
 
 - Any YAML string value can reference an environment variable with `${VAR}`.
-- Interpolation happens when vizQA loads the test file, before dependency resolution and execution.
+- Interpolation happens when vizQA loads the test file, before pre-requisite resolution and execution.
 - If a referenced variable is not set, vizQA raises a `TestDefinitionError`.
 
 Example:
@@ -131,8 +131,8 @@ Recommendations:
 ### `requires`
 
 - Optional.
-- Lists prerequisite tests by file stem.
-- Dependencies must live in the same directory as the current test.
+- Lists pre-requisite tests by file stem.
+- Pre-requisites must live in the same directory as the current test.
 
 Example:
 
@@ -142,7 +142,7 @@ requires:
   - checkout_setup
 ```
 
-See [test_dependencies.md](test_dependencies.md) for resolution and state handoff details.
+See [test_dependencies.md](test_dependencies.md) for pre-requisite resolution and state handoff details.
 
 ### `steps`
 
@@ -274,7 +274,7 @@ One test should usually cover one flow:
 - returns
 - manager approval
 
-Split broad scenarios into dependencies when state handoff matters.
+Split broad scenarios into pre-requisites when state handoff matters.
 
 ### Keep expectations readable
 
@@ -295,9 +295,9 @@ Then:
 - action: "Search for {item_name} in the search field"
 ```
 
-### Make dependency tests self-describing
+### Make pre-requisite tests self-describing
 
-Even though dependency artifacts can be inherited, local artifacts are usually better for readability and maintenance.
+Even though pre-requisite artifacts can be inherited, local artifacts are usually better for readability and maintenance.
 
 ## Practical Examples
 

@@ -18,13 +18,13 @@ def print_session_header(console: Console, session: TestSession) -> None:
     console.print(f"\n[bold]● {session.test_name}{viewport_note}[/] [dim]({session.id})[/]")
     if session.dependency_results:
         dep_names = " → ".join([d["name"] for d in session.dependency_results])
-        console.print(f"[dim]dependencies: {dep_names}[/]")
+        console.print(f"[dim]pre-requisites: {dep_names}[/]")
 
 
 def print_dependency_failure(console: Console, dependency_name: str) -> None:
     """Compatibility helper for legacy callers."""
 
-    console.print(f"[{FAILURE_STYLE}]✘ Test skipped because required test failed: {dependency_name}[/]")
+    console.print(f"[{FAILURE_STYLE}]✘ Test skipped because a required pre-requisite failed: {dependency_name}[/]")
 
 
 class ProgressiveReporter(TerminalReporter):

@@ -141,14 +141,14 @@ def _dedup_dependency_sessions(run: TopLevelRunView) -> list[SessionViewState]:
 
 
 def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int) -> Group | None:
-    """Render the dependency section for the focused run."""
+    """Render the pre-requisite section for the focused run."""
 
     dependency_sessions = _dedup_dependency_sessions(run)
     if not dependency_sessions:
         return None
 
     total_dependencies = run.dependency_total or len(dependency_sessions)
-    header_label = f"Running {total_dependencies} dependenc{'y' if total_dependencies == 1 else 'ies'}..."
+    header_label = f"Running {total_dependencies} pre-requisite{'s' if total_dependencies != 1 else ''}..."
     completed = sum(
         1
         for session in dependency_sessions
@@ -164,9 +164,7 @@ def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int
     window_sessions = dependency_sessions[-max_lines:]
     for session in window_sessions:
         style = (
-            VIEWPORT_CURSOR_STYLE
-            if active_dependency and session.session_id == active_dependency.session_id
-            else "white"
+            VIEWPORT_CURSOR_STYLE if active_dependency and session.session_id == active_dependency.session_id else "dim"
         )
         line = Text.assemble(("› ", style), (_dependency_display_name(session), style))
         if session.blocked_reason:

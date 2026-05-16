@@ -15,6 +15,7 @@ from vizQA.rendering.events import (
 )
 from vizQA.rendering.layout import compose_layout
 from vizQA.rendering.models import DisplayMode, RunStatus
+from vizQA.rendering.progressive_reporter import print_session_header
 from vizQA.rendering.store import RunStateStore
 from vizQA.rendering.terminal_reporter import TerminalReporter
 from vizQA.rendering.theme import REPORT_GREEN, REPORT_RED, RUN_STATUS_STYLES, STEP_STATUS_STYLES, VERIFY_STYLE
@@ -327,7 +328,7 @@ def test_verbose_layout_renders_dependency_panel_and_pinned_header():
 
     plain = _render_plain(compose_layout(store.snapshot(), height=18, width=100), width=100)
 
-    assert "Running 1 dependency" in plain
+    assert "Running 1 pre-requisite" in plain
     assert "dependency_auth_seed" in plain
     assert plain.count("dependency_auth_seed") == 1
     assert "tests/dependency_login_mfa.yaml" in plain
@@ -353,7 +354,7 @@ def test_dependency_header_uses_expected_total_not_started_count():
 
     plain = _render_plain(compose_layout(store.snapshot(), height=14, width=100), width=100)
 
-    assert "Running 4 dependencies..." in plain
+    assert "Running 4 pre-requisites..." in plain
 
 
 def test_silent_layout_renders_compact_rows_only():
@@ -407,7 +408,7 @@ def test_silent_layout_shows_dependency_progress_placeholder_while_dependencies_
     plain = _render_plain(compose_layout(store.snapshot(), height=10, width=80), width=80)
 
     assert "tests/checkout.yaml" in plain
-    assert "running 2 dependencies..." in plain
+    assert "running 2 pre-requisites..." in plain
 
 
 def test_silent_layout_indents_substeps_more_than_parent_steps():
@@ -502,7 +503,7 @@ def test_finished_successful_run_collapses_to_compact_rows_only():
 
     assert "tests/auth_flow.yaml" in plain
     assert "tests/dependency_manager_approval.yaml" in plain
-    assert "Running 1 dependency" not in plain
+    assert "Running 1 pre-requisite" not in plain
     assert "Dependency ready" not in plain
     assert "Request approved" not in plain
 
@@ -566,7 +567,7 @@ def test_finished_failed_run_also_collapses_to_compact_rows_only():
     assert "tests/auth_flow.yaml" in plain
     assert "tests/auth_flow_fail.yaml" in plain
     assert "[desktop] FAIL" in plain
-    assert "Running 2 dependencies" not in plain
+    assert "Running 2 pre-requisites" not in plain
     assert "Dependency ready" not in plain
     assert "Click the Submit button" not in plain
 
@@ -1200,14 +1201,31 @@ def test_terminal_reporter_print_failures_uses_snapshot_sessions():
         )
     )
     reporter.handle(SessionStartedEvent(owner_key="checkout", session=blocked_session))
-    reporter.handle(SessionBlockedEvent(session_id="main-1", reason="Required dependency failed: Login dependency"))
+    reporter.handle(SessionBlockedEvent(session_id="main-1", reason="Required pre-requisite failed: Login dependency"))
     reporter.handle(SessionFinishedEvent(session=blocked_session))
     reporter.handle(RunFinishedEvent())
     reporter.print_failures()
 
     printed = "\n".join(call.args[0] for call in console.print.call_args_list if call.args)
     assert "tests/checkout.yaml [mobile]" in printed
-    assert "Required dependency failed: Login dependency" in printed
+    assert "Required pre-requisite failed: Login dependency" in printed
+
+
+def test_progressive_reporter_session_header_uses_pre_requisites_label():
+    console = Console(record=True, width=100)
+    session = _session(
+        "main-1",
+        "Checkout",
+        file_stem="checkout",
+        dependency_results=[
+            {"name": "Login dependency", "status": "passed", "session_id": "dep-1", "file_stem": "login"}
+        ],
+    )
+
+    print_session_header(console, session)
+
+    plain = console.export_text()
+    assert "pre-requisites: Login dependency" in plain
 
 
 def test_terminal_reporter_print_failures_verbose_shows_parent_subset_reason_and_omits_skipped_steps():

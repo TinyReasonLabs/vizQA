@@ -347,7 +347,7 @@ def _resolve_dependencies(test_path: Path) -> List[Path]:
         resolver = DependencyResolver(test_path.parent)
         dependency_paths = resolver.resolve(test_path)
     except TestDefinitionError as err:
-        console.print(f"[{FAILURE_STYLE}]Error resolving dependencies: {err.user_message}[/]")
+        console.print(f"[{FAILURE_STYLE}]Error resolving pre-requisites: {err.user_message}[/]")
         if err.internal_detail:
             console.print(f"[dim]{err.internal_detail}[/]")
         raise
@@ -592,7 +592,7 @@ async def run_single_test(
                 reporter,
                 SessionBlockedEvent(
                     session_id=session.id,
-                    reason=f"Required dependency failed: {dependency_results[-1]['name']}",
+                    reason=f"Required pre-requisite failed: {dependency_results[-1]['name']}",
                 ),
             )
             _emit_report_event(reporter, SessionFinishedEvent(session=session))

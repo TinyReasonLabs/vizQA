@@ -21,7 +21,10 @@ def _build_silent_detail_rows(run: TopLevelRunView, *, height: int, used_lines: 
     if any(session.status == RunStatus.RUNNING for session in run.dependencies):
         dependency_total = max(1, run.dependency_total or len(run.dependencies))
         return [
-            Text(f"  running {dependency_total} dependenc{'y' if dependency_total == 1 else 'ies'}...", style="dim")
+            Text(
+                f"  running {dependency_total} pre-requisite{'s' if dependency_total != 1 else ''}...",
+                style="dim",
+            )
         ]
 
     return []
