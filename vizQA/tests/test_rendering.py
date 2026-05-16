@@ -17,6 +17,7 @@ from vizQA.rendering.layout import compose_layout
 from vizQA.rendering.models import DisplayMode, RunStatus
 from vizQA.rendering.store import RunStateStore
 from vizQA.rendering.terminal_reporter import TerminalReporter
+from vizQA.rendering.theme import REPORT_GREEN, REPORT_RED, RUN_STATUS_STYLES, STEP_STATUS_STYLES, VERIFY_STYLE
 
 
 def _session(
@@ -123,6 +124,17 @@ def test_store_merges_shared_step_rows_across_viewports():
     assert merged[0].text == "VERIFY Settings page"
     assert merged[0].viewport_status["mobile"].complete is True
     assert merged[0].viewport_status["desktop"].complete is True
+
+
+def test_reporting_theme_uses_custom_green_and_red_palette():
+    assert REPORT_GREEN == "#38d9a9"
+    assert REPORT_RED == "#ff5e74"
+    assert STEP_STATUS_STYLES[StepStatus.PASSED] == ("✔", REPORT_GREEN)
+    assert STEP_STATUS_STYLES[StepStatus.FAILED] == ("✘", REPORT_RED)
+    assert RUN_STATUS_STYLES[RunStatus.PASSED] == ("✔", REPORT_GREEN)
+    assert RUN_STATUS_STYLES[RunStatus.FAILED] == ("✘", REPORT_RED)
+    assert RUN_STATUS_STYLES[RunStatus.BLOCKED] == ("✘", REPORT_RED)
+    assert VERIFY_STYLE == f"bold {REPORT_GREEN}"
 
 
 def test_store_tracks_cursor_on_latest_row_only():
@@ -368,6 +380,195 @@ def test_silent_layout_renders_compact_rows_only():
     assert "Dependency tests" not in plain
     assert "tests/search.yaml" in plain
     assert "Results shown" in plain
+
+
+def test_silent_layout_shows_dependency_progress_placeholder_while_dependencies_run():
+    store = RunStateStore(display_mode=DisplayMode.SILENT)
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="checkout",
+            test_name="Checkout",
+            file_stem="checkout",
+            display_path="tests/checkout.yaml",
+            expected_dependency_total=2,
+        )
+    )
+    dependency = TestSession(
+        id="dep-1",
+        test_name="Dependency login",
+        file_stem="dependency_login",
+        url="http://example.com",
+        is_dependency=True,
+        steps=[TestStep(id="dep-parent", instruction="Action name")],
+    )
+    store.handle(SessionStartedEvent(owner_key="checkout", session=dependency))
+    store.handle(StepStartedEvent(session_id="dep-1", step=dependency.steps[0]))
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=10, width=80), width=80)
+
+    assert "tests/checkout.yaml" in plain
+    assert "running 2 dependencies..." in plain
+
+
+def test_silent_layout_indents_substeps_more_than_parent_steps():
+    store = RunStateStore(display_mode=DisplayMode.SILENT)
+    session = TestSession(
+        id="main-1",
+        test_name="Main Test",
+        file_stem="main_test",
+        url="http://example.com",
+        steps=[
+            TestStep(
+                id="parent-1",
+                instruction="Click on X",
+                sub_steps=[TestStep(id="sub-1", instruction="FIND: Item")],
+            )
+        ],
+    )
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="main",
+            test_name="Main Test",
+            file_stem="main_test",
+            display_path="tests/main_test.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="main", session=session))
+    parent = session.steps[0]
+    store.handle(StepStartedEvent(session_id="main-1", step=parent))
+    session.steps[0].sub_steps[0].status = StepStatus.PASSED
+    store.handle(StepFinishedEvent(session_id="main-1", step=session.steps[0].sub_steps[0]))
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=10, width=80), width=80)
+
+    assert "  Click on X" in plain
+    assert "    FIND Item" in plain
+
+
+def test_finished_successful_run_collapses_to_compact_rows_only():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth",
+            test_name="Auth Flow",
+            file_stem="auth_flow",
+            display_path="tests/auth_flow.yaml",
+            expected_dependency_total=1,
+        )
+    )
+    dependency = _session("dep-1", "Dependency Login", file_stem="dependency_login", is_dependency=True)
+    auth_session = _session("auth-main", "Auth Flow", file_stem="auth_flow")
+    store.handle(SessionStartedEvent(owner_key="auth", session=dependency))
+    store.handle(SessionStartedEvent(owner_key="auth", session=auth_session))
+
+    dependency_step = TestStep(id="dep-step", instruction="VERIFY: Dependency ready", status=StepStatus.PASSED)
+    auth_step = TestStep(id="auth-step", instruction="VERIFY: User signed in", status=StepStatus.PASSED)
+    store.handle(StepFinishedEvent(session_id="dep-1", step=dependency_step))
+    dependency.steps = [dependency_step]
+    store.handle(SessionFinishedEvent(session=dependency))
+    store.handle(StepFinishedEvent(session_id="auth-main", step=auth_step))
+    auth_session.steps = [auth_step]
+    store.handle(SessionFinishedEvent(session=auth_session))
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="approval",
+            test_name="Manager Approval",
+            file_stem="dependency_manager_approval",
+            display_path="tests/dependency_manager_approval.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    approval_session = _session(
+        "approval-main",
+        "Manager Approval",
+        file_stem="dependency_manager_approval",
+    )
+    store.handle(SessionStartedEvent(owner_key="approval", session=approval_session))
+    approval_step = TestStep(
+        id="approval-step",
+        instruction="Click the 'Approve Latest Request' button",
+        expectation="'Request approved' should appear",
+        status=StepStatus.PASSED,
+    )
+    store.handle(StepFinishedEvent(session_id="approval-main", step=approval_step))
+    approval_session.steps = [approval_step]
+    store.handle(SessionFinishedEvent(session=approval_session))
+    store.handle(RunFinishedEvent())
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=16, width=100), width=100)
+
+    assert "tests/auth_flow.yaml" in plain
+    assert "tests/dependency_manager_approval.yaml" in plain
+    assert "Running 1 dependency" not in plain
+    assert "Dependency ready" not in plain
+    assert "Request approved" not in plain
+
+
+def test_finished_failed_run_also_collapses_to_compact_rows_only():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth",
+            test_name="Auth Flow",
+            file_stem="auth_flow",
+            display_path="tests/auth_flow.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    auth_session = _session("auth-main", "Auth Flow", file_stem="auth_flow")
+    store.handle(SessionStartedEvent(owner_key="auth", session=auth_session))
+    auth_step = TestStep(id="auth-step", instruction="VERIFY: User signed in", status=StepStatus.PASSED)
+    store.handle(StepFinishedEvent(session_id="auth-main", step=auth_step))
+    auth_session.steps = [auth_step]
+    store.handle(SessionFinishedEvent(session=auth_session))
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth-fail",
+            test_name="Auth Flow Fail",
+            file_stem="auth_flow_fail",
+            display_path="tests/auth_flow_fail.yaml",
+            expected_dependency_total=2,
+        )
+    )
+    dependency = _session("dep-1", "Dependency Login", file_stem="dependency_login", is_dependency=True)
+    failed_session = _session(
+        "fail-main",
+        "Auth Flow Fail",
+        file_stem="auth_flow_fail",
+        viewport_name="desktop",
+        viewport_slug="desktop",
+    )
+    store.handle(SessionStartedEvent(owner_key="auth-fail", session=dependency))
+    store.handle(SessionStartedEvent(owner_key="auth-fail", session=failed_session))
+
+    dependency_step = TestStep(id="dep-step", instruction="VERIFY: Dependency ready", status=StepStatus.PASSED)
+    failed_step = TestStep(
+        id="failed-step",
+        instruction="Click the Submit button",
+        expectation="The 'Sign in' modal should close",
+        status=StepStatus.FAILED,
+    )
+    store.handle(StepFinishedEvent(session_id="dep-1", step=dependency_step))
+    dependency.steps = [dependency_step]
+    store.handle(SessionFinishedEvent(session=dependency))
+    store.handle(StepFinishedEvent(session_id="fail-main", step=failed_step))
+    failed_session.steps = [failed_step]
+    store.handle(SessionFinishedEvent(session=failed_session))
+    store.handle(RunFinishedEvent())
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=16, width=100), width=100)
+
+    assert "tests/auth_flow.yaml" in plain
+    assert "tests/auth_flow_fail.yaml" in plain
+    assert "[desktop] FAIL" in plain
+    assert "Running 2 dependencies" not in plain
+    assert "Dependency ready" not in plain
+    assert "Click the Submit button" not in plain
 
 
 def test_dependency_section_shows_active_dependency_actions_and_dotted_substeps():
@@ -629,6 +830,104 @@ def test_main_section_hides_child_rows_from_inactive_viewport_for_active_parent(
     assert "VERIFY Success state should occur" not in plain
 
 
+def test_main_section_hides_skipped_future_rows_after_failure():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+    session = TestSession(
+        id="main-1",
+        test_name="Auth Flow",
+        file_stem="auth_flow_fail",
+        url="http://example.com",
+        viewport_name="Desktop",
+        viewport_slug="desktop",
+        steps=[
+            TestStep(
+                id="parent-1",
+                instruction="Type 'wrong_user' into the username field",
+                sub_steps=[
+                    TestStep(id="p1-sub-1", instruction="FIND: username field"),
+                    TestStep(id="p1-sub-2", instruction="DO: type 'wrong_user'"),
+                ],
+            ),
+            TestStep(
+                id="parent-2",
+                instruction="Click the Submit button",
+                expectation="The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur",
+                sub_steps=[
+                    TestStep(id="p2-sub-1", instruction="FIND: Submit button"),
+                    TestStep(id="p2-sub-2", instruction="DO: click"),
+                    TestStep(id="p2-sub-3", instruction="VERIFY: 'Sign in' modal should close"),
+                    TestStep(
+                        id="p2-sub-4",
+                        instruction="VERIFY: 'Login Successful' alert or state change should occur",
+                    ),
+                ],
+            ),
+            TestStep(
+                id="parent-3",
+                instruction="Open the dashboard",
+                sub_steps=[
+                    TestStep(id="p3-sub-1", instruction="FIND: dashboard link"),
+                    TestStep(id="p3-sub-2", instruction="DO: click"),
+                ],
+            ),
+        ],
+    )
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth-fail",
+            test_name="Auth Flow",
+            file_stem="auth_flow_fail",
+            display_path="tests/auth_flow_fail.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="auth-fail", session=session))
+
+    first_parent = session.steps[0]
+    second_parent = session.steps[1]
+    future_parent = session.steps[2]
+
+    store.handle(StepStartedEvent(session_id="main-1", step=first_parent))
+    first_parent.sub_steps[0].status = StepStatus.PASSED
+    first_parent.sub_steps[1].status = StepStatus.PASSED
+    store.handle(StepFinishedEvent(session_id="main-1", step=first_parent.sub_steps[0]))
+    store.handle(StepFinishedEvent(session_id="main-1", step=first_parent.sub_steps[1]))
+    first_parent.status = StepStatus.PASSED
+    store.handle(StepFinishedEvent(session_id="main-1", step=first_parent))
+
+    store.handle(StepStartedEvent(session_id="main-1", step=second_parent))
+    second_parent.sub_steps[0].status = StepStatus.PASSED
+    second_parent.sub_steps[1].status = StepStatus.PASSED
+    second_parent.sub_steps[2].status = StepStatus.FAILED
+    second_parent.sub_steps[2].failure_reason = "Negation failure"
+    second_parent.sub_steps[3].status = StepStatus.SKIPPED
+    store.handle(StepFinishedEvent(session_id="main-1", step=second_parent.sub_steps[0]))
+    store.handle(StepFinishedEvent(session_id="main-1", step=second_parent.sub_steps[1]))
+    store.handle(StepFinishedEvent(session_id="main-1", step=second_parent.sub_steps[2]))
+    store.handle(StepFinishedEvent(session_id="main-1", step=second_parent.sub_steps[3]))
+    second_parent.status = StepStatus.FAILED
+    second_parent.failure_reason = "Negation failure"
+    store.handle(StepFinishedEvent(session_id="main-1", step=second_parent))
+
+    future_parent.status = StepStatus.SKIPPED
+    future_parent.sub_steps[0].status = StepStatus.SKIPPED
+    future_parent.sub_steps[1].status = StepStatus.SKIPPED
+    store.handle(StepFinishedEvent(session_id="main-1", step=future_parent))
+    store.handle(StepFinishedEvent(session_id="main-1", step=future_parent.sub_steps[0]))
+    store.handle(StepFinishedEvent(session_id="main-1", step=future_parent.sub_steps[1]))
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=20, width=120), width=120)
+
+    assert "✔ Type 'wrong_user' into the username field" in plain
+    assert "✘ Click the Submit button" in plain
+    assert "✔ FIND Submit button" in plain
+    assert "✔ DO click" in plain
+    assert "✘ VERIFY 'Sign in' modal should close" in plain
+    assert "VERIFY 'Login Successful' alert or state change should occur" not in plain
+    assert "Open the dashboard" not in plain
+    assert "dashboard link" not in plain
+
+
 def test_finished_previous_run_stays_green_without_remaining_steps_while_newer_run_is_active():
     store = RunStateStore(display_mode=DisplayMode.VERBOSE)
     first_session = _session("first-main", "Auth Flow", file_stem="auth_flow")
@@ -669,7 +968,7 @@ def test_finished_previous_run_stays_green_without_remaining_steps_while_newer_r
 
     assert previous_run.summary_status == RunStatus.PASSED
     assert previous_run.remaining_steps == 0
-    assert compact_row.style == "bold green"
+    assert compact_row.style == f"bold {REPORT_GREEN}"
     assert "steps remaining" not in compact_row.plain
 
 
@@ -694,7 +993,7 @@ def test_failed_previous_run_stays_red_in_compact_summary():
 
     compact_row = build_compact_run_row(store.snapshot().top_level_runs[0])
 
-    assert compact_row.style == "bold red"
+    assert compact_row.style == f"bold {REPORT_RED}"
 
 
 def test_failed_row_includes_viewport_tag_when_another_lane_continues():
@@ -971,7 +1270,7 @@ def test_terminal_reporter_print_failures_verbose_shows_parent_subset_reason_and
     assert "[bold]Failed on:[/] VERIFY 'Sign In' modal should close" in printed
     assert "[bold]Reason:[/] Verification failed for query:" in printed
     assert "tests/auth_flow.yaml [Mobile]" in printed
-    assert "Login Successful" not in printed
+    assert "[bold]Failed on:[/] VERIFY 'Login Successful' alert or state change should occur" not in printed
     assert "====" not in printed
 
 
@@ -1014,3 +1313,62 @@ def test_terminal_reporter_print_failures_silent_is_compact_and_hides_reason():
     assert "tests/login.yaml [Mobile]" in printed
     assert "Reason:" not in printed
     assert "Failed on:" not in printed
+
+
+def test_terminal_reporter_print_failures_includes_reason_for_interactive_active_failure():
+    console = MagicMock()
+    reporter = TerminalReporter(console=console, display_mode=DisplayMode.VERBOSE)
+
+    parent = TestStep(
+        id="parent-1",
+        instruction="Click the Submit button",
+        expectation="The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur",
+    )
+    failed_substep = TestStep(
+        id="sub-3",
+        instruction="VERIFY: 'Sign in' modal should close",
+        status=StepStatus.FAILED,
+        failure_reason="Negation failure: Element remains in the view",
+    )
+    skipped_substep = TestStep(
+        id="sub-4",
+        instruction="VERIFY: 'Login Successful' alert or state change should occur",
+        status=StepStatus.SKIPPED,
+    )
+    parent.sub_steps = [failed_substep, skipped_substep]
+    parent.status = StepStatus.FAILED
+    parent.failure_reason = failed_substep.failure_reason
+
+    failed_session = TestSession(
+        id="main-1",
+        test_name="Auth Flow Fail",
+        file_stem="auth_flow_fail",
+        url="http://example.com",
+        viewport_name="desktop",
+        viewport_slug="desktop",
+        steps=[parent],
+    )
+
+    reporter.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth-fail",
+            test_name="Auth Flow Fail",
+            file_stem="auth_flow_fail",
+            display_path="tests/auth_flow_fail.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    reporter.handle(SessionStartedEvent(owner_key="auth-fail", session=failed_session))
+    reporter.handle(StepStartedEvent(session_id="main-1", step=parent))
+    reporter.handle(StepFinishedEvent(session_id="main-1", step=failed_substep))
+    reporter.handle(StepFinishedEvent(session_id="main-1", step=skipped_substep))
+    reporter.handle(StepFinishedEvent(session_id="main-1", step=parent))
+
+    reporter.print_failures()
+
+    printed = "\n".join(call.args[0] for call in console.print.call_args_list if call.args)
+    assert "tests/auth_flow_fail.yaml [desktop]" in printed
+    assert "[bold]Step:[/] Click the Submit button" in printed
+    assert "[bold]Failed on:[/] VERIFY 'Sign in' modal should close" in printed
+    assert "[bold]Reason:[/] Negation failure: Element remains in the view" in printed
+    assert "[bold]Failed on:[/] VERIFY 'Login Successful' alert or state change should occur" not in printed

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking: CLI reporting system overhauled** - Terminal reporter now uses an event-driven architecture with structured reporting events (`TopLevelTestStartedEvent`, `SessionStartedEvent`, `StepStartedEvent`, `StepFinishedEvent`, `SessionBlockedEvent`, `SessionFinishedEvent`, `RunFinishedEvent`). Custom reporters must implement the new `handle(event)` interface. The reporting store, layout composition, and terminal rendering have been completely redesigned for better multi-viewport support and step-level granularity.
 - CLI terminal output now displays shared test flows with moving viewport cursors, improved dependency section rendering with progress bars, and better visual hierarchy during test execution.
 - Fixed a bug where Type actions were not cleared before typing on MacOS.
+- Adapted interactive cli mode with new reporting flow.
 
 ## [0.2.0] - 2026-04-24
 

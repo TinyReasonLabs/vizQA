@@ -8,14 +8,21 @@ from vizQA.app.memory import StepStatus
 from vizQA.rendering.models import RunStatus
 
 ACCENT_BLUE = "#00d7ff"
+REPORT_GREEN = "#38d9a9"
+REPORT_RED = "#ff5e74"
 PROGRESS_STYLE = f"bold {ACCENT_BLUE}"
-VIEWPORT_CURSOR_STYLE = f"bold {ACCENT_BLUE}"
+VIEWPORT_CURSOR_STYLE = "bold white"
 PREREQUISITE_CURSOR_STYLE = "italic white"
+VERIFY_STYLE = f"bold {REPORT_GREEN}"
+FAILURE_STYLE = REPORT_RED
+SUCCESS_STYLE = REPORT_GREEN
+FAILURE_BOLD_STYLE = f"bold {REPORT_RED}"
+SUCCESS_BOLD_STYLE = f"bold {REPORT_GREEN}"
 
 STEP_STATUS_STYLES = {
     StepStatus.RUNNING: ("›", "white"),
-    StepStatus.PASSED: ("✔", "green"),
-    StepStatus.FAILED: ("✘", "red"),
+    StepStatus.PASSED: ("✔", SUCCESS_STYLE),
+    StepStatus.FAILED: ("✘", FAILURE_STYLE),
     StepStatus.SKIPPED: ("○", "dim"),
     StepStatus.PENDING: ("○", "white"),
 }
@@ -23,10 +30,10 @@ STEP_STATUS_STYLES = {
 RUN_STATUS_STYLES = {
     RunStatus.PENDING: ("○", "white"),
     RunStatus.RUNNING: ("›", "white"),
-    RunStatus.PASSED: ("✔", "green"),
-    RunStatus.FAILED: ("✘", "red"),
+    RunStatus.PASSED: ("✔", SUCCESS_STYLE),
+    RunStatus.FAILED: ("✘", FAILURE_STYLE),
     RunStatus.SKIPPED: ("○", "dim"),
-    RunStatus.BLOCKED: ("✘", "red"),
+    RunStatus.BLOCKED: ("✘", FAILURE_STYLE),
 }
 
 
@@ -38,7 +45,7 @@ def format_step_prefix(instr: str) -> Text:
     if instr.startswith("DO:"):
         return Text.assemble(("DO ", "bold magenta"), (instr[3:].strip(), "white"))
     if instr.startswith("VERIFY:"):
-        return Text.assemble(("VERIFY ", "bold green"), (instr[7:].strip(), "white"))
+        return Text.assemble(("VERIFY ", VERIFY_STYLE), (instr[7:].strip(), "white"))
     return Text(instr, "white")
 
 

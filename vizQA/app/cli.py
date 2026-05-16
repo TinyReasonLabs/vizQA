@@ -35,6 +35,7 @@ from vizQA.rendering import (
     TerminalReporter,
     TopLevelTestStartedEvent,
 )
+from vizQA.rendering.theme import FAILURE_BOLD_STYLE, FAILURE_STYLE, SUCCESS_STYLE
 from vizQA.utils import BrowserStateCache, load_yaml_with_lines
 
 console = Console(highlight=False)
@@ -346,7 +347,7 @@ def _resolve_dependencies(test_path: Path) -> List[Path]:
         resolver = DependencyResolver(test_path.parent)
         dependency_paths = resolver.resolve(test_path)
     except TestDefinitionError as err:
-        console.print(f"[red]Error resolving dependencies: {err.user_message}[/]")
+        console.print(f"[{FAILURE_STYLE}]Error resolving dependencies: {err.user_message}[/]")
         if err.internal_detail:
             console.print(f"[dim]{err.internal_detail}[/]")
         raise
@@ -505,7 +506,7 @@ async def _run_test_dependencies(
 
         if not result:
             all_passed = False
-            console.print(f"[red]Required test '{dep_result['name']}' failed. Stopping test execution.[/]")
+            console.print(f"[{FAILURE_STYLE}]Required test '{dep_result['name']}' failed. Stopping test execution.[/]")
             break  # Stop on first dependency failure
 
     return all_passed, dependency_results, inherited_artifacts
@@ -597,7 +598,6 @@ async def run_single_test(
             _emit_report_event(reporter, SessionFinishedEvent(session=session))
 
             if interactive:
-                reporter.finalize()
                 raise click.Abort()
 
             return False
@@ -676,7 +676,6 @@ async def run_single_test(
             console.print(f"[yellow]Warning: Failed to capture browser state: {exc}[/]")
 
     if interactive and not result:
-        reporter.finalize()
         raise click.Abort()
 
     _emit_report_event(reporter, SessionFinishedEvent(session=session))
@@ -732,7 +731,7 @@ def cli(ctx):
 @cli.command()
 @click.argument("paths", type=click.Path(exists=True), nargs=-1)
 @click.option("--headless/--no-headless", default=True, help="Run browser in headless mode (default: True)")
-@click.option("--silent", is_flag=True, default=False, help="Use the compact terminal reporter.")
+@click.option("-s", "--silent", is_flag=True, default=False, help="Use the compact terminal reporter.")
 @click.option("--debug-log", is_flag=True, default=False, help="Write richer DEBUG diagnostics to .vizQA logs.")
 @click.option(
     "-x",
@@ -874,7 +873,7 @@ def run(
                 if _is_playwright_error(err):
                     logger.log_warning("lane", f"Playwright lane failure on {viewport_spec.name}; closing gracefully.")
                 else:
-                    console.print(f"\n[bold red]Error ({viewport_spec.name}):[/] {err.user_message}")
+                    console.print(f"\n[{FAILURE_BOLD_STYLE}]Error ({viewport_spec.name}):[/] {err.user_message}")
                     if debug_log and err.internal_detail:
                         console.print(f"[dim]Details: {err.internal_detail}[/]")
             except Exception as err:  # pylint: disable=broad-exception-caught
@@ -884,7 +883,8 @@ def run(
                     logger.log_warning("lane", f"Playwright lane failure on {viewport_spec.name}; closing gracefully.")
                 else:
                     console.print(
-                        f"[red]An unexpected error occurred during execution ({viewport_spec.name}): {err}[/]"
+                        f"[{FAILURE_STYLE}]An unexpected error occurred during execution ({viewport_spec.name}): \
+                        {err}[/]"
                     )
                     if debug_log:
                         traceback.print_exc()
@@ -894,12 +894,20 @@ def run(
             return lane_passed
 
         try:
+            aborted_interactively = False
             try:
                 results = await run_all_lanes()
+            except click.Abort:
+                aborted_interactively = interactive
+                raise
             finally:
-                reporter.handle(RunFinishedEvent())
+                if not aborted_interactively:
+                    reporter.handle(RunFinishedEvent())
                 reporter.finalize()
-
+        except click.Abort:
+            reporter.print_failures()
+            raise
+        try:
             reporter.print_failures()
 
             # Summary line
@@ -910,9 +918,9 @@ def run(
 
             summary = Text.assemble(
                 ("\nResults: ", "bold"),
-                (f"{passed} passed", "green") if passed else "",
+                (f"{passed} passed", SUCCESS_STYLE) if passed else "",
                 (", " if passed and failed else ""),
-                (f"{failed} failed", "red") if failed else "",
+                (f"{failed} failed", FAILURE_STYLE) if failed else "",
                 (f" in {total} test{'s' if total != 1 else ''}", "dim"),
             )
             console.print(summary)
