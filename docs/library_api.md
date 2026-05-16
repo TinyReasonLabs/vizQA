@@ -92,7 +92,7 @@ Arguments:
 
 - `page`: an existing Playwright `Page`
 - `perception_backend`: optional override for the perception service URL
-- `verbosity`: optional runtime verbosity for matching and failure details
+- `verbosity`: optional runtime verbosity for matching and failure details. This is library-only and is independent from the CLI terminal reporter modes such as `--silent` or `--debug-log`.
 - `debug_dir`: optional directory for persistent screenshots and debug artifacts
 
 If `debug_dir` is omitted, library calls do not write persistent artifacts under `.vizQA/`. Temporary screenshots may still be created internally to talk to the perception backend, but they are not kept as user-facing artifacts.

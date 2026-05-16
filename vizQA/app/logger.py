@@ -13,7 +13,6 @@ Usage::
     logger.log_step(step_id, "FIND", StepStatus.PASSED)
 """
 
-import json
 import logging
 import os
 from datetime import datetime
@@ -22,6 +21,8 @@ from typing import Any, Dict, Optional
 _LOG_DIR = ".vizQA"
 _INSTANCES: Dict[str, "SessionLogger"] = {}
 _RUN_TIMESTAMP: Optional[str] = None
+_PERCEPTION_CANDIDATE_LIMIT = 5
+_DEBUG_ENABLED = True
 
 
 class SessionLogger:
@@ -45,11 +46,11 @@ class SessionLogger:
 
         logger_name = f"vizqa.session.{run_timestamp}{suffix}"
         self._logger = logging.getLogger(logger_name)
-        self._logger.setLevel(logging.DEBUG)
+        self._logger.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         self._logger.propagate = False  # don't bubble up to the root logger
 
         handler = logging.FileHandler(log_path, encoding="utf-8")
-        handler.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         fmt = logging.Formatter(
             fmt="%(asctime)s  %(levelname)-8s  %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S",
@@ -61,16 +62,39 @@ class SessionLogger:
     # Structured log helpers
     # ------------------------------------------------------------------
 
-    def log_perception(self, _step_id: str, _query: str, response: Dict[str, Any]) -> None:
-        """Logs a full perception API response at DEBUG level.
+    def log_perception(
+        self,
+        step_id: str,
+        query: str,
+        response: Dict[str, Any],
+        selected: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Logs compact, one-line perception diagnostics at DEBUG level."""
+        source = "top_matches" if response.get("top_matches") else "elements"
+        candidates = response.get(source, [])
+        ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
 
-        :param response: The response.
-        """
-        try:
-            _payload = json.dumps(response, ensure_ascii=False)
-        except (TypeError, ValueError):
-            _payload = str(response)
-        # self._logger.debug("[%s] PERCEPTION query=%r  response=%s", step_id, query, payload)
+        if ordered:
+            for index, element in enumerate(ordered, start=1):
+                self._logger.debug(
+                    "[%s] PERCEPTION query=%r candidate=%s",
+                    step_id,
+                    query,
+                    self._format_perception_candidate(element, index, source),
+                )
+        else:
+            self._logger.debug("[%s] PERCEPTION query=%r candidate=none", step_id, query)
+
+        if selected is None:
+            self._logger.debug("[%s] PERCEPTION selected=none", step_id)
+            return
+
+        selected_rank = next((index + 1 for index, element in enumerate(candidates) if element is selected), 1)
+        self._logger.debug(
+            "[%s] PERCEPTION selected=%s",
+            step_id,
+            self._format_perception_candidate(selected, selected_rank, source),
+        )
 
     def log_step(
         self,
@@ -107,6 +131,50 @@ class SessionLogger:
         """General-purpose DEBUG entry."""
         self._logger.debug("[%s] %s", step_id, message)
 
+    def _format_perception_candidate(self, element: Dict[str, Any], rank: int, source: str) -> str:
+        """Formats one candidate into a compact, single-line summary."""
+        text = element.get("text") or element.get("placeholder") or element.get("label") or element.get("name") or "-"
+        position = element.get("spatial", {}).get("position") or element.get("position") or "-"
+        salience = self._format_optional_float(element.get("salience"))
+        similarity = self._format_optional_float(element.get("similarity"))
+        geometry = self._format_geometry(element)
+        return f"#{rank}[src={source} text={text!r} pos={position} " f"sal={salience} sim={similarity} geom={geometry}]"
+
+    def _format_geometry(self, element: Dict[str, Any]) -> str:
+        """Returns a compact geometry summary from bounds or normalized location."""
+        bounds = element.get("bounds")
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            joined = ",".join(self._format_coord(value) for value in bounds)
+            return f"b({joined})"
+
+        location = element.get("location")
+        if isinstance(location, (list, tuple)) and len(location) == 4:
+            joined = ",".join(f"{float(value):.2f}" for value in location)
+            return f"loc({joined})"
+
+        return "-"
+
+    @staticmethod
+    def _format_optional_float(value: Any) -> str:
+        """Formats optional numeric values with short placeholders when missing."""
+        if value is None:
+            return "-"
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "-"
+
+    @staticmethod
+    def _format_coord(value: Any) -> str:
+        """Formats coordinates without trailing .0 for integer-like values."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.2f}"
+
 
 def get_logger(log_suffix: Optional[str] = None) -> SessionLogger:
     """
@@ -124,12 +192,20 @@ def get_logger(log_suffix: Optional[str] = None) -> SessionLogger:
     return _INSTANCES[key]
 
 
+def configure_logging(*, debug_enabled: bool) -> None:
+    """Configure whether new run loggers should emit DEBUG entries."""
+
+    global _DEBUG_ENABLED  # pylint: disable=global-statement
+    _DEBUG_ENABLED = debug_enabled
+
+
 def reset_logger() -> None:
     """Resets the singleton (mainly useful in tests)."""
-    global _RUN_TIMESTAMP  # pylint: disable=global-statement
+    global _RUN_TIMESTAMP, _DEBUG_ENABLED  # pylint: disable=global-statement
     for logger in _INSTANCES.values():
         for handler in list(logger._logger.handlers):  # pylint: disable=protected-access
             handler.close()
             logger._logger.removeHandler(handler)  # pylint: disable=protected-access
     _INSTANCES.clear()
     _RUN_TIMESTAMP = None
+    _DEBUG_ENABLED = True

@@ -132,9 +132,12 @@ For the full library guide, see [docs/library_api.md](docs/library_api.md).
 | --- | --- | --- |
 | `paths` | One or more paths to test files or directories. | Required for a run (omit to print help). |
 | `--headless / --no-headless` | Run browser in headless mode. | `True` |
-| `-v, --verbose` | Increase output verbosity (-v steps, -vv timing/detail). | `0` |
+| `--silent` | Use the compact terminal reporter instead of the default rich live view. | `False` |
+| `--debug-log` | Keep the same terminal UI, but write richer DEBUG diagnostics to `.vizQA/run_*.log`. | `False` |
 | `-x, --interactive` | Run in interactive mode; stop at the first failing test. | `False` |
 | `--viewport` | Repeatable built-in viewport name (`mobile`, `tablet`, `desktop`, `widescreen`), custom configured profile name, or raw `WIDTHxHEIGHT` size such as `390x844`. Specify it multiple times to run several sizes in parallel. | Configured default viewports, otherwise `desktop` |
+
+The default CLI output is now the verbose terminal reporter. Use `--silent` when you want a compact summary-oriented view. `--debug-log` only affects the `.vizQA` log files; it does not change the terminal layout.
 
 If you do not define your own viewport profiles, vizQA includes these built-in sizes:
 - `mobile`: `390x844`
