@@ -13,6 +13,7 @@ class DisplayMode(str, Enum):
     SILENT = "silent"
 
 
+# pylint: disable=R0801
 class RunStatus(str, Enum):
     """High-level reporting status for sessions and rows."""
 
