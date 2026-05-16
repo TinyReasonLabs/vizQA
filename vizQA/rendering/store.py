@@ -308,7 +308,7 @@ class RunStateStore:  # pylint: disable=too-many-instance-attributes
                 session.failure_reason = step.failure_reason or row.failure_reason or row.text
         if not step.sub_steps and step.status not in (StepStatus.RUNNING, StepStatus.PENDING):
             session.completed_atomic_steps += 1
-        if step.sub_steps and step.status not in (StepStatus.RUNNING, StepStatus.PENDING):
+        if step.sub_steps and step.status not in (StepStatus.RUNNING, StepStatus.PENDING, StepStatus.FAILED):
             child_ids = self._step_children[session_id].get(step.id, [])
             child_row_keys = {self._step_row_keys[session_id].get(child_id) for child_id in child_ids}
             session.step_rows = [item for item in session.step_rows if item.key not in child_row_keys]

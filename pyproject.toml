@@ -1,7 +1,7 @@
 
 [project]
 name = "vizQA"
-version = "0.2.0"
+version = "0.3.0"
 description = "Vision-driven UI Testing Framework"
 authors = [
     {name = "Spospider", email = "64846609+Spospider@users.noreply.github.com"}
