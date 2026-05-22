@@ -48,11 +48,7 @@ class TerminalReporter:
         snapshot = self.store.snapshot()
         failed_entries: list[_FailureEntry] = []
         for run in snapshot.top_level_runs:
-            for session in [*run.dependencies, *run.sessions]:
-                has_failure_details = bool(session.blocked_reason or session.failure_step_text)
-                if session.status not in (RunStatus.FAILED, RunStatus.BLOCKED) and not has_failure_details:
-                    continue
-                failed_entries.append(self._build_failure_entry(run.display_path, session))
+            failed_entries.extend(self._build_run_failure_entries(run))
 
         if not failed_entries:
             return
@@ -70,11 +66,43 @@ class TerminalReporter:
             if entry.reason:
                 self.console.print(f"  [bold]Reason:[/] {entry.reason}")
 
-    def _build_failure_entry(self, display_path: str, session) -> "_FailureEntry":
+    def _build_run_failure_entries(self, run) -> list["_FailureEntry"]:
+        dependency_entries: dict[tuple[str, str | None, str | None, str], _FailureEntry] = {}
+        ordered_entries: list[_FailureEntry] = []
+
+        for session in run.dependencies:
+            if not self._session_has_failure_details(session):
+                continue
+            entry = self._build_failure_entry(run.display_path, session, include_viewport=False)
+            key = (entry.label, entry.step, entry.failed_on, entry.reason)
+            if key not in dependency_entries:
+                dependency_entries[key] = entry
+                ordered_entries.append(entry)
+            dependency_entries[key].viewport_names.update(self._session_viewport_names(session))
+
+        seen_top_level_entries: set[tuple[str, str | None, str | None, str]] = set()
+        for session in run.sessions:
+            if self._should_skip_redundant_prerequisite_block(run, session):
+                continue
+            if not self._session_has_failure_details(session):
+                continue
+            entry = self._build_failure_entry(run.display_path, session)
+            key = (entry.label, entry.step, entry.failed_on, entry.reason)
+            if key in seen_top_level_entries:
+                continue
+            seen_top_level_entries.add(key)
+            ordered_entries.append(entry)
+
+        for entry in ordered_entries:
+            entry.label = self._format_failure_label(entry)
+
+        return ordered_entries
+
+    def _build_failure_entry(self, display_path: str, session, *, include_viewport: bool = True) -> "_FailureEntry":
         label = session.test_name if session.is_dependency else display_path
         if session.is_dependency:
             label = f"Pre-requisite failure in {session.file_stem or label}"
-        if session.viewport_name:
+        if include_viewport and session.viewport_name:
             label = f"{label} [{session.viewport_name}]"
 
         if session.blocked_reason:
@@ -103,6 +131,41 @@ class TerminalReporter:
         failed_on = failed_row.text if parent_row and failed_row.text != parent_row.text else None
         reason = failed_row.failure_reason or (parent_row.failure_reason if parent_row else None) or failed_row.text
         return _FailureEntry(label=label, step=step, failed_on=failed_on, reason=reason)
+
+    @staticmethod
+    def _session_has_failure_details(session) -> bool:
+        has_failure_details = bool(session.blocked_reason or session.failure_step_text)
+        return session.status in (RunStatus.FAILED, RunStatus.BLOCKED) or has_failure_details
+
+    @staticmethod
+    def _session_viewport_names(session) -> set[str]:
+        return {session.viewport_name} if session.viewport_name else set()
+
+    @staticmethod
+    def _format_failure_label(entry: "_FailureEntry") -> str:
+        if not entry.viewport_names:
+            return entry.label
+        viewport_list = ", ".join(sorted(entry.viewport_names))
+        return f"{entry.label} [{viewport_list}]"
+
+    @staticmethod
+    def _should_skip_redundant_prerequisite_block(run, session) -> bool:
+        if session.is_dependency or not session.blocked_reason:
+            return False
+        prefix = "Required pre-requisite failed: "
+        if not session.blocked_reason.startswith(prefix):
+            return False
+
+        failed_dependency_name = session.blocked_reason[len(prefix) :]
+        failed_results = {
+            result.get("name")
+            for result in session.dependency_results
+            if str(result.get("status", "")).lower() in {"failed", "blocked"}
+        }
+        if failed_dependency_name not in failed_results:
+            return False
+
+        return any(dependency.status in (RunStatus.FAILED, RunStatus.BLOCKED) for dependency in run.dependencies)
 
     def _render(self, *, force_fallback: bool = False) -> None:
         if not isinstance(self.console, Console):
@@ -140,3 +203,8 @@ class _FailureEntry:
     step: str | None
     failed_on: str | None
     reason: str
+    viewport_names: set[str] = None
+
+    def __post_init__(self) -> None:
+        if self.viewport_names is None:
+            self.viewport_names = set()
