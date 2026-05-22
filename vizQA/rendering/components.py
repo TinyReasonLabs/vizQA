@@ -73,7 +73,13 @@ def _failure_badges(run: TopLevelRunView, *, include_pass: bool = True) -> list[
             if session.status == RunStatus.FAILED
             else f"[{label}] BLOCKED" if session.status == RunStatus.BLOCKED else "PASS"
         )
-        if badge not in seen:
+        if "FAIL" in badge and "PASS" in seen:
+            # replace pass with the specific failure for viewport
+            badges = [b for b in badges if b != "PASS"]
+            seen.add(badge)
+            badges.append(badge)
+        # Dont add pass if theres already a viewport with failure
+        elif badge not in seen and not (badge == "PASS" and any(b for b in badges if "FAIL" in b)):
             seen.add(badge)
             badges.append(badge)
     return badges

@@ -44,6 +44,40 @@ def test_perception_service_error_wrapping():
         assert "Connection refused" in excinfo.value.internal_detail
 
 
+def test_perceive_does_not_reuse_prior_session_id_for_fresh_screenshot():
+    """Fresh screenshots should not be blended with a prior perception session."""
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+    client.session_id = "stale-session"
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "new-session", "elements": []}
+
+    captured = {}
+
+    async def fake_post(_self, url, files=None, data=None, **_kwargs):
+        captured["url"] = url
+        captured["data"] = dict(data or {})
+        assert files is not None
+        return FakeResponse()
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        with patch("builtins.open", MagicMock()):
+
+            async def run_perc():
+                return await client.perceive("fresh.jpg", "password field")
+
+            result = __import__("asyncio").run(run_perc())
+
+    assert captured["url"] == "http://example.test/v1/perceive"
+    assert captured["data"] == {"similarity_threshold": 0.5, "query": "password field"}
+    assert client.session_id == "new-session"
+    assert result["session_id"] == "new-session"
+
+
 def test_planner_line_reporting():
     """Verify that StepPlanner reports line numbers from YAML metadata."""
     planner = StepPlanner(logger=MagicMock())  # Use a mock logger to suppress output

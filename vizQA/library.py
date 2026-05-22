@@ -11,6 +11,7 @@ from playwright.async_api import Page
 
 from vizQA.app.client import PerceptionClient
 from vizQA.app.core import Automator
+from vizQA.app.logger import NullLogger, get_logger
 from vizQA.app.memory import TestSession, TestStep
 from vizQA.planning import StepPlanner
 
@@ -66,11 +67,13 @@ class VizQASession:
         """
         self.page = page
         self.debug_dir = debug_dir
-        self.client = PerceptionClient(base_url=perception_backend)
+        logger = get_logger("library") if debug_dir else NullLogger()
+        self.client = PerceptionClient(base_url=perception_backend, logger=logger)
         self._automator = Automator(
             perception_client=self.client,
             verbosity=verbosity,
             page=page,
+            logger=logger,
             artifact_dir=debug_dir,
         )
         self._planner = StepPlanner(
