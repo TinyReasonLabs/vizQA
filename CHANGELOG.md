@@ -5,6 +5,13 @@ All notable changes to **vizQA** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-05-22
+
+### Changed
+
+- Shared pre-requisites are now reused once per viewport lane within a single `vizqa run` instead of being rerun for every top-level test that depends on them. Added `--no-cache` to explicitly force fresh pre-requisite reruns when needed.
+- Cleaner failure messages for pre-requisite failures, and url connection issues.
+
 ## [0.3.0] - 2026-05-16
 
 ### Changed

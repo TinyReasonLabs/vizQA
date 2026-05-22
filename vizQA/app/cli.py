@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """
 Command-line interface for the UI testing framework.
 """
@@ -40,6 +41,7 @@ from vizQA.utils import BrowserStateCache, load_yaml_with_lines
 
 console = Console(highlight=False)
 _ARTIFACT_DIR = Path(".vizQA")
+DependencyExecutionCache = Dict[str, Dict[str, Any]]
 
 
 def _is_playwright_error(err: BaseException) -> bool:
@@ -367,6 +369,12 @@ def _collect_involved_test_stems(test_files: List[Path]) -> Set[str]:
     return stems
 
 
+def _dependency_cache_key(test_path: Path) -> str:
+    """Return a stable per-lane cache key for a dependency test file."""
+
+    return str(test_path.resolve())
+
+
 # pylint: disable=too-many-branches
 def _clean_run_artifacts(test_stems: Set[str], viewport_slugs: Optional[Set[str]] = None) -> Dict[str, int]:
     """
@@ -417,7 +425,59 @@ def _clean_run_artifacts(test_stems: Set[str], viewport_slugs: Optional[Set[str]
     return deleted
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments
+def _retrieve_cached_dependency_state(
+    cached: DependencyExecutionCache, viewport: ViewportSpec, reporter: Any, owner_key: str, dep_path: Path
+) -> dict:
+    """
+    Emit report events to reflect a cached dependency execution, returning a dict of dependency result info.
+
+    :param cached: Cached dependency execution data
+    :param viewport: ViewportSpec for this dependency run, if applicable
+    :param reporter: Terminal reporter instance
+    :param owner_key: Stable top-level grouping key for dependency and viewport lanes
+    :param dep_path: Path to the dependency test file
+    :return: Dict containing dependency result information for reporting
+    """
+    reused_steps = []
+    dep_test_data = _load_test_data(dep_path)
+    dep_name = dep_test_data.get("name", dep_path.stem)
+
+    if not cached["passed"]:
+        reused_steps = [
+            TestStep(
+                id=str(uuid.uuid4())[:8],
+                instruction="Pre-requisite previously failed earlier in this run",
+                status=StepStatus.FAILED,
+            )
+        ]
+
+    reused_session = TestSession(
+        id=str(uuid.uuid4())[:8],
+        test_name=dep_name,
+        file_stem=dep_path.stem,
+        url=dep_test_data.get("url", ""),
+        steps=reused_steps,
+        artifacts=cached["artifacts"],
+        is_dependency=True,
+        viewport_name=viewport.name if viewport else None,
+        viewport_slug=viewport.slug if viewport else None,
+        viewport_width=viewport.width if viewport else None,
+        viewport_height=viewport.height if viewport else None,
+    )
+    _register_reporter_session(reporter, reused_session)
+    _emit_report_event(reporter, SessionStartedEvent(owner_key=owner_key, session=reused_session))
+    _emit_report_event(reporter, SessionFinishedEvent(session=reused_session))
+
+    dep_result = {
+        "name": dep_name,
+        "status": "passed" if cached["passed"] else "failed",
+        "session_id": reused_session.id,
+        "file_stem": dep_path.stem,
+    }
+    return dep_result
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 async def _run_single_dependency(
     dep_path: Path,
     automator: Automator,
@@ -426,6 +486,7 @@ async def _run_single_dependency(
     on_step_update: Optional[Any],
     interactive: bool,
     viewport: Optional[ViewportSpec] = None,
+    dependency_cache: Optional[DependencyExecutionCache] = None,
 ) -> tuple[Dict[str, Any], bool, Dict[str, Any]]:
     """
     Run a single dependency test and return its result.
@@ -440,6 +501,18 @@ async def _run_single_dependency(
     dep_test_data = _load_test_data(dep_path)
     dep_name = dep_test_data.get("name", dep_path.stem)
     dep_artifacts = _load_artifacts(dep_test_data.get("artifacts", {}), dep_path)
+    cache_key = _dependency_cache_key(dep_path)
+
+    if dependency_cache and cache_key in dependency_cache:
+        cached = dependency_cache[cache_key]
+        dep_result = _retrieve_cached_dependency_state(
+            cached,
+            viewport,
+            reporter,
+            owner_key=owner_key,
+            dep_path=dep_path,
+        )
+        return dep_result, cached["passed"], cached["artifacts"]
 
     result = await run_single_test(
         dep_path,
@@ -450,6 +523,7 @@ async def _run_single_dependency(
         interactive=interactive,
         is_dependency=True,
         viewport=viewport,
+        dependency_cache=dependency_cache,
     )
 
     dep_session_id = getattr(reporter, "_last_session_id", "unknown")
@@ -461,6 +535,12 @@ async def _run_single_dependency(
         "session_id": dep_session_id,
         "file_stem": dep_path.stem,
     }
+
+    if dependency_cache is not None:
+        dependency_cache[cache_key] = {
+            "passed": result,
+            "artifacts": dep_artifacts,
+        }
 
     return dep_result, result, dep_artifacts
 
@@ -474,6 +554,7 @@ async def _run_test_dependencies(
     on_step_update: Optional[Any] = None,
     interactive: bool = False,
     viewport: Optional[ViewportSpec] = None,
+    dependency_cache: Optional[DependencyExecutionCache] = None,
 ) -> tuple[bool, List[Dict[str, Any]], Dict[str, Any]]:
     """
     Resolve and run all dependencies for a test.
@@ -499,14 +580,20 @@ async def _run_test_dependencies(
     # Execute each dependency in order
     for dep_path in dependency_paths:
         dep_result, result, dep_artifacts = await _run_single_dependency(
-            dep_path, automator, reporter, owner_key, on_step_update, interactive, viewport
+            dep_path,
+            automator,
+            reporter,
+            owner_key,
+            on_step_update,
+            interactive,
+            viewport,
+            dependency_cache,
         )
         inherited_artifacts.update(dep_artifacts)
         dependency_results.append(dep_result)
 
         if not result:
             all_passed = False
-            console.print(f"[{FAILURE_STYLE}]Required test '{dep_result['name']}' failed. Stopping test execution.[/]")
             break  # Stop on first dependency failure
 
     return all_passed, dependency_results, inherited_artifacts
@@ -522,6 +609,7 @@ async def run_single_test(
     interactive: bool = False,
     is_dependency: bool = False,
     viewport: Optional[ViewportSpec] = None,
+    dependency_cache: Optional[DependencyExecutionCache] = None,
 ) -> bool:
     """
     Runs a single test file and updates the reporter.
@@ -536,6 +624,7 @@ async def run_single_test(
     :param interactive: Whether to run in interactive mode
     :param is_dependency: Whether this test is running as a dependency
     :param viewport: ViewportSpec for this test run, if applicable
+    :param dependency_cache: Optional cache for storing dependency results within a run
     :return: True if test passed, False otherwise
     """
     test_data = _load_test_data(test_path)
@@ -562,7 +651,14 @@ async def run_single_test(
 
     if not is_dependency:
         deps_passed, dependency_results, inherited_artifacts = await _run_test_dependencies(
-            test_path, automator, reporter, owner_key, on_step_update, interactive, viewport
+            test_path,
+            automator,
+            reporter,
+            owner_key,
+            on_step_update,
+            interactive,
+            viewport,
+            dependency_cache,
         )
         if not deps_passed:
             # Mark this test as failed due to dependency failure
@@ -651,7 +747,7 @@ async def run_single_test(
                     await automator.page.set_extra_http_headers(merged_headers)
                 # Rehydrate the page from restored storage/cookies so UI state driven by
                 # localStorage/sessionStorage is visible to the next dependent test.
-                await automator.page.goto(session.url)
+                await automator.navigate_to_session_url(session)
 
     async def report_step_update(step: TestStep) -> None:
         if step.sub_steps and step.status == StepStatus.RUNNING:
@@ -747,6 +843,12 @@ def cli(ctx):
     help="Remove all cached browser states before running tests (default: False)",
 )
 @click.option(
+    "--cache/--no-cache",
+    "reuse_prerequisite_cache",
+    default=True,
+    help="Reuse successful pre-requisite executions within each viewport lane (default: True).",
+)
+@click.option(
     "--viewport",
     "viewport",
     multiple=True,
@@ -759,6 +861,7 @@ def run(
     debug_log: bool,
     interactive: bool,
     clean_cache: bool,
+    reuse_prerequisite_cache: bool,
     viewport: tuple[str, ...],
 ):
     """
@@ -770,6 +873,7 @@ def run(
     :param debug_log: Whether to write DEBUG-rich file logs.
     :param interactive: Whether to run in interactive mode.
     :param clean_cache: Whether to clean cached browser states before running.
+    :param reuse_prerequisite_cache: Whether to reuse already executed prerequisites within a lane.
     :param viewport: Viewport profile names or dimensions to run tests against.
     """
     if not paths:
@@ -849,6 +953,7 @@ def run(
                 logger=logger,
             )
             lane_passed = True
+            dependency_cache: DependencyExecutionCache = {}
 
             try:
                 await automator.start()
@@ -860,6 +965,7 @@ def run(
                         reporter,
                         interactive=interactive,
                         viewport=viewport_spec,
+                        dependency_cache=dependency_cache if reuse_prerequisite_cache else None,
                     )
                     lane_passed = lane_passed and result
 

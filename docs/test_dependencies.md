@@ -55,6 +55,8 @@ vizQA will:
 3. Reuse its browser state
 4. Start `returns`
 
+When multiple requested tests share the same pre-requisite in a single run, vizQA now reuses the first successful execution within that viewport lane by default. Use `--no-cache` to force every requested test to rerun its full pre-requisite chain.
+
 ## Notes For Writing Tests
 
 - `requires` entries reference file stems, not full filenames.
@@ -73,8 +75,10 @@ vizQA will:
 ### Execution Model
 
 - Pre-requisite tests are executed before the requested test.
+- Within a single run, shared pre-requisites are executed once per viewport lane by default and then reused by later dependents.
 - If any pre-requisite fails, the requested test is skipped.
 - Pre-requisite sessions are reported in the output, but summary pass/fail counts only include top-level requested tests.
+- Pass `--no-cache` if you want to explicitly rerun pre-requisites for every requested test.
 
 ### Artifacts
 
