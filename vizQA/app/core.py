@@ -18,6 +18,7 @@ from vizQA.app.client import PerceptionClient
 from vizQA.app.exceptions import (
     ActionExecutionError,
     ArtifactError,
+    BrowserError,
     ElementNotFoundError,
     UserFacingException,
     VerificationError,
@@ -223,6 +224,20 @@ class Automator:
     # Session runner
     # ------------------------------------------------------------------
 
+    async def navigate_to_session_url(self, session: TestSession) -> None:
+        """Navigate to the session URL and raise a clean error if the site is unreachable."""
+        if not self.page:
+            raise RuntimeError("Browser page is not initialized.")
+
+        try:
+            await self.page.goto(session.url)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            test_label = session.file_stem or session.test_name
+            raise BrowserError(
+                f"Site URL is not reachable for test '{test_label}': {session.url}",
+                internal_detail=str(exc),
+            ) from exc
+
     async def run_session(
         self, session: TestSession, on_step_update: Optional[Any] = None, preserve_page: bool = False
     ) -> bool:
@@ -237,7 +252,7 @@ class Automator:
 
         # Skip navigation if this test has dependencies (page is already at the right location)
         if not preserve_page and not session.dependency_results:
-            await self.page.goto(session.url)
+            await self.navigate_to_session_url(session)
 
         failed = False
         for step in session.steps:

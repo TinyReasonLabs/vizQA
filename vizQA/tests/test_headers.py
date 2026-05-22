@@ -8,6 +8,7 @@ import pytest
 
 from vizQA.app.cli import _load_config
 from vizQA.app.core import Automator
+from vizQA.app.exceptions import BrowserError
 from vizQA.app.memory import TestSession
 
 
@@ -85,5 +86,40 @@ def test_automator_applies_headers():
 
         mock_page.set_extra_http_headers.assert_called_with({"Authorization": "Bearer test-token"})
         mock_page.goto.assert_called_with("http://example.com")
+
+    asyncio.run(run_test())
+
+
+def test_automator_raises_clean_error_for_unreachable_session_url():
+    async def run_test():
+        mock_page = MagicMock()
+
+        async def fail_goto(*_args, **_kwargs):
+            raise RuntimeError("net::ERR_CONNECTION_REFUSED")
+
+        mock_page.goto.side_effect = fail_goto
+        mock_page.set_extra_http_headers = MagicMock()
+
+        async def mock_awaitable(*_args, **_kwargs):
+            return None
+
+        mock_page.set_extra_http_headers.side_effect = mock_awaitable
+
+        automator = Automator(perception_client=MagicMock())
+        automator.page = mock_page
+
+        session = TestSession(
+            id="test",
+            test_name="Test",
+            file_stem="login_flow",
+            url="http://localhost:9999",
+            headers={},
+        )
+
+        with pytest.raises(BrowserError) as exc_info:
+            await automator.run_session(session)
+
+        assert exc_info.value.user_message == ("Site URL is not reachable for test 'login_flow': http://localhost:9999")
+        assert "ERR_CONNECTION_REFUSED" in exc_info.value.internal_detail
 
     asyncio.run(run_test())
