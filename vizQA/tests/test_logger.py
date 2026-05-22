@@ -22,6 +22,20 @@ def test_get_logger_uses_shared_timestamp_with_viewport_suffixes(tmp_path, monke
     reset_logger()
 
 
+def test_logger_does_not_create_file_until_first_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("vizQA.app.logger._LOG_DIR", str(tmp_path))
+    reset_logger()
+
+    logger = get_logger()
+
+    assert not Path(logger.log_path).exists()
+
+    logger.log_session("session-1", "start", "url='http://example.com'")
+    reset_logger()
+
+    assert Path(logger.log_path).exists()
+
+
 def test_log_perception_compact_top_matches_and_selected(tmp_path, monkeypatch):
     monkeypatch.setattr("vizQA.app.logger._LOG_DIR", str(tmp_path))
     reset_logger()

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 import yaml
@@ -10,6 +11,7 @@ from vizQA import attach, click, run_step, run_steps
 from vizQA import type as type_text
 from vizQA import verify
 from vizQA.app.client import PerceptionClient
+from vizQA.app.logger import reset_logger
 from vizQA.app.memory import TestStep
 from vizQA.library import _collect_artifacts
 
@@ -168,6 +170,18 @@ def test_attach_defaults_to_no_persistent_artifact_directory():
 
     assert session.debug_dir is None
     assert session._automator.artifact_dir is None
+
+
+def test_attach_without_debug_dir_does_not_create_run_log(monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setattr("vizQA.app.logger._LOG_DIR", tmp)
+        reset_logger()
+
+        attach(page=object())
+
+        assert list(Path(tmp).glob("run_*.log")) == []
+
+        reset_logger()
 
 
 def test_attach_uses_debug_dir_as_artifact_directory(tmp_path):
