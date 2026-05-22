@@ -25,6 +25,36 @@ _PERCEPTION_CANDIDATE_LIMIT = 5
 _DEBUG_ENABLED = True
 
 
+class NullLogger:
+    """No-op logger used when persistent debug logging is intentionally disabled."""
+
+    log_path: Optional[str] = None
+
+    def log_perception(self, *args, **kwargs) -> None:
+        """No-op perception log."""
+        del args, kwargs
+
+    def log_step(self, *args, **kwargs) -> None:
+        """No-op step log."""
+        del args, kwargs
+
+    def log_session(self, *args, **kwargs) -> None:
+        """No-op session log."""
+        del args, kwargs
+
+    def log_warning(self, *args, **kwargs) -> None:
+        """No-op warning log."""
+        del args, kwargs
+
+    def log_exception(self, *args, **kwargs) -> None:
+        """No-op exception log."""
+        del args, kwargs
+
+    def log_debug(self, *args, **kwargs) -> None:
+        """No-op debug log."""
+        del args, kwargs
+
+
 class SessionLogger:
     """
     Thin wrapper around stdlib ``logging`` that persists developer debug
@@ -38,18 +68,24 @@ class SessionLogger:
     """
 
     def __init__(self, log_suffix: Optional[str] = None, timestamp: Optional[str] = None):
-        os.makedirs(_LOG_DIR, exist_ok=True)
         run_timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = f"_{log_suffix}" if log_suffix else ""
         log_path = os.path.join(_LOG_DIR, f"run_{run_timestamp}{suffix}.log")
         self.log_path = log_path
+        self._handler_attached = False
 
         logger_name = f"vizqa.session.{run_timestamp}{suffix}"
         self._logger = logging.getLogger(logger_name)
         self._logger.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         self._logger.propagate = False  # don't bubble up to the root logger
 
-        handler = logging.FileHandler(log_path, encoding="utf-8")
+    def _ensure_handler(self) -> None:
+        """Attach the file handler only when a log entry is actually emitted."""
+        if self._handler_attached:
+            return
+
+        os.makedirs(_LOG_DIR, exist_ok=True)
+        handler = logging.FileHandler(self.log_path, encoding="utf-8")
         handler.setLevel(logging.DEBUG if _DEBUG_ENABLED else logging.INFO)
         fmt = logging.Formatter(
             fmt="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -57,6 +93,7 @@ class SessionLogger:
         )
         handler.setFormatter(fmt)
         self._logger.addHandler(handler)
+        self._handler_attached = True
 
     # ------------------------------------------------------------------
     # Structured log helpers
@@ -70,6 +107,7 @@ class SessionLogger:
         selected: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Logs compact, one-line perception diagnostics at DEBUG level."""
+        self._ensure_handler()
         source = "top_matches" if response.get("top_matches") else "elements"
         candidates = response.get(source, [])
         ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
@@ -104,6 +142,7 @@ class SessionLogger:
         reason: Optional[str] = None,
     ) -> None:
         """Logs a step status transition at INFO or ERROR level."""
+        self._ensure_handler()
         msg = "[%s] STEP  stage=%s  status=%s"
         args: tuple = (step_id, stage, str(status))
         if reason:
@@ -117,18 +156,22 @@ class SessionLogger:
 
     def log_session(self, session_id: str, event: str, detail: str = "") -> None:
         """Logs a session-level lifecycle event (start, end, etc.)."""
+        self._ensure_handler()
         self._logger.info("[%s] SESSION  event=%s  %s", session_id, event, detail)
 
     def log_warning(self, step_id: str, message: str) -> None:
         """Logs a degradation or fallback warning."""
+        self._ensure_handler()
         self._logger.warning("[%s] WARN  %s", step_id, message)
 
     def log_exception(self, step_id: str, exc: Exception) -> None:
         """Logs an exception with full traceback."""
+        self._ensure_handler()
         self._logger.error("[%s] EXCEPTION  %s", step_id, str(exc), exc_info=exc)
 
     def log_debug(self, step_id: str, message: str) -> None:
         """General-purpose DEBUG entry."""
+        self._ensure_handler()
         self._logger.debug("[%s] %s", step_id, message)
 
     def _format_perception_candidate(self, element: Dict[str, Any], rank: int, source: str) -> str:

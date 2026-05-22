@@ -973,6 +973,73 @@ def test_finished_previous_run_stays_green_without_remaining_steps_while_newer_r
     assert "steps remaining" not in compact_row.plain
 
 
+def test_active_layout_shows_pass_badge_for_completed_previous_run_only_in_compact_list():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+    first_session = _session("first-main", "Auth Flow", file_stem="auth_flow")
+    first_step = TestStep(id="first-step", instruction="VERIFY: Auth done", status=StepStatus.PASSED)
+    first_session.steps = [first_step]
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth",
+            test_name="Auth Flow",
+            file_stem="auth_flow",
+            display_path="tests/auth_flow.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="auth", session=first_session))
+    store.handle(StepFinishedEvent(session_id="first-main", step=first_step))
+    store.handle(SessionFinishedEvent(session=first_session))
+
+    second_session = _session("second-main", "Checkout", file_stem="checkout")
+    second_step = TestStep(id="second-step", instruction="VERIFY: Checkout page")
+    second_session.steps = [second_step]
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="checkout",
+            test_name="Checkout",
+            file_stem="checkout",
+            display_path="tests/checkout.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="checkout", session=second_session))
+    store.handle(StepStartedEvent(session_id="second-main", step=second_step))
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=16, width=100), width=100)
+
+    assert "tests/auth_flow.yaml" in plain
+    assert plain.count("PASS") == 1
+    assert "tests/auth_flow.yaml" in plain
+    assert "tests/checkout.yaml" in plain
+
+
+def test_finished_layout_shows_pass_badge_in_done_summary():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+    session = _session("main-1", "Auth Flow", file_stem="auth_flow")
+    step = TestStep(id="step-1", instruction="VERIFY: Auth done", status=StepStatus.PASSED)
+    session.steps = [step]
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth",
+            test_name="Auth Flow",
+            file_stem="auth_flow",
+            display_path="tests/auth_flow.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="auth", session=session))
+    store.handle(StepFinishedEvent(session_id="main-1", step=step))
+    store.handle(SessionFinishedEvent(session=session))
+    store.handle(RunFinishedEvent())
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=10, width=80), width=80)
+
+    assert "PASS" in plain
+
+
 def test_failed_previous_run_stays_red_in_compact_summary():
     store = RunStateStore(display_mode=DisplayMode.VERBOSE)
     failed_session = _session("failed-main", "Checkout", file_stem="checkout")
@@ -1331,6 +1398,77 @@ def test_terminal_reporter_print_failures_silent_is_compact_and_hides_reason():
     assert "tests/login.yaml [Mobile]" in printed
     assert "Reason:" not in printed
     assert "Failed on:" not in printed
+
+
+def test_terminal_reporter_print_failures_collapses_prerequisite_duplicates_across_viewports():
+    console = MagicMock()
+    reporter = TerminalReporter(console=console, display_mode=DisplayMode.VERBOSE)
+
+    reporter.handle(
+        TopLevelTestStartedEvent(
+            owner_key="checkout",
+            test_name="Checkout",
+            file_stem="dependency_checkout",
+            display_path="tests/dependency_checkout.yaml",
+            expected_dependency_total=1,
+        )
+    )
+
+    dependency_results = [
+        {
+            "name": "Dependency Auth Seed",
+            "status": "failed",
+            "session_id": "dep-desktop",
+            "file_stem": "dependency_auth_seed",
+        }
+    ]
+    for session_id, viewport_name in (("dep-desktop", "desktop"), ("dep-mobile", "mobile")):
+        dependency_session = TestSession(
+            id=session_id,
+            test_name="Dependency Auth Seed",
+            file_stem="dependency_auth_seed",
+            url="http://example.com",
+            viewport_name=viewport_name,
+            viewport_slug=viewport_name,
+            is_dependency=True,
+            steps=[],
+        )
+        reporter.handle(SessionStartedEvent(owner_key="checkout", session=dependency_session))
+        reporter.handle(
+            SessionBlockedEvent(
+                session_id=session_id,
+                reason="Could not connect to the visual perception service (at http://localhost:8228).",
+            )
+        )
+        reporter.handle(SessionFinishedEvent(session=dependency_session))
+
+    for session_id, viewport_name in (("main-desktop", "desktop"), ("main-mobile", "mobile")):
+        blocked_session = TestSession(
+            id=session_id,
+            test_name="Checkout",
+            file_stem="dependency_checkout",
+            url="http://example.com",
+            viewport_name=viewport_name,
+            viewport_slug=viewport_name,
+            dependency_results=dependency_results,
+            steps=[],
+        )
+        reporter.handle(SessionStartedEvent(owner_key="checkout", session=blocked_session))
+        reporter.handle(
+            SessionBlockedEvent(
+                session_id=session_id,
+                reason="Required pre-requisite failed: Dependency Auth Seed",
+            )
+        )
+        reporter.handle(SessionFinishedEvent(session=blocked_session))
+
+    reporter.handle(RunFinishedEvent())
+    reporter.print_failures()
+
+    printed = "\n".join(call.args[0] for call in console.print.call_args_list if call.args)
+    assert printed.count("Pre-requisite failure in dependency_auth_seed [desktop, mobile]") == 1
+    assert "Required pre-requisite failed: Dependency Auth Seed" not in printed
+    assert "tests/dependency_checkout.yaml" not in printed
 
 
 def test_terminal_reporter_print_failures_includes_reason_for_interactive_active_failure():

@@ -14,10 +14,11 @@ from vizQA.app.cli import (
     _count_top_level_results,
     _emit_report_event,
     _load_test_data,
+    _run_test_dependencies,
     cli,
     run_single_test,
 )
-from vizQA.app.exceptions import TestDefinitionError
+from vizQA.app.exceptions import BrowserError, TestDefinitionError
 from vizQA.app.logger import reset_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
@@ -98,6 +99,7 @@ steps: []
             minilm=None,
             logger=MagicMock(),
             restore_browser_state=AsyncMock(),
+            navigate_to_session_url=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(return_value={"cookies": [], "localStorage": {}, "sessionStorage": {}}),
@@ -142,7 +144,7 @@ steps: []
 
         assert result is True
         automator.restore_browser_state.assert_awaited_once_with({"localStorage": {"auth": "ok"}})
-        automator.page.goto.assert_awaited_once_with("http://example.com/app")
+        automator.navigate_to_session_url.assert_awaited_once()
         session = reporter.register_session.call_args.args[0]
         assert session.artifacts["username"]["value"] == "analyst.user"
         assert session.artifacts["mfa_code"]["value"] == "246810"
@@ -332,6 +334,66 @@ steps: []
     asyncio.run(run_test())
 
 
+def test_run_test_dependencies_stops_without_printing_duplicate_failure_line(tmp_path):
+    async def run_test():
+        main_test_path = _make_test_file(
+            tmp_path,
+            "main",
+            """
+name: "Main Test"
+url: "http://example.com/app"
+requires:
+  - dependency_auth_seed
+steps: []
+""".strip(),
+        )
+        dependency_path = _make_test_file(
+            tmp_path,
+            "dependency_auth_seed",
+            """
+name: "Dependency Auth Seed"
+url: "http://example.com/auth"
+steps: []
+""".strip(),
+        )
+
+        automator = SimpleNamespace()
+        reporter = SimpleNamespace()
+
+        with (
+            patch("vizQA.app.cli._resolve_dependencies", return_value=[dependency_path]),
+            patch(
+                "vizQA.app.cli._run_single_dependency",
+                new=AsyncMock(
+                    return_value=(
+                        {
+                            "name": "Dependency Auth Seed",
+                            "status": "failed",
+                            "session_id": "dep-1",
+                            "file_stem": "dependency_auth_seed",
+                        },
+                        False,
+                        {},
+                    )
+                ),
+            ),
+            patch("vizQA.app.cli.console.print") as mock_console_print,
+        ):
+            all_passed, dependency_results, inherited_artifacts = await _run_test_dependencies(
+                main_test_path,
+                automator,
+                reporter,
+                owner_key="main",
+            )
+
+        assert all_passed is False
+        assert dependency_results[0]["name"] == "Dependency Auth Seed"
+        assert inherited_artifacts == {}
+        mock_console_print.assert_not_called()
+
+    asyncio.run(run_test())
+
+
 def test_run_single_test_calls_reporter_session_start_before_running_steps(tmp_path):
     async def run_test():
         test_path = _make_test_file(
@@ -407,6 +469,7 @@ steps: []
             minilm=None,
             logger=MagicMock(),
             restore_browser_state=AsyncMock(),
+            navigate_to_session_url=AsyncMock(),
             page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
             run_session=AsyncMock(return_value=True),
             capture_browser_state=AsyncMock(return_value={}),
@@ -430,6 +493,7 @@ steps: []
             interactive=False,
             is_dependency=False,
             viewport=None,
+            dependency_cache=None,
         ):
             dependency_calls.append(
                 {
@@ -439,6 +503,7 @@ steps: []
                     "is_dependency": is_dependency,
                     "viewport": viewport,
                     "has_callback": on_step_update is not None,
+                    "dependency_cache": dependency_cache,
                 }
             )
             return True
@@ -476,6 +541,82 @@ steps: []
         assert dependency_calls[0]["is_dependency"] is True
         assert dependency_calls[0]["viewport"] == viewport
         assert dependency_calls[0]["has_callback"] is False
+        assert dependency_calls[0]["dependency_cache"] is None
+
+    asyncio.run(run_test())
+
+
+def test_run_single_test_reuses_shared_prerequisite_within_same_run(tmp_path):
+    async def run_test():
+        login_path = _make_test_file(
+            tmp_path,
+            "login",
+            """
+name: "Login"
+url: "http://example.com/login"
+artifacts:
+  auth_token: "token-123"
+steps: []
+""".strip(),
+        )
+        first_path = _make_test_file(
+            tmp_path,
+            "checkout",
+            """
+name: "Checkout"
+url: "http://example.com/checkout"
+requires:
+  - login
+steps: []
+""".strip(),
+        )
+        second_path = _make_test_file(
+            tmp_path,
+            "returns",
+            """
+name: "Returns"
+url: "http://example.com/returns"
+requires:
+  - login
+steps: []
+""".strip(),
+        )
+
+        automator = SimpleNamespace(
+            parser=object(),
+            minilm=None,
+            logger=MagicMock(),
+            restore_browser_state=AsyncMock(),
+            navigate_to_session_url=AsyncMock(),
+            page=SimpleNamespace(goto=AsyncMock(), set_extra_http_headers=AsyncMock()),
+            run_session=AsyncMock(return_value=True),
+            capture_browser_state=AsyncMock(return_value={"cookies": [], "localStorage": {}, "sessionStorage": {}}),
+        )
+        reporter = SimpleNamespace(
+            register_session=MagicMock(),
+            sessions=[],
+            on_parent_step_start=MagicMock(),
+            on_parent_step_done=MagicMock(),
+            on_session_start=MagicMock(),
+        )
+        dependency_cache = {}
+
+        with (
+            patch("vizQA.app.cli.StepPlanner") as mock_planner_cls,
+            patch("vizQA.app.cli._load_config", return_value={}),
+            patch("vizQA.app.cli.BrowserStateCache.load", return_value={"localStorage": {"auth": "ok"}}),
+            patch("vizQA.app.cli.BrowserStateCache.cache"),
+        ):
+            mock_planner_cls.return_value.decompose.return_value = []
+
+            first_result = await run_single_test(first_path, automator, reporter, dependency_cache=dependency_cache)
+            second_result = await run_single_test(second_path, automator, reporter, dependency_cache=dependency_cache)
+
+        assert first_result is True
+        assert second_result is True
+        assert automator.run_session.await_count == 3
+        assert login_path.resolve().as_posix() in dependency_cache
+        assert dependency_cache[login_path.resolve().as_posix()]["passed"] is True
 
     asyncio.run(run_test())
 
@@ -669,6 +810,64 @@ steps: []
     assert "Cleaned 2 screenshots" not in result.output
 
 
+def test_run_enables_prerequisite_reuse_cache_by_default(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    run_single_test_mock = AsyncMock(return_value=True)
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.get_logger"),
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=run_single_test_mock),
+    ):
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
+        mock_automator_cls.return_value = automator
+
+        result = runner.invoke(cli, ["run", str(test_path)])
+
+    assert result.exit_code == 0
+    assert run_single_test_mock.await_args.kwargs["dependency_cache"] == {}
+
+
+def test_run_no_cache_disables_prerequisite_reuse_cache(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://example.com"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    run_single_test_mock = AsyncMock(return_value=True)
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.get_logger"),
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator") as mock_automator_cls,
+        patch("vizQA.app.cli.run_single_test", new=run_single_test_mock),
+    ):
+        automator = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), _logger=MagicMock())
+        mock_automator_cls.return_value = automator
+
+        result = runner.invoke(cli, ["run", "--no-cache", str(test_path)])
+
+    assert result.exit_code == 0
+    assert run_single_test_mock.await_args.kwargs["dependency_cache"] is None
+
+
 def test_run_rejects_removed_verbose_flags(tmp_path):
     test_path = _make_test_file(
         tmp_path,
@@ -781,10 +980,12 @@ steps: []
         interactive=False,
         is_dependency=False,
         viewport=None,
+        dependency_cache=None,
     ):
         del owner_key
         del on_step_update
         del is_dependency
+        del dependency_cache
         assert interactive is True
         if viewport.name == "desktop":
             raise click.Abort()
@@ -852,8 +1053,9 @@ steps: []
         interactive=False,
         is_dependency=False,
         viewport=None,
+        dependency_cache=None,
     ):
-        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport
+        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport, dependency_cache
         assert interactive is True
         raise click.Abort()
 
@@ -910,8 +1112,9 @@ steps: []
         interactive=False,
         is_dependency=False,
         viewport=None,
+        dependency_cache=None,
     ):
-        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport
+        del _test_file, _automator, _reporter, owner_key, on_step_update, is_dependency, viewport, dependency_cache
         assert interactive is True
         raise click.Abort()
 
@@ -997,3 +1200,46 @@ steps: []
         assert "browser crashed" in log_text
     finally:
         reset_logger()
+
+
+def test_run_prints_clean_message_for_unreachable_site_url(tmp_path):
+    test_path = _make_test_file(
+        tmp_path,
+        "main",
+        """
+name: "Main"
+url: "http://localhost:9999"
+steps: []
+""".strip(),
+    )
+
+    runner = CliRunner()
+    with (
+        patch("vizQA.app.cli._clean_run_artifacts", return_value={"screenshots": 0, "browser_states": 0, "logs": 0}),
+        patch("vizQA.app.cli.inspect_weight_state") as mock_weight_state,
+        patch("vizQA.app.cli.PerceptionClient"),
+        patch("vizQA.app.cli.Automator", return_value=SimpleNamespace(start=AsyncMock(), stop=AsyncMock())),
+        patch(
+            "vizQA.app.cli.run_single_test",
+            new=AsyncMock(
+                side_effect=BrowserError(
+                    "Site URL is not reachable for test 'main': http://localhost:9999",
+                    internal_detail="net::ERR_CONNECTION_REFUSED",
+                )
+            ),
+        ),
+    ):
+        mock_weight_state.return_value = SimpleNamespace(
+            installed_revision="0.1.0",
+            expected_revision="0.1.0",
+            status="aligned",
+            assumed_revision=False,
+            package_version="0.1.0",
+        )
+
+        result = runner.invoke(cli, ["run", str(test_path)])
+
+    assert result.exit_code == 1
+    assert "Site URL is not reachable for test 'main':" in result.output
+    assert "http://localhost:9999" in result.output
+    assert "ERR_CONNECTION_REFUSED" not in result.output

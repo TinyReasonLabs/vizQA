@@ -31,8 +31,6 @@ class PerceptionClient:
                 }
                 if query:
                     data["query"] = query
-                if self.session_id:
-                    data["session_id"] = self.session_id
 
                 try:
                     response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)

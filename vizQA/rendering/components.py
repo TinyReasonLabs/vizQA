@@ -59,11 +59,13 @@ def build_failed_viewport_markers(row: StepRowState) -> Text:
     return text
 
 
-def _failure_badges(run: TopLevelRunView) -> list[str]:
+def _failure_badges(run: TopLevelRunView, *, include_pass: bool = True) -> list[str]:
     badges: list[str] = []
     seen: set[str] = set()
     for session in run.sessions:
         if session.status not in (RunStatus.PASSED, RunStatus.FAILED, RunStatus.BLOCKED):
+            continue
+        if session.status == RunStatus.PASSED and not include_pass:
             continue
         label = session.viewport_name or "default"
         badge = (
@@ -71,7 +73,13 @@ def _failure_badges(run: TopLevelRunView) -> list[str]:
             if session.status == RunStatus.FAILED
             else f"[{label}] BLOCKED" if session.status == RunStatus.BLOCKED else "PASS"
         )
-        if badge not in seen:
+        if "FAIL" in badge and "PASS" in seen:
+            # replace pass with the specific failure for viewport
+            badges = [b for b in badges if b != "PASS"]
+            seen.add(badge)
+            badges.append(badge)
+        # Dont add pass if theres already a viewport with failure
+        elif badge not in seen and not (badge == "PASS" and any(b for b in badges if "FAIL" in b)):
             seen.add(badge)
             badges.append(badge)
     return badges
@@ -210,7 +218,13 @@ def _build_dependency_actions(session: SessionViewState, *, max_lines: int) -> l
     return lines
 
 
-def build_compact_run_row(run: TopLevelRunView, *, focused: bool = False, width: int | None = None) -> Text:
+def build_compact_run_row(
+    run: TopLevelRunView,
+    *,
+    focused: bool = False,
+    width: int | None = None,
+    include_pass_badges: bool = True,
+) -> Text:
     """Render a compact summary line for a top-level run."""
 
     compact_status = run.summary_status
@@ -226,7 +240,7 @@ def build_compact_run_row(run: TopLevelRunView, *, focused: bool = False, width:
     line = Text(run.display_path, style=style)
     if run.remaining_steps:
         line.append(f"   {run.remaining_steps} steps remaining...", style="dim")
-    return _append_right_badges(line, _failure_badges(run), width=width)
+    return _append_right_badges(line, _failure_badges(run, include_pass=include_pass_badges), width=width)
 
 
 def build_step_list(run: TopLevelRunView, *, max_lines: int) -> Group:
@@ -286,7 +300,13 @@ def build_focused_body(snapshot: RunSnapshot, run: TopLevelRunView, *, height: i
     if dependency_section:
         items.append(dependency_section)
         items.append(Text(""))
-    items.append(_append_right_badges(Text(run.display_path, style="bold white"), _failure_badges(run), width=width))
+    items.append(
+        _append_right_badges(
+            Text(run.display_path, style="bold white"),
+            _failure_badges(run, include_pass=snapshot.run_finished),
+            width=width,
+        )
+    )
     items.append(build_step_list(run, max_lines=step_lines))
     footer = build_footer(snapshot, run)
     if footer.plain:
