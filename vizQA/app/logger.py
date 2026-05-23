@@ -108,8 +108,7 @@ class SessionLogger:
     ) -> None:
         """Logs compact, one-line perception diagnostics at DEBUG level."""
         self._ensure_handler()
-        source = "top_matches" if response.get("top_matches") else "elements"
-        candidates = response.get(source, [])
+        candidates = response.get("elements", [])
         ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
 
         if ordered:
@@ -118,7 +117,7 @@ class SessionLogger:
                     "[%s] PERCEPTION query=%r candidate=%s",
                     step_id,
                     query,
-                    self._format_perception_candidate(element, index, source),
+                    self._format_perception_candidate(element, index, "elements"),
                 )
         else:
             self._logger.debug("[%s] PERCEPTION query=%r candidate=none", step_id, query)
@@ -131,7 +130,7 @@ class SessionLogger:
         self._logger.debug(
             "[%s] PERCEPTION selected=%s",
             step_id,
-            self._format_perception_candidate(selected, selected_rank, source),
+            self._format_perception_candidate(selected, selected_rank, "elements"),
         )
 
     def log_step(

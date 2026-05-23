@@ -42,7 +42,7 @@ def test_log_perception_compact_top_matches_and_selected(tmp_path, monkeypatch):
 
     logger = get_logger()
     response = {
-        "top_matches": [
+        "elements": [
             {
                 "text": "Sign in",
                 "label": "primary-cta",
@@ -60,20 +60,20 @@ def test_log_perception_compact_top_matches_and_selected(tmp_path, monkeypatch):
         ]
     }
 
-    logger.log_perception("step-1", "sign in button", response, selected=response["top_matches"][0])
+    logger.log_perception("step-1", "sign in button", response, selected=response["elements"][0])
     reset_logger()
 
     lines = Path(logger.log_path).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3
     assert (
-        "query='sign in button' candidate=#1[src=top_matches text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]"
+        "query='sign in button' candidate=#1[src=elements text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]"
         in lines[0]
     )
     assert (
-        "query='sign in button' candidate=#2[src=top_matches text='Email' pos=- sal=0.44 sim=0.55 geom=loc(0.10,0.20,0.30,0.40)]"
+        "query='sign in button' candidate=#2[src=elements text='Email' pos=- sal=0.44 sim=0.55 geom=loc(0.10,0.20,0.30,0.40)]"
         in lines[1]
     )
-    assert "selected=#1[src=top_matches text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]" in lines[2]
+    assert "selected=#1[src=elements text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]" in lines[2]
 
 
 def test_log_perception_falls_back_to_elements_and_handles_missing_metadata(tmp_path, monkeypatch):
