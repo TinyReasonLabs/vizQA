@@ -959,6 +959,8 @@ def run(
                 await automator.start()
 
                 for test_file in test_files:
+                    # reset session_id between different tests
+                    client.session_id = None
                     result = await run_single_test(
                         test_file,
                         automator,

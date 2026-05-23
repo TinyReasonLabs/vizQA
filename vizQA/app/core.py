@@ -4,6 +4,7 @@ Core execution engine for vision-driven UI automation.
 
 # pylint: disable=invalid-name, too-many-lines
 import asyncio
+import copy
 import os
 import re
 import sys
@@ -418,7 +419,10 @@ class Automator:
             norm_subj = self.parser.normalize_subject(query)
             history = session.metadata.setdefault("history", {})
             if norm_subj not in history:
-                history[norm_subj] = {"target": target, "elements": perception.get("elements", [])}
+                history[norm_subj] = {
+                    "target": copy.deepcopy(target),
+                    "elements": copy.deepcopy(perception.get("elements", [])),
+                }
                 self.logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
 
             step.status = StepStatus.PASSED
@@ -470,6 +474,46 @@ class Automator:
 
         step.status = StepStatus.PASSED
         return True
+
+    async def _execute_verify(
+        self, session: TestSession, step: TestStep, query: str, timeout: Optional[int] = None
+    ) -> bool:
+        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
+        timeout = timeout or self.parser.config.verification_timeout
+        start_wait = datetime.now()
+        test_slug = _test_slug(session)
+
+        # Parse intent once at the beginning
+        intent = self.parser.parse_verify_intent(query)
+        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
+        perc_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
+
+        while (datetime.now() - start_wait).total_seconds() < timeout:
+            path, persistent = self._artifact_path(test_slug, f"{step.id}_verify")
+            await self.page.screenshot(path=path, type="jpeg")
+            if persistent:
+                step.screenshot_after = path
+
+            try:
+                perception = await self.client.perceive(path, query=perc_query)
+                step.perception_result = perception
+            finally:
+                if not persistent:
+                    self._cleanup_temporary_artifact(path)
+
+            self._log_perception_summary(step.id, perc_query, perception, selected=None)
+            match_found, reasoning = self._check_verification_match(session, intent, perception)
+            if match_found:
+                step.status = StepStatus.PASSED
+                return True
+
+            await asyncio.sleep(1.0)
+
+        step.status = StepStatus.FAILED
+        wait_time = (datetime.now() - start_wait).total_seconds()
+        reasoning = reasoning or f"Verification failed after {wait_time:.1f}s"
+        step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
+        return False
 
     async def _handle_wait_action(self, _session: TestSession, step: TestStep, payload: str) -> bool:
         """Handles waiting for a specific amount of time."""
@@ -612,46 +656,6 @@ class Automator:
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.log_warning(session.id, f"File upload failed: {e}")
             raise ArtifactError(f"Failed to upload file artifact for '{file_path}'", internal_detail=str(e)) from e
-
-    async def _execute_verify(
-        self, session: TestSession, step: TestStep, query: str, timeout: Optional[int] = None
-    ) -> bool:
-        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
-        timeout = timeout or self.parser.config.verification_timeout
-        start_wait = datetime.now()
-        test_slug = _test_slug(session)
-
-        # Parse intent once at the beginning
-        intent = self.parser.parse_verify_intent(query)
-        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
-        perc_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
-
-        while (datetime.now() - start_wait).total_seconds() < timeout:
-            path, persistent = self._artifact_path(test_slug, f"{step.id}_verify")
-            await self.page.screenshot(path=path, type="jpeg")
-            if persistent:
-                step.screenshot_after = path
-
-            try:
-                perception = await self.client.perceive(path, query=perc_query)
-                step.perception_result = perception
-            finally:
-                if not persistent:
-                    self._cleanup_temporary_artifact(path)
-
-            self._log_perception_summary(step.id, perc_query, perception, selected=None)
-            match_found, reasoning = self._check_verification_match(session, intent, perception)
-            if match_found:
-                step.status = StepStatus.PASSED
-                return True
-
-            await asyncio.sleep(1.0)
-
-        step.status = StepStatus.FAILED
-        wait_time = (datetime.now() - start_wait).total_seconds()
-        reasoning = reasoning or f"Verification failed after {wait_time:.1f}s"
-        step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
-        return False
 
     def _check_verification_match(
         self, session: TestSession, intent: Dict[str, Any], perception: Dict[str, Any]
