@@ -293,7 +293,11 @@ class SemanticParser:
         """
         if not subject:
             return ""
-        return self.parse_verify_intent(subject)["subject"].lower().strip()
+        return (
+            (self.parse_verify_intent(subject)["keyword"] or self.parse_verify_intent(subject)["subject"])
+            .lower()
+            .strip()
+        )
 
     def resolve_historical_target(
         self, intent: Dict[str, Any], history_metadata: Dict[str, Any]
