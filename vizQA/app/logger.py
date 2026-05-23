@@ -112,7 +112,7 @@ class SessionLogger:
         ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
 
         if ordered:
-            for index, element in enumerate(ordered):
+            for index, element in enumerate(ordered, start=1):
                 self._logger.debug(
                     "[%s] PERCEPTION query=%r candidate=%s",
                     step_id,
@@ -126,7 +126,7 @@ class SessionLogger:
             self._logger.debug("[%s] PERCEPTION selected=none", step_id)
             return
 
-        selected_rank = next((index + 1 for index, element in enumerate(candidates) if element is selected), 0)
+        selected_rank = next((index + 1 for index, element in enumerate(candidates) if element is selected), 1)
         self._logger.debug(
             "[%s] PERCEPTION selected=%s",
             step_id,
