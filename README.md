@@ -3,13 +3,11 @@
 [![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Code Coverage](https://img.shields.io/badge/coverage-76%25-yellowgreen.svg)]()
+[![Code Coverage](https://img.shields.io/badge/coverage-79%25-yellowgreen.svg)]()
 
 **vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA lets you write tests in natural language without brittle CSS selectors or XPath. It is not an LLM-based test runner: execution is rule-driven, CPU-friendly, and designed for repeatable, idempotent regression.
 
-> [!IMPORTANT]
-> **vizQA is currently in its early alpha stage.** We are actively developing and refining the framework. Feedback, bug reports, and contributions are highly encouraged and welcome! Please review our [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
-
+![VizQA demo run](docs/header-demo-run.gif)
 
 ---
 
