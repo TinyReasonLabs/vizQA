@@ -9,6 +9,7 @@
 
 ![VizQA demo run](docs/header-demo-run.gif)
 
+
 ---
 
 ## 👁️ Why Vision-Driven?
