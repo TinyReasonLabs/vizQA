@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vizQA.reasoning import SemanticParser
+from vizQA.reasoning import Intent, IntentAttributes, SemanticParser
 
 # ---------------------------------------------------------------------------
 # (instruction, expected_intent_subset)
@@ -122,15 +122,18 @@ def test_parse_verify_intent(query, expected):
     intent = parser.parse_verify_intent(query)
 
     for key, value in expected.items():
-        assert intent[key] == value, (
-            f"Intent[{key!r}] expected {value!r}, got {intent[key]!r}\n" f"  query:  {query!r}\n" f"  intent: {intent}"
+        actual = (
+            getattr(intent, key) if key in {"keyword", "subject", "negated", "color", "position", "state"} else None
+        )
+        assert actual == value, (
+            f"Intent[{key!r}] expected {value!r}, got {actual!r}\n" f"  query:  {query!r}\n" f"  intent: {intent}"
         )
 
 
 def test_has_specific_target_subject_rejects_generic_scope_terms_via_minilm():
     mock_minilm = MagicMock()
     mock_minilm.semantic_match.return_value = [0]
-    parser = SemanticParser(minilm=mock_minilm)
+    parser = SemanticParser(semantic_provider=mock_minilm)
 
     assert parser.has_specific_target_subject("to the page") is False
     mock_minilm.semantic_match.assert_called_once()
@@ -139,7 +142,7 @@ def test_has_specific_target_subject_rejects_generic_scope_terms_via_minilm():
 def test_has_specific_target_subject_accepts_specific_targets_via_minilm():
     mock_minilm = MagicMock()
     mock_minilm.semantic_match.return_value = []
-    parser = SemanticParser(minilm=mock_minilm)
+    parser = SemanticParser(semantic_provider=mock_minilm)
 
     assert parser.has_specific_target_subject("to the reviews section") is True
     mock_minilm.semantic_match.assert_called_once()
@@ -243,10 +246,19 @@ FILTER_TEST_CASES = [
 ]
 
 
+def _intent(keyword=None, color=None, position=None, state=None, negated=False, subject=""):
+    return Intent(
+        keyword=keyword,
+        subject=subject,
+        negated=negated,
+        attributes=IntentAttributes(color=color, position=position, state=state),
+    )
+
+
 @pytest.mark.parametrize("intent,elements,expected", FILTER_TEST_CASES)
 def test_filter_elements_by_intent(intent, elements, expected):
     parser = SemanticParser()
-    actual = parser.filter_elements_by_intent(intent, elements)
+    actual = parser.filter_elements_by_intent(_intent(**intent), elements)
 
     # Simplified comparison of results
     actual_data = [

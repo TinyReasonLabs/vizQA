@@ -1,6 +1,6 @@
 import pytest
 
-from vizQA.reasoning import SemanticParser
+from vizQA.reasoning import Intent, SemanticParser
 
 
 def test_semantic_history_matching():
@@ -17,13 +17,13 @@ def test_semantic_history_matching():
     }
 
     # 1. Exact match (normalized)
-    intent_exact = {"subject": "the Login Modal", "negated": True}
+    intent_exact = Intent(subject="the Login Modal", negated=True)
     target, elements = parser.resolve_historical_target(intent_exact, history_metadata)
     assert target == modal_target
     assert len(elements) == 2
 
     # 2. Match with "the" and different casing
-    intent_the = {"subject": "THE login modal", "negated": True}
+    intent_the = Intent(subject="THE login modal", negated=True)
     target, elements = parser.resolve_historical_target(intent_the, history_metadata)
     assert target == modal_target
 
@@ -62,7 +62,7 @@ def test_negation_mix_up_repro():
     # State B: Modal 1 is gone, Modal 2 stays
     after_elements = [modal_2, other]
 
-    intent = {"subject": "modal", "negated": True}
+    intent = Intent(subject="modal", negated=True)
 
     # Now, this should return True because Modal 1 (the likely target) is gone,
     # and the logic handles that specifically if Modal 1 was the last seen element.

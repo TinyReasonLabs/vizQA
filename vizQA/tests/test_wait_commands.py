@@ -32,7 +32,7 @@ def _attach_scroll_minilm(automator):
 
     mock_minilm.semantic_match.side_effect = semantic_match
     automator.minilm = mock_minilm
-    automator.parser.minilm = mock_minilm
+    automator.parser.semantic_provider = mock_minilm
     return mock_minilm
 
 
