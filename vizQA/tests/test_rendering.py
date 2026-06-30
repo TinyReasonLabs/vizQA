@@ -357,6 +357,54 @@ def test_dependency_header_uses_expected_total_not_started_count():
     assert "Running 4 pre-requisites..." in plain
 
 
+def test_compact_top_level_rows_keep_priority_when_body_height_is_limited():
+    store = RunStateStore(display_mode=DisplayMode.VERBOSE)
+
+    completed_run = _session("first-main", "Auth Flow", file_stem="auth_flow")
+    completed_step = TestStep(id="first-step", instruction="VERIFY: Auth done", status=StepStatus.PASSED)
+    completed_run.steps = [completed_step]
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="auth",
+            test_name="Auth Flow",
+            file_stem="auth_flow",
+            display_path="tests/auth_flow.yaml",
+            expected_dependency_total=0,
+        )
+    )
+    store.handle(SessionStartedEvent(owner_key="auth", session=completed_run))
+    store.handle(StepFinishedEvent(session_id="first-main", step=completed_step))
+    store.handle(SessionFinishedEvent(session=completed_run))
+
+    store.handle(
+        TopLevelTestStartedEvent(
+            owner_key="checkout",
+            test_name="Checkout",
+            file_stem="checkout",
+            display_path="tests/checkout.yaml",
+            expected_dependency_total=1,
+        )
+    )
+    dependency = _session("dep-1", "Login dependency", file_stem="dependency_login", is_dependency=True)
+    active_session = _session("checkout-main", "Checkout", file_stem="checkout")
+    store.handle(SessionStartedEvent(owner_key="checkout", session=dependency))
+    store.handle(SessionStartedEvent(owner_key="checkout", session=active_session))
+    store.handle(StepStartedEvent(session_id="dep-1", step=TestStep(id="dep-parent", instruction="Action name")))
+    store.handle(
+        StepStartedEvent(
+            session_id="checkout-main",
+            step=TestStep(id="checkout-step", instruction="VERIFY: Checkout page"),
+        )
+    )
+
+    plain = _render_plain(compose_layout(store.snapshot(), height=5, width=80), width=80)
+    rendered_lines = [line for line in plain.splitlines() if line.strip()]
+
+    assert "tests/auth_flow.yaml" in plain
+    assert "tests/checkout.yaml" in plain
+    assert len(rendered_lines) <= 5
+
+
 def test_silent_layout_renders_compact_rows_only():
     store = RunStateStore(display_mode=DisplayMode.SILENT)
     store.handle(

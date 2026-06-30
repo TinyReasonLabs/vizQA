@@ -1,4 +1,6 @@
 import asyncio
+import io
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -21,7 +23,7 @@ PASSWORD_FLOW = yaml.safe_load((REPO_ROOT / "tests" / "dependency_login_password
 MFA_FLOW = yaml.safe_load((REPO_ROOT / "tests" / "dependency_login_mfa.yaml").read_text(encoding="utf-8"))
 
 
-async def _fake_perceive(self, _image_path: str, query: str | None = None):
+async def _fake_perceive(self, _image_path: str, query: str | None = None, session_scope: str | None = None):
     self.session_id = self.session_id or "local-test-session"
     return await PerceptionClient._test_page.evaluate(
         """(query) => {
@@ -184,6 +186,47 @@ def test_attach_without_debug_dir_does_not_create_run_log(monkeypatch):
         reset_logger()
 
 
+def test_attach_with_custom_stdlib_logger_uses_host_logging(monkeypatch):
+    stream = io.StringIO()
+    host_logger = logging.getLogger("vizqa.library.test")
+    host_logger.setLevel(logging.DEBUG)
+    host_logger.addHandler(logging.StreamHandler(stream))
+
+    session = attach(page=object(), logger=host_logger)
+
+    session._automator.logger.log_warning("step-1", "custom logger test")
+    session._automator.logger.log_debug("step-1", "debug message")
+
+    output = stream.getvalue()
+    assert "WARN  custom logger test" in output
+    assert "debug message" in output
+
+    reset_logger()
+
+
+def test_attach_without_explicit_logger_uses_stdlib_logging_by_default():
+    stream = io.StringIO()
+    vizqa_logger = logging.getLogger("vizqa")
+    old_level = vizqa_logger.level
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.DEBUG)
+    vizqa_logger.addHandler(handler)
+    vizqa_logger.setLevel(logging.DEBUG)
+
+    try:
+        session = attach(page=object())
+        session._automator.logger.log_warning("step-1", "console logger test")
+        session._automator.logger.log_debug("step-1", "debug output")
+    finally:
+        vizqa_logger.removeHandler(handler)
+        vizqa_logger.setLevel(old_level)
+        reset_logger()
+
+    output = stream.getvalue()
+    assert "console logger test" in output
+    assert "debug output" in output
+
+
 def test_attach_uses_debug_dir_as_artifact_directory(tmp_path):
     session = attach(page=object(), debug_dir=str(tmp_path))
 
@@ -299,6 +342,7 @@ def test_top_level_run_steps_can_finish_a_real_yaml_backed_flow(monkeypatch):
         )
 
         assert len(initial_results) == 6
+        print([result for result in initial_results])
         assert all(result.success for result in initial_results)
         assert await page.locator("#role-label").inner_text() == "Analyst"
         user_chip_text = await page.locator("#user-chip").inner_text()

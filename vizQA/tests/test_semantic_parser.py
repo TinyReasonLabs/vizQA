@@ -98,8 +98,8 @@ TEST_CASES = [
         [("FIND", "image"), ("DO", "drag"), ("FIND", "upload zone"), ("DO", "drop")],
     ),
     # 33. Scroll actions
-    ("Scroll down to the bottom of the page", [("FIND", "down bottom of page"), ("DO", "scroll")]),
-    ("Scroll to the 'Reviews' section", [("FIND", "'Reviews' section"), ("DO", "scroll")]),
+    ("Scroll down to the bottom of the page", [("DO", "scroll down to the bottom of the page")]),
+    ("Scroll to the 'Reviews' section", [("DO", "scroll to the 'Reviews' section")]),
     # 35. Keyboard actions
     ("Press Enter on the search box", [("FIND", "search box"), ("DO", "press Enter")]),
     ("Hit the Escape key", [("FIND", "key"), ("DO", "press Escape")]),
@@ -137,6 +137,7 @@ TEST_CASES = [
     ),
     # 46. Wait or sleep instructions
     ("Wait for 5 seconds", [("DO", "wait for 5 seconds")]),
+    ("Wait for the success toast", [("DO", "wait for the success toast")]),
     ("Pause until the loader disappears", [("VERIFY", "loader disappears")]),
     ("Wait 500ms before continuing", [("DO", "wait 500ms before continuing")]),
     ("Sleep for 2 minutes", [("DO", "wait for 2 minutes")]),
@@ -194,7 +195,7 @@ TEST_CASES = [
     ),
     (
         "Scroll to the bottom of the page",
-        [("FIND", "to the bottom of the page"), ("DO", "scroll")],
+        [("DO", "scroll to the bottom of the page")],
     ),
     (
         "Type 'wrong_user' into the username field",
@@ -219,6 +220,14 @@ TEST_CASES = [
     (
         "The Sign In modal should appear",
         [("VERIFY", "Sign In modal should appear")],
+    ),
+    (
+        "Verify Identity and access rehearsal",
+        [("VERIFY", "Identity and access rehearsal")],
+    ),
+    (
+        "Verify the 'Research and Development' section should be visible and aligned right",
+        [("VERIFY", "'Research and Development' section should be visible"), ("VERIFY", "aligned right")],
     ),
     (
         "A popup should NOT be visible",

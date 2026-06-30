@@ -14,6 +14,7 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 
 from vizQA.app.logger import get_logger
+from vizQA.reasoning.clause_splitting import split_verify_conjunctions
 from vizQA.reasoning.query_semantics import lexical_term_score, normalize_boolean_term, split_boolean_query
 from vizQA.reasoning.vocabulary import ParserVocabulary
 
@@ -579,8 +580,8 @@ class MiniLM:
         protected_val = re.sub(
             r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", protected_val, flags=re.I
         ).strip()
-        # Split VERIFY on 'and' to emit separate VERIFY steps
-        for vp in re.split(r"\band\b", protected_val, flags=re.I):
+        # Split only on real verification conjunctions, not quoted/noun phrases.
+        for vp in split_verify_conjunctions(protected_val):
             vp = self._sd_restore(vp, quotes)
             vp = re.sub(r"\s+", " ", vp).strip()
             if vp:
@@ -879,6 +880,15 @@ class MiniLM:
             handled, nt = self._sd_handle_press_and_hold(lower_real, prev_target, all_steps)
             if handled:
                 prev_target = nt
+                continue
+
+            if canonical_type == "scroll":
+                scroll_payload = self._sd_restore(target_area, quotes).strip()
+                scroll_value = " ".join(
+                    part for part in [saved_literal or canonical_type, scroll_payload] if part
+                ).strip()
+                all_steps.append({"type": "DO", "value": scroll_value})
+                prev_target = self._sd_clean_target(scroll_payload) or prev_target or "element"
                 continue
 
             # 5. FINAL FALLBACK (standard verb + noun)

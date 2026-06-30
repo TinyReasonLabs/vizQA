@@ -1,0 +1,9 @@
+name: "Scroll to test"
+url: "file://${PWD}/demo_site/dependency_auth_lab.html"
+description: "Test to verify scroll functionality."
+
+steps:
+  - action: "Scroll to the 'Debug controls' section"
+    expect: "'Expire current session' button should be visible"
+  - action: "Scroll to the 'State mode'"
+    expect: "'Identity and access rehearsal' text"

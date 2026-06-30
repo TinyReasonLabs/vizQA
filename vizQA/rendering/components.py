@@ -148,12 +148,13 @@ def _dedup_dependency_sessions(run: TopLevelRunView) -> list[SessionViewState]:
     return list(deduped.values())
 
 
-def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int) -> Group | None:
-    """Render the pre-requisite section for the focused run."""
+# pylint: disable=too-many-locals
+def build_dependency_section_lines(run: TopLevelRunView, *, width: int, max_lines: int) -> list[Text]:
+    """Render pre-requisite section lines for the focused run."""
 
     dependency_sessions = _dedup_dependency_sessions(run)
     if not dependency_sessions:
-        return None
+        return []
 
     total_dependencies = run.dependency_total or len(dependency_sessions)
     header_label = f"Running {total_dependencies} pre-requisite{'s' if total_dependencies != 1 else ''}..."
@@ -168,9 +169,15 @@ def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int
     header.append_text(build_progress_bar(completed, max(1, total_dependencies), width=progress_width))
     lines: list[Text] = [header]
 
+    if max_lines <= 1:
+        return lines
+
     active_dependency = next((session for session in dependency_sessions if session.status == RunStatus.RUNNING), None)
     window_sessions = dependency_sessions[-max_lines:]
     for session in window_sessions:
+        if len(lines) >= max_lines:
+            break
+
         style = (
             VIEWPORT_CURSOR_STYLE if active_dependency and session.session_id == active_dependency.session_id else "dim"
         )
@@ -180,8 +187,18 @@ def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int
         lines.append(line)
 
         if active_dependency and session.session_id == active_dependency.session_id:
-            lines.extend(_build_dependency_actions(session, max_lines=max(1, max_lines - 1)))
-    return Group(*lines)
+            action_lines = _build_dependency_actions(session, max_lines=max(1, max_lines - len(lines)))
+            for action_line in action_lines:
+                if len(lines) >= max_lines:
+                    break
+                lines.append(action_line)
+    return lines
+
+
+def build_dependency_section(run: TopLevelRunView, *, width: int, max_lines: int) -> Group | None:
+    """Wrap dependency section lines in a Rich group when any exist."""
+    lines = build_dependency_section_lines(run, width=width, max_lines=max_lines)
+    return Group(*lines) if lines else None
 
 
 def _build_dependency_actions(session: SessionViewState, *, max_lines: int) -> list[Text]:
@@ -243,8 +260,8 @@ def build_compact_run_row(
     return _append_right_badges(line, _failure_badges(run, include_pass=include_pass_badges), width=width)
 
 
-def build_step_list(run: TopLevelRunView, *, max_lines: int) -> Group:
-    """Render the merged step list for the focused run."""
+def build_step_list_lines(run: TopLevelRunView, *, max_lines: int) -> list[Text]:
+    """Render merged step list lines for the focused run."""
 
     rows = [row for row in run.merged_step_rows if row.status != RunStatus.SKIPPED]
     active_rows = [row for row in rows if any(viewport.active for viewport in row.viewport_status.values())]
@@ -276,8 +293,12 @@ def build_step_list(run: TopLevelRunView, *, max_lines: int) -> Group:
         ]
 
     rows = rows[-max_lines:] if max_lines > 0 else rows
-    content = [build_step_line(row) for row in rows] or [Text("Waiting for steps...", style="dim")]
-    return Group(*content)
+    return [build_step_line(row) for row in rows] or [Text("Waiting for steps...", style="dim")]
+
+
+def build_step_list(run: TopLevelRunView, *, max_lines: int) -> Group:
+    """Wrap the rendered step list lines in a Rich group."""
+    return Group(*build_step_list_lines(run, max_lines=max_lines))
 
 
 def build_footer(snapshot: RunSnapshot, run: TopLevelRunView) -> Text:
@@ -293,23 +314,33 @@ def build_footer(snapshot: RunSnapshot, run: TopLevelRunView) -> Text:
 def build_focused_body(snapshot: RunSnapshot, run: TopLevelRunView, *, height: int, width: int) -> Group:
     """Render the main focused card body without panel chrome."""
 
-    dependency_lines = min(max(3, height // 2), max(3, len(run.dependencies) + 2))
-    dependency_section = build_dependency_section(run, width=width, max_lines=dependency_lines)
-    step_lines = max(3, height - (dependency_lines if dependency_section else 0) - 4)
-    items = []
-    if dependency_section:
-        items.append(dependency_section)
-        items.append(Text(""))
-    items.append(
-        _append_right_badges(
-            Text(run.display_path, style="bold white"),
-            _failure_badges(run, include_pass=snapshot.run_finished),
-            width=width,
-        )
+    dependency_section_lines: list[Text] = []
+    if run.dependencies and height > 2:
+        dependency_lines = min(max(2, height // 3), max(2, len(run.dependencies) + 2))
+        dependency_section_lines = build_dependency_section_lines(run, width=width, max_lines=dependency_lines)
+
+    title_line = _append_right_badges(
+        Text(run.display_path, style="bold white"),
+        _failure_badges(run, include_pass=snapshot.run_finished),
+        width=width,
     )
-    items.append(build_step_list(run, max_lines=step_lines))
+
     footer = build_footer(snapshot, run)
+    detail_lines: list[Text] = []
+    if dependency_section_lines:
+        detail_lines.extend(dependency_section_lines)
+        detail_lines.append(Text(""))
+
+    detail_lines.extend(build_step_list_lines(run, max_lines=max(1, height - 1)))
+
     if footer.plain:
-        items.append(Text(""))
-        items.append(footer)
+        detail_lines.append(Text(""))
+        detail_lines.append(footer)
+
+    available_detail_lines = max(0, height - 1)
+    if len(detail_lines) > available_detail_lines:
+        detail_lines = detail_lines[-available_detail_lines:]
+
+    items = [title_line]
+    items.extend(detail_lines)
     return Group(*items)

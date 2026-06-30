@@ -397,7 +397,8 @@ class Automator:
             raise ValueError(f"Artifact '{art_name}' not found in session.")
 
         try:
-            perception = await self.client.perceive(path, query=query)
+            perception_scope = await self._build_perception_scope(session)
+            perception = await self.client.perceive(path, query=query, session_scope=perception_scope)
             step.perception_result = perception
         finally:
             if not persistent:
@@ -447,6 +448,8 @@ class Automator:
 
         if action == "wait":
             return await self._handle_wait_action(session, step, payload)
+        if action == "scroll":
+            return await self._handle_scroll_action(session, step, payload)
 
         target = session.metadata.get("target")
         if not target:
@@ -475,39 +478,76 @@ class Automator:
         step.status = StepStatus.PASSED
         return True
 
+    # pylint: disable=too-many-locals
+    async def _poll_for_intent_match(
+        self,
+        session: TestSession,
+        step: TestStep,
+        query: str,
+        timeout: float,
+        poll_interval: float,
+        screenshot_suffix: str,
+        require_element_match: bool = False,
+    ) -> tuple[bool, Dict[str, Any], str]:
+        """Polls perception until the semantic intent matches or the timeout expires."""
+        start_wait = datetime.now()
+        test_slug = _test_slug(session)
+
+        intent = self.parser.parse_verify_intent(query)
+        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
+        keyword = str(intent.get("keyword") or "")
+        subject = str(intent.get("subject") or "")
+        position = str(intent.get("position") or "")
+        if keyword:
+            perc_query = f"'{keyword}' {subject} {position}"
+        elif subject or position:
+            perc_query = f"{subject} {position}"
+        else:
+            perc_query = query
+
+        perception: Dict[str, Any] = {}
+        reasoning = ""
+
+        while (datetime.now() - start_wait).total_seconds() < timeout:
+            path, persistent = self._artifact_path(test_slug, f"{step.id}_{screenshot_suffix}")
+            await self.page.screenshot(path=path, type="jpeg")
+            if persistent:
+                step.screenshot_after = path
+
+            try:
+                perception_scope = await self._build_perception_scope(session)
+                perception = await self.client.perceive(path, query=perc_query, session_scope=perception_scope)
+                step.perception_result = perception
+            except Exception:  # pylint: disable=broad-exception-caught
+                perception = {}
+            finally:
+                if not persistent:
+                    self._cleanup_temporary_artifact(path)
+
+            if perception:
+                self._log_perception_summary(step.id, perc_query, perception, selected=None)
+                if require_element_match:
+                    match_found, reasoning = self._check_wait_for_match(intent, perception)
+                else:
+                    match_found, reasoning = self._check_verification_match(session, intent, perception)
+                if match_found:
+                    return True, perception, reasoning
+
+            await asyncio.sleep(poll_interval)
+
+        return False, perception, reasoning
+
     async def _execute_verify(
         self, session: TestSession, step: TestStep, query: str, timeout: Optional[int] = None
     ) -> bool:
         """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
         timeout = timeout or self.parser.config.verification_timeout
         start_wait = datetime.now()
-        test_slug = _test_slug(session)
 
-        # Parse intent once at the beginning
-        intent = self.parser.parse_verify_intent(query)
-        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
-        perc_query = f"'{intent['keyword']}' {intent['subject'] or ''} {intent['position'] or ''}"
-
-        while (datetime.now() - start_wait).total_seconds() < timeout:
-            path, persistent = self._artifact_path(test_slug, f"{step.id}_verify")
-            await self.page.screenshot(path=path, type="jpeg")
-            if persistent:
-                step.screenshot_after = path
-
-            try:
-                perception = await self.client.perceive(path, query=perc_query)
-                step.perception_result = perception
-            finally:
-                if not persistent:
-                    self._cleanup_temporary_artifact(path)
-
-            self._log_perception_summary(step.id, perc_query, perception, selected=None)
-            match_found, reasoning = self._check_verification_match(session, intent, perception)
-            if match_found:
-                step.status = StepStatus.PASSED
-                return True
-
-            await asyncio.sleep(1.0)
+        success, perception, reasoning = await self._poll_for_intent_match(session, step, query, timeout, 1.0, "verify")
+        if success:
+            step.status = StepStatus.PASSED
+            return True
 
         step.status = StepStatus.FAILED
         wait_time = (datetime.now() - start_wait).total_seconds()
@@ -515,26 +555,295 @@ class Automator:
         step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
         return False
 
-    async def _handle_wait_action(self, _session: TestSession, step: TestStep, payload: str) -> bool:
-        """Handles waiting for a specific amount of time."""
+    async def _handle_wait_action(self, session: TestSession, step: TestStep, payload: str) -> bool:
+        """Handles waiting for a specific amount of time or a semantic UI condition."""
+        wait_time = self._parse_wait_duration(payload)
+        if wait_time is not None:
+            self.logger.log_debug(step.id, f"Waiting for {wait_time}s (parsed from '{payload}')")
+            await asyncio.sleep(wait_time)
+            step.status = StepStatus.PASSED
+            return True
+
+        query = payload.strip()
+        if not query:
+            self.logger.log_debug(step.id, "Waiting with no payload; falling back to the legacy short pause.")
+            await asyncio.sleep(self.parser.config.step_delay_seconds)
+            step.status = StepStatus.PASSED
+            return True
+
+        query = self.parser.normalize_verify_query(query)
+        timeout = self.parser.config.wait_for_timeout_seconds
+        poll_interval = self.parser.config.wait_for_poll_interval_seconds
+        success, perception, reasoning = await self._poll_for_intent_match(
+            session, step, query, timeout, poll_interval, "wait_for", require_element_match=True
+        )
+        if success:
+            step.status = StepStatus.PASSED
+            return True
+
+        step.status = StepStatus.FAILED
+        step.failure_type = FailureType.TIMEOUT
+        timeout_reason = reasoning or f"Wait-for target not matched within {timeout:.1f}s."
+        step.failure_reason = self._failure_details("WAIT", query, perception, timeout_reason)
+        return False
+
+    async def _handle_scroll_action(self, session: TestSession, step: TestStep, payload: str) -> bool:
+        """Handles explicit scroll commands, including target-seeking scrolls."""
+        query = payload.strip()
+        normalized_query = self.parser.normalize_verify_query(query)
+
+        # should be the usual case
+        if self._is_scroll_target_query(query):
+            return await self._scroll_to_target(session, step, query)
+
+        viewport = await self._get_scroll_metrics()
+        motion = self._classify_scroll_motion(normalized_query)
+
+        # scroll to top or botton intents
+        if motion == "absolute_top":
+            await self._scroll_to_position(0)
+        elif motion == "absolute_bottom":
+            await self._scroll_to_position(int(viewport["max_scroll_top"]))
+        else:
+            # failed to parse intent
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.ACTION_ERROR
+            reason = "Failed to identify scroll intent."
+            step.failure_reason = self._failure_details("SCROLL", query, {}, reason)
+            return False
+
+        step.status = StepStatus.PASSED
+        return True
+
+    def _parse_wait_duration(self, payload: str) -> Optional[float]:
+        """Parses a duration payload into seconds when the wait is time-based."""
         wait_time = 0.5
         msg = payload.lower()
 
         match = re.search(r"([\d\.]+)\s*(s|sec|seconds?|ms|m|mins?|minutes?)", msg)
-        if match:
-            val = float(match.group(1))
-            unit = match.group(2)
-            if unit.startswith("m") and not unit == "ms":
-                wait_time = val * 60
-            elif unit == "ms":
-                wait_time = val / 1000.0
-            else:
-                wait_time = val
+        if not match:
+            return None
 
-        self.logger.log_debug(step.id, f"Waiting for {wait_time}s (parsed from '{payload}')")
-        await asyncio.sleep(wait_time)
-        step.status = StepStatus.PASSED
-        return True
+        val = float(match.group(1))
+        unit = match.group(2)
+        if unit.startswith("m") and unit != "ms":
+            wait_time = val * 60
+        elif unit == "ms":
+            wait_time = val / 1000.0
+        else:
+            wait_time = val
+        return wait_time
+
+    def _is_scroll_target_query(self, payload: str) -> bool:
+        """Returns whether a scroll payload looks like a target-seeking command."""
+        query = self.parser.normalize_verify_query(payload)
+        if not query:
+            return False
+
+        if self._classify_scroll_motion(query):
+            return False
+
+        return self.parser.has_specific_target_subject(query)
+
+    def _classify_scroll_motion(self, payload: str) -> Optional[str]:
+        """Semantically classifies non-target scroll intent into absolute or relative motion."""
+        query = self.parser.normalize_verify_query(payload)
+        if not query:
+            return None
+
+        intent = self.parser.parse_verify_intent(query)
+        subject = (intent.get("keyword") or intent.get("subject") or "").strip().lower()
+        generic_scope_values = {"", "page", "screen", "view", "viewport", "document"}
+
+        if intent.get("position") == "top" and subject in generic_scope_values:
+            return "absolute_top"
+        if intent.get("position") == "bottom" and subject in generic_scope_values:
+            return "absolute_bottom"
+
+        return None
+
+    async def _get_scroll_metrics(self) -> Dict[str, float]:
+        """Fetches the current document scroll metrics."""
+        if not self.page:
+            return {"scroll_top": 0.0, "max_scroll_top": 0.0, "viewport_height": 720.0}
+
+        metrics = await self.page.evaluate(
+            """() => {
+                const root = document.scrollingElement || document.documentElement;
+                const viewportHeight = window.innerHeight || root.clientHeight || 720;
+                const scrollTop = root.scrollTop || window.scrollY || 0;
+                const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+                return { scrollTop, maxScrollTop, viewportHeight };
+            }"""
+        )
+        return {
+            "scroll_top": float(metrics.get("scrollTop", 0.0)),
+            "max_scroll_top": float(metrics.get("maxScrollTop", 0.0)),
+            "viewport_height": float(metrics.get("viewportHeight", 720.0)),
+        }
+
+    async def _get_scroll_top(self) -> float:
+        """Reads the current vertical scroll offset."""
+        if not self.page:
+            return 0.0
+
+        value = await self.page.evaluate(
+            "() => window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0"
+        )
+        return float(value or 0.0)
+
+    async def _build_perception_scope(self, session: TestSession) -> Optional[str]:
+        """Builds a narrow backend-session scope for a stable page position within one testcase."""
+        if not self.page:
+            return None
+
+        page_url = getattr(self.page, "url", None)
+        if not isinstance(page_url, str) or not page_url:
+            page_url = session.url
+        scroll_top = int(round(await self._get_scroll_top()))
+        return f"{session.id}|{page_url}|y={scroll_top}"
+
+    async def _scroll_by_pixels(self, delta: int) -> bool:
+        """Scrolls the page by a pixel delta."""
+        if not self.page:
+            return False
+        before = await self._get_scroll_top()
+        await self.page.evaluate("(amount) => window.scrollBy(0, amount)", delta)
+        after = await self._get_scroll_top()
+        return int(after) != int(before)
+
+    async def _scroll_to_position(self, top: int) -> bool:
+        """Scrolls the page to an absolute vertical position."""
+        if not self.page:
+            return False
+        before = await self._get_scroll_top()
+        await self.page.evaluate("(pos) => window.scrollTo(0, pos)", top)
+        after = await self._get_scroll_top()
+        return int(after) != int(before)
+
+    # pylint: disable=too-many-locals, too-many-return-statements, too-many-branches, too-many-statements
+    async def _scroll_to_target(self, session: TestSession, step: TestStep, payload: str) -> bool:
+        """Scrolls until a target enters the center band or the page range is exhausted."""
+        query = self.parser.normalize_verify_query(payload)
+        if not query:
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.PERCEPTION_MISMATCH
+            step.failure_reason = "Scroll target was empty."
+            return False
+
+        test_slug = _test_slug(session)
+        band_min = self.parser.config.scroll_center_band_min
+        band_max = self.parser.config.scroll_center_band_max
+        screenshot_name = f"{step.id}_scroll"
+        scroll_state = await self._get_scroll_metrics()
+        viewport_height = int(scroll_state["viewport_height"])
+        step_size = max(1, int(viewport_height * 0.5))
+        max_scroll_top = int(scroll_state["max_scroll_top"])
+        max_iterations = max(8, int(max_scroll_top / max(1, step_size)) * 2 + 8)
+        phase = 1
+        reasoning = ""
+        perception: Dict[str, Any] = {}
+
+        for _ in range(max_iterations):
+            path, persistent = self._artifact_path(test_slug, screenshot_name)
+            await self.page.screenshot(path=path, type="jpeg")
+            if persistent:
+                step.screenshot_after = path
+
+            try:
+                perception_scope = await self._build_perception_scope(session)
+                perception = await self.client.perceive(path, query=query, session_scope=perception_scope)
+                step.perception_result = perception
+            except Exception:  # pylint: disable=broad-exception-caught
+                perception = {}
+            finally:
+                if not persistent:
+                    self._cleanup_temporary_artifact(path)
+
+            self._log_perception_summary(step.id, query, perception, selected=None)
+            target = None
+            if perception:
+                intent = self.parser.parse_verify_intent(query)
+                target = self._select_grounded_target(intent, perception)
+            if target:
+                metrics = perception.get("viewport", {}) or {}
+                viewport = {
+                    "width": metrics.get("width", 1280),
+                    "height": metrics.get("height", viewport_height),
+                }
+                target_rect = _resolve_coords(target, viewport)
+                target_center_y = target_rect[1] + (target_rect[3] / 2)
+                band_top = viewport["height"] * band_min
+                band_bottom = viewport["height"] * band_max
+
+                session.metadata["target"] = target
+                session.metadata["last_perception"] = perception
+
+                if band_top <= target_center_y <= band_bottom:
+                    step.status = StepStatus.PASSED
+                    return True
+
+                current_scroll = await self._get_scroll_metrics()
+                if target_center_y < band_top:
+                    if int(current_scroll["scroll_top"]) <= 0:
+                        step.status = StepStatus.PASSED
+                        return True
+                    changed = await self._scroll_by_pixels(-step_size)
+                    if not changed:
+                        step.status = StepStatus.PASSED
+                        return True
+                    continue
+
+                if int(current_scroll["scroll_top"]) >= max_scroll_top:
+                    step.status = StepStatus.PASSED
+                    return True
+                changed = await self._scroll_by_pixels(step_size)
+                if not changed:
+                    step.status = StepStatus.PASSED
+                    return True
+                continue
+
+            current_scroll = await self._get_scroll_metrics()
+            current_top = int(current_scroll["scroll_top"])
+            max_top = int(current_scroll["max_scroll_top"])
+
+            if current_top < max_top:
+                changed = await self._scroll_by_pixels(step_size)
+                if changed:
+                    continue
+
+            if phase == 1:
+                phase = 2
+                if current_top != 0:
+                    await self._scroll_to_position(0)
+                    continue
+                if max_top > 0:
+                    await self._scroll_by_pixels(step_size)
+                    continue
+
+            reasoning = f"Scroll target '{query}' was not found after consuming the full page range."
+            break
+
+        step.status = StepStatus.FAILED
+        step.failure_type = FailureType.PERCEPTION_MISMATCH
+        step.failure_reason = self._failure_details(
+            "SCROLL", query, perception, reasoning or "Unable to locate target."
+        )
+        return False
+
+    def _select_grounded_target(self, intent: Dict[str, Any], perception: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Selects a real target, preferring backend-ranked matches when they truly match."""
+        top_matches = perception.get("top_matches") or []
+        filtered_top_matches = self.parser.filter_target_candidates(intent, top_matches)
+        if filtered_top_matches:
+            return filtered_top_matches[0]
+
+        elements = perception.get("elements") or []
+        filtered_elements = self.parser.filter_target_candidates(intent, elements)
+        if filtered_elements:
+            return filtered_elements[0]
+
+        return None
 
     def _resolve_payload(self, payload: str, session: TestSession) -> str:
         """Resolves placeholders in the payload string."""
@@ -678,6 +987,13 @@ class Automator:
 
         return match_found, reasoning
 
+    def _check_wait_for_match(self, intent: Dict[str, Any], perception: Dict[str, Any]) -> Tuple[bool, str]:
+        """Checks whether the target element is actually present for wait-for polling."""
+        target = self._select_grounded_target(intent, perception)
+        if target:
+            return True, "Target element became visible."
+        return False, "Target element not yet visible."
+
     def _is_positive_match(
         self, intent: Dict[str, Any], all_elements: List[Dict[str, Any]], perception: Dict[str, Any]
     ) -> bool:
@@ -719,7 +1035,8 @@ class Automator:
             step.screenshot_before = before_path
 
         try:
-            perception = await self.client.perceive(before_path, query=step.instruction)
+            perception_scope = await self._build_perception_scope(session)
+            perception = await self.client.perceive(before_path, query=step.instruction, session_scope=perception_scope)
             step.perception_result = perception
         finally:
             if not persistent:
@@ -928,7 +1245,8 @@ class Automator:
             await self.page.screenshot(path=path, type="jpeg")
 
             try:
-                result = await self.client.perceive(path, query=step.expectation)
+                perception_scope = await self._build_perception_scope(session)
+                result = await self.client.perceive(path, query=step.expectation, session_scope=perception_scope)
                 self._log_perception_summary(step.id, step.expectation, result, selected=None)
 
                 match_found = False
