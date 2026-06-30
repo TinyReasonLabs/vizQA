@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from vizQA.reasoning import MetadataGenerator, RankingEngine, SemanticParser
+from vizQA.reasoning import Intent, IntentAttributes, MetadataGenerator, RankingEngine, SemanticParser
 
 ELEMENTS = [
     {
@@ -38,14 +38,12 @@ ELEMENTS = [
 
 
 def _intent(keyword=None, color=None, position=None, state=None, negated=False, subject=""):
-    return {
-        "keyword": keyword,
-        "color": color,
-        "position": position,
-        "state": state,
-        "negated": negated,
-        "subject": subject,
-    }
+    return Intent(
+        keyword=keyword,
+        subject=subject,
+        negated=negated,
+        attributes=IntentAttributes(color=color, position=position, state=state),
+    )
 
 
 class TestAdvancedRanking:
@@ -109,7 +107,7 @@ class TestAdvancedRanking:
         mock_minilm.cosine_similarity.return_value = 0.5
 
         engine = RankingEngine(mock_minilm)
-        intent = {"keyword": "Settings", "subject": "Main page header"}
+        intent = Intent(keyword="Settings", subject="Main page header")
         results = engine.rank("Settings", intent, elements)
 
         assert len(results) == 2
@@ -161,7 +159,7 @@ class TestAdvancedRanking:
         mock_minilm = MagicMock()
         mock_minilm.encode.return_value = np.zeros(384)
         mock_minilm.cosine_similarity.return_value = 0.5
-        parser_adv = SemanticParser(minilm=mock_minilm)
+        parser_adv = SemanticParser(semantic_provider=mock_minilm)
         parser_adv.config.use_advanced_ranking = True
         result_adv = parser_adv.filter_elements_by_intent(_intent(keyword="Submit"), ELEMENTS)
         assert "_ranking_score" in result_adv[0]

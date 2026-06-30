@@ -1,0 +1,67 @@
+schema_version: 1
+language: en
+
+actions:
+  click:
+    synonyms: ["click", "tap", "hit", "press"]
+    anchors:
+      ["click the button", "click on the link", "tap the icon", "press the button", "hit submit", "click navigation item", "click sidebar link", "navigate to page", "go to section", "click on the menu item"]
+  right-click:
+    synonyms: ["right-click", "context-click", "right click", "perform right-click", "context click"]
+    anchors:
+      ["right-click the element", "right-click on the image", "context-click", "open context menu", "right click the link", "perform right-click"]
+  type:
+    synonyms: ["type", "enter", "input", "fill"]
+    anchors: ["type into the field", "enter text", "input the password", "fill in the form"]
+  hover:
+    synonyms: ["hover", "move to", "point"]
+    anchors: ["hover over the element", "move mouse to", "point at the icon"]
+  select:
+    synonyms: ["select", "choose", "pick"]
+    anchors: ["select from the dropdown", "choose an option", "pick from the list"]
+  check:
+    synonyms: ["check", "tick"]
+    anchors: ["check the box", "tick the checkbox", "mark as done"]
+  drag:
+    synonyms: ["drag"]
+    anchors: ["drag the element", "drag and drop", "pull the slider"]
+  drop:
+    synonyms: ["drop"]
+    anchors: ["drop the element", "drop into the zone"]
+  scroll:
+    synonyms: ["scroll"]
+    anchors: ["scroll down", "scroll to the bottom", "scroll the list", "drag scrollbar"]
+  clear:
+    synonyms: ["clear", "empty"]
+    anchors: ["clear the field", "empty the input", "erase the text"]
+  wait:
+    synonyms: ["wait", "pause", "sleep"]
+    anchors: ["wait for the element", "pause for 2 seconds", "sleep", "wait until visible"]
+  find:
+    synonyms: ["find", "locate"]
+    anchors: ["find the link", "locate the input"]
+
+verify_verbs: ["verify", "ensure", "assert", "check that", "make sure"]
+verify_boilerplate: ["should", "must", "appear", "visible", "shows", "exists", "present", "displayed", "open", "pause until"]
+
+colors: ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
+states: ["disabled", "enabled", "checked", "unchecked", "visible", "invisible", "hidden", "displayed", "active"]
+positions: ["top left", "top right", "bottom left", "bottom right", "top", "bottom", "left", "right", "center", "middle"]
+
+negation:
+  regex_terms:
+    ["not", "no longer", "should not", "shouldn't", "should not be", "disappear", "disappears", "disappeared", "gone", "invisible", "absent", "done", "finished", "closed", "close", "removed", "vanish", "vanishes", "vanished", "collapse", "collapsed", "dismissed", "dismisses", "hidden", "out of view", "not in view", "not showing anymore"]
+  anchors:
+    ["element is not present", "element is no longer visible", "element has disappeared", "element was removed", "element is absent", "element is hidden from view", "element is no longer displayed", "element has vanished", "element is gone from the page", "element is not showing anymore", "element should be done", "element disappears", "element vanishes", "element gets removed", "element closes", "element is done", "element is out of view", "element is not in view", "element is invisible", "element is not visible"]
+  positive_anchors:
+    ["element is present", "element is visible", "element is displayed", "element appears on the page", "element becomes visible", "element is shown", "element exists on the screen", "element is active and visible", "element is currently displayed", "element appears", "element shows up", "element becomes visible", "element opens", "element comes into view", "element is in view"]
+
+generic_scope_terms: ["page", "screen", "view", "viewport", "document", "whole page", "entire screen", "current view"]
+
+salience:
+  prominent_terms: ["main", "prominent", "large", "primary"]
+  subtle_terms: ["subtle", "small", "secondary", "background"]
+
+semantic:
+  target_anchors: ["button", "field", "input", "link", "icon", "text", "element", "box", "modal", "toast", "alert", "menu"]
+  conjunction_anchors: ["and", "then", "after", "next", ",", "also"]

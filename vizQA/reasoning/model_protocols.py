@@ -1,12 +1,13 @@
-"""
-Shared structural typing contracts for semantic models.
-"""
+"""Shared structural typing contracts for semantic providers."""
 
 from typing import Any, List, Optional, Protocol
 
 
-class SemanticModel(Protocol):
-    """Protocol for models used by parser and ranking components."""
+class SemanticProvider(Protocol):
+    """Protocol for semantic providers used by parser and ranking components."""
+
+    provider_id: str
+    revision: str
 
     def encode(self, text: str) -> Any:
         """Embed a string into a vector-like object."""
@@ -23,10 +24,11 @@ class SemanticModel(Protocol):
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Return candidate indices that semantically match a query."""
 
-    def classify_anchor_group(
-        self, text: str, threshold: float = 0.6, groups: Optional[List[str]] = None
-    ) -> Optional[str]:
+    def classify_anchor_group(self, text: str, threshold: float = 0.6, groups: Optional[Any] = None) -> Optional[str]:
         """Classify text against known semantic anchor groups."""
 
     def is_negation(self, text: str, threshold: float = 0.4, logit_threshold: float = 0.7, delta: float = 0.02) -> bool:
         """Return whether the text expresses a negation-style intent."""
+
+
+SemanticModel = SemanticProvider

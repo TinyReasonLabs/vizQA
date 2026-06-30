@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from vizQA.app.config import CONFIG
+from vizQA.reasoning.intent import Intent
+from vizQA.reasoning.language import LanguagePack, default_language_pack
 from vizQA.reasoning.model_protocols import SemanticModel
 from vizQA.reasoning.query_semantics import (
     is_boolean_query,
@@ -105,15 +107,18 @@ class SemanticReRanker:
 class SalienceScorer:
     """Phase 3: Adjusts scores based on visual salience and query modifiers."""
 
+    def __init__(self, language_pack: Optional[LanguagePack] = None):
+        self.language_pack = language_pack or default_language_pack()
+
     def boost(self, query: str, element: Dict[str, Any], current_score: float) -> float:
         """Boost a score when query wording implies salience preferences."""
         salience = element.get("salience", 0.5)
         q_lower = query.lower()
 
         multiplier = 1.0
-        if any(w in q_lower for w in ["main", "prominent", "large", "primary"]):
+        if any(w in q_lower for w in self.language_pack.salience_prominent_terms):
             multiplier += (salience - 0.5) * 2.0
-        elif any(w in q_lower for w in ["subtle", "small", "secondary", "background"]):
+        elif any(w in q_lower for w in self.language_pack.salience_subtle_terms):
             multiplier += (0.5 - salience) * 2.0
 
         return current_score * max(0.5, multiplier)
@@ -122,9 +127,9 @@ class SalienceScorer:
 class QuoteScorer:
     """Phase 3: Pins exact quoted matches to the top."""
 
-    def boost(self, intent: Dict[str, Any], element: Dict[str, Any], current_score: float) -> float:
+    def boost(self, intent: Intent, element: Dict[str, Any], current_score: float) -> float:
         """Boost elements whose text-like fields match the quoted keyword closely."""
-        keyword = intent.get("keyword")
+        keyword = intent.keyword
         if not keyword:
             return current_score
 
@@ -152,10 +157,11 @@ class QuoteScorer:
 class RankingEngine:
     """Orchestrates the multi-phase ranking pipeline."""
 
-    def __init__(self, minilm: Optional[SemanticModel] = None):
+    def __init__(self, minilm: Optional[SemanticModel] = None, language_pack: Optional[LanguagePack] = None):
         self.minilm = minilm
+        self.language_pack = language_pack or default_language_pack()
         self.reranker = SemanticReRanker(minilm) if minilm else None
-        self.salience_scorer = SalienceScorer()
+        self.salience_scorer = SalienceScorer(self.language_pack)
         self.quote_scorer = QuoteScorer()
 
     def _best_boolean_dense_score(self, query: str, label: str) -> float:
@@ -229,13 +235,13 @@ class RankingEngine:
         return best_score
 
     # pylint: disable=too-many-locals
-    def rank(self, query: str, intent: Dict[str, Any], elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def rank(self, query: str, intent: Intent, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Rank candidate elements using dense, sparse, and heuristic signals."""
         if not elements:
             return []
 
-        retrieval_query = intent.get("keyword") or intent.get("subject") or query
-        context_query = intent.get("subject") or query
+        retrieval_query = intent.query_text or query
+        context_query = intent.subject or query
 
         labels = []
         for elem in elements:
@@ -279,7 +285,7 @@ class RankingEngine:
 
         scored_elements.sort(key=lambda x: x["_ranking_score"], reverse=True)
 
-        min_prune_threshold = intent.get("threshold", CONFIG.semantic_match_threshold)
+        min_prune_threshold = intent.threshold if intent.threshold is not None else CONFIG.semantic_match_threshold
         final_elements = [el for el in scored_elements if el["_ranking_score"] > min_prune_threshold]
 
         return final_elements

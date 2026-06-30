@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vizQA.reasoning import MiniLM, SemanticParser
+from vizQA.reasoning import Intent, IntentAttributes, MiniLM, SemanticParser
 
 # ---------------------------------------------------------------------------
 # Mock elements (shared across test cases)
@@ -25,14 +25,12 @@ ELEMENTS = [
 
 
 def _intent(keyword=None, color=None, position=None, state=None, negated=False, subject=""):
-    return {
-        "keyword": keyword,
-        "color": color,
-        "position": position,
-        "state": state,
-        "negated": negated,
-        "subject": subject,
-    }
+    return Intent(
+        keyword=keyword,
+        subject=subject,
+        negated=negated,
+        attributes=IntentAttributes(color=color, position=position, state=state),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +127,7 @@ class TestWithMiniLM:
             return
 
         model = MiniLM(model_dir, logger=MagicMock())  # Pass a mock logger to avoid initializing a real logger in tests
-        return SemanticParser(minilm=model)
+        return SemanticParser(semantic_provider=model)
 
     def test_semantic_match_used(self):
         parser = self._make_parser()

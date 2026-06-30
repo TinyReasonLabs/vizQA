@@ -33,7 +33,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
         if minilm:
             self.minilm = minilm
-            self.parser.minilm = minilm
+            self.parser.semantic_provider = minilm
         else:
             # Load MiniLM if possible
             self.minilm = None
@@ -42,7 +42,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                 try:
                     self.minilm = MiniLM(str(model_dir), logger=self._logger)
                     # Synergize with parser
-                    self.parser.minilm = self.minilm
+                    self.parser.semantic_provider = self.minilm
                 except (FileNotFoundError, RuntimeError, ImportError) as e:
                     self._logger.log_debug(
                         0, f"MiniLM model could not be loaded: {e}. Falling back to rule-based parser."

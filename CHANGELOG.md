@@ -12,10 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New semantic `scroll to {elem}` support with full-range sweep handling, target centering, and edge-aware success when the page boundary prevents perfect centering.
 - New semantic `wait for {elem}` support with 1s polling and configurable timeout/poll cadence.
 - Runtime configuration knobs for wait-for timeout, wait-for poll interval, and scroll centering band.
+- Config-backed reasoning language packs under `vizQA/reasoning/languages`, including the default English pack for action synonyms, semantic anchors, verification vocabulary, state/color/position terms, generic page-scope terms, and salience terms.
+- A typed language-pack loader and canonical `Intent` model for parser, ranking, and runtime semantic reasoning.
+- Extra semantic metadata in installed weights metadata, including language id, language schema version, provider id, and provider revision.
 
 ### Changed
 
 - `scroll` commands now distinguish target-seeking scrolls from simple directional/page-boundary scrolls without breaking old timed `wait` behavior or `VERIFY` polling.
+- Semantic parsing, ranking, verification, wait-for polling, scroll intent classification, and historical target resolution now use the canonical `Intent` object end to end instead of the older dict-shaped intent flow.
+- MiniLM is now treated as a semantic provider implementation rather than the owner of product vocabulary; its action/state/color/position/negation anchors are sourced from the language pack instead of being hardcoded in the model adapter.
+- Parser and planner/provider wiring now consistently use the semantic-provider boundary, removing leftover `parser.minilm` coupling and other legacy intent/model compatibility paths.
+- Definition and planning failures are now reported as blocked test sessions instead of lane-level errors, so the failure stays attached to the relevant test case and the run continues.
 
 ## [0.3.1] - 2026-05-22
 
@@ -61,7 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial published release line (alpha). See the [README](README.md) for features
 and usage.
 
-[Unreleased]: https://github.com/Spospider/vizQA/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/Spospider/vizQA/compare/v0.3.1...v0.4.0
 [0.2.0]: https://github.com/Spospider/vizQA/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Spospider/vizQA/releases/tag/v0.1.0

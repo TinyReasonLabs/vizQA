@@ -22,7 +22,7 @@ from vizQA.app.exceptions import BrowserError, TestDefinitionError
 from vizQA.app.logger import reset_logger
 from vizQA.app.memory import StepStatus, TestSession, TestStep
 from vizQA.app.viewport import ViewportSpec
-from vizQA.rendering.events import RunFinishedEvent, StepStartedEvent
+from vizQA.rendering.events import RunFinishedEvent, SessionBlockedEvent, StepStartedEvent
 
 
 def _make_test_file(tmp_path: Path, name: str, body: str) -> Path:
@@ -330,6 +330,50 @@ steps: []
         automator.run_session.assert_not_called()
         reporter.on_session_start.assert_called_once()
         reporter.on_parent_step_start.assert_not_called()
+
+    asyncio.run(run_test())
+
+
+def test_run_single_test_reports_definition_errors_as_blocked_session(tmp_path):
+    async def run_test():
+        test_path = _make_test_file(
+            tmp_path,
+            "main",
+            """
+name: "Main Test"
+url: "http://example.com/app"
+steps:
+  - action: "Press Enter"
+""".strip(),
+        )
+
+        reporter = SimpleNamespace(
+            handle=MagicMock(),
+            register_session=MagicMock(),
+            sessions=[],
+        )
+        automator = SimpleNamespace(
+            parser=object(),
+            minilm=None,
+            logger=MagicMock(),
+        )
+
+        with patch("vizQA.app.cli.StepPlanner") as mock_planner_cls:
+            mock_planner_cls.return_value.decompose.side_effect = TestDefinitionError(
+                "Failed to plan steps for instruction 'Press Enter' (YAML line 7)"
+            )
+            result = await run_single_test(test_path, automator, reporter)
+
+        assert result is False
+        automator.logger.log_exception.assert_not_called()
+
+        emitted_events = [call.args[0] for call in reporter.handle.call_args_list]
+        assert "TopLevelTestStartedEvent" in {event.__class__.__name__ for event in emitted_events}
+        assert "SessionStartedEvent" in {event.__class__.__name__ for event in emitted_events}
+        assert "SessionBlockedEvent" in {event.__class__.__name__ for event in emitted_events}
+        assert "SessionFinishedEvent" in {event.__class__.__name__ for event in emitted_events}
+        blocked_event = next(event for event in emitted_events if isinstance(event, SessionBlockedEvent))
+        assert blocked_event.reason == "Failed to plan steps for instruction 'Press Enter' (YAML line 7)"
 
     asyncio.run(run_test())
 

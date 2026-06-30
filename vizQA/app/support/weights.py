@@ -13,6 +13,9 @@ from packaging.version import InvalidVersion, Version
 from vizQA.app.support.hf_revision import resolve_weights_revision
 
 MODEL_NAME = "minilm"
+DEFAULT_LANGUAGE = "en"
+DEFAULT_LANGUAGE_SCHEMA_VERSION = 1
+DEFAULT_PROVIDER_ID = "minilm"
 DEFAULT_LEGACY_WEIGHTS_VERSION = "0.1.0"
 METADATA_FILE_NAME = ".vizqa-weights.json"
 METADATA_VERSION = 1
@@ -55,7 +58,17 @@ def read_weights_metadata(weights_dir: Optional[Path] = None) -> Optional[dict[s
         return None
 
 
-def write_weights_metadata(weights_dir: Path, *, package_version: str, revision: str) -> Path:
+# pylint: disable=too-many-arguments
+def write_weights_metadata(
+    weights_dir: Path,
+    *,
+    package_version: str,
+    revision: str,
+    language: str = DEFAULT_LANGUAGE,
+    language_schema_version: int = DEFAULT_LANGUAGE_SCHEMA_VERSION,
+    provider_id: str = DEFAULT_PROVIDER_ID,
+    provider_revision: Optional[str] = None,
+) -> Path:
     """Persist local metadata about the currently installed weights."""
     metadata_path = get_weights_metadata_path(weights_dir)
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +79,10 @@ def write_weights_metadata(weights_dir: Path, *, package_version: str, revision:
                 "model_name": MODEL_NAME,
                 "package_version": package_version,
                 "weights_revision": revision,
+                "language": language,
+                "language_schema_version": language_schema_version,
+                "provider_id": provider_id,
+                "provider_revision": provider_revision or revision,
                 "installed_at": datetime.now(timezone.utc).isoformat(),
             },
             indent=2,

@@ -309,6 +309,41 @@ def _emit_report_event(reporter: Any, event: Any) -> None:
             reporter.on_step_done(event.step, viewport=lane_viewport)
 
 
+# pylint: disable=too-many-arguments
+def _emit_test_definition_failure(
+    reporter: Any,
+    *,
+    owner_key: str,
+    test_path: Path,
+    test_name: str,
+    viewport: Optional[ViewportSpec],
+    reason: str,
+    dependency_results: Optional[List[Dict[str, Any]]] = None,
+) -> TestSession:
+    """Emit a blocked session for definition/planning failures."""
+
+    session = TestSession(
+        id=str(uuid.uuid4())[:8],
+        test_name=test_name,
+        file_stem=test_path.stem,
+        url="",
+        steps=[],
+        artifacts={},
+        headers={},
+        is_dependency=False,
+        dependency_results=dependency_results or [],
+        viewport_name=viewport.name if viewport else None,
+        viewport_slug=viewport.slug if viewport else None,
+        viewport_width=viewport.width if viewport else None,
+        viewport_height=viewport.height if viewport else None,
+    )
+    _register_reporter_session(reporter, session)
+    _emit_report_event(reporter, SessionStartedEvent(owner_key=owner_key, session=session))
+    _emit_report_event(reporter, SessionBlockedEvent(session_id=session.id, reason=reason))
+    _emit_report_event(reporter, SessionFinishedEvent(session=session))
+    return session
+
+
 def _event_viewport(reporter: Any, session_id: str) -> Optional[ViewportSpec]:
     """Best-effort viewport lookup for legacy reporter test doubles."""
 
@@ -627,23 +662,58 @@ async def run_single_test(
     :param dependency_cache: Optional cache for storing dependency results within a run
     :return: True if test passed, False otherwise
     """
-    test_data = _load_test_data(test_path)
     owner_key = owner_key or _top_level_owner_key(test_path)
-    expected_dependency_total = (
-        len(_resolve_dependencies(test_path)) if (not is_dependency and test_data.get("requires")) else 0
-    )
+    test_name = test_path.stem
+    test_data: dict[str, Any] = {}
+    load_error: TestDefinitionError | None = None
+    dependency_error: TestDefinitionError | None = None
+
+    try:
+        test_data = _load_test_data(test_path)
+        test_name = test_data.get("name", test_path.stem)
+    except TestDefinitionError as err:
+        load_error = err
+
+    expected_dependency_total = 0
+    if not is_dependency and test_data.get("requires"):
+        try:
+            expected_dependency_total = len(_resolve_dependencies(test_path))
+        except TestDefinitionError as err:
+            dependency_error = err
 
     if not is_dependency:
         _emit_report_event(
             reporter,
             TopLevelTestStartedEvent(
                 owner_key=owner_key,
-                test_name=test_data.get("name", test_path.stem),
+                test_name=test_name,
                 file_stem=test_path.stem,
                 display_path=_display_path(test_path),
                 expected_dependency_total=expected_dependency_total,
             ),
         )
+
+    if load_error is not None:
+        _emit_test_definition_failure(
+            reporter,
+            owner_key=owner_key,
+            test_path=test_path,
+            test_name=test_name,
+            viewport=viewport,
+            reason=load_error.user_message,
+        )
+        return False
+
+    if dependency_error is not None:
+        _emit_test_definition_failure(
+            reporter,
+            owner_key=owner_key,
+            test_path=test_path,
+            test_name=test_name,
+            viewport=viewport,
+            reason=dependency_error.user_message,
+        )
+        return False
 
     # Resolve and run dependencies (only if not already a dependency)
     dependency_results: List[Dict[str, Any]] = []
@@ -665,11 +735,23 @@ async def run_single_test(
             planner = StepPlanner(
                 model_name="minilm", parser=automator.parser, minilm=automator.minilm, logger=automator.logger
             )
-            steps = planner.decompose(test_data.get("steps", []))
+            try:
+                steps = planner.decompose(test_data.get("steps", []))
+            except TestDefinitionError as err:
+                _emit_test_definition_failure(
+                    reporter,
+                    owner_key=owner_key,
+                    test_path=test_path,
+                    test_name=test_name,
+                    viewport=viewport,
+                    reason=err.user_message,
+                    dependency_results=dependency_results,
+                )
+                return False
 
             session = TestSession(
                 id=str(uuid.uuid4())[:8],
-                test_name=test_data.get("name", test_path.stem),
+                test_name=test_name,
                 file_stem=test_path.stem,
                 url=test_data.get("url", ""),
                 steps=steps,
@@ -703,7 +785,19 @@ async def run_single_test(
         model_name="minilm", parser=automator.parser, minilm=automator.minilm, logger=automator.logger
     )
 
-    steps = planner.decompose(test_data.get("steps", []))
+    try:
+        steps = planner.decompose(test_data.get("steps", []))
+    except TestDefinitionError as err:
+        _emit_test_definition_failure(
+            reporter,
+            owner_key=owner_key,
+            test_path=test_path,
+            test_name=test_name,
+            viewport=viewport,
+            reason=err.user_message,
+            dependency_results=dependency_results,
+        )
+        return False
 
     local_artifacts = _load_artifacts(test_data.get("artifacts", {}), test_path)
     artifacts = {**inherited_artifacts, **local_artifacts}
@@ -716,7 +810,7 @@ async def run_single_test(
 
     session = TestSession(
         id=str(uuid.uuid4())[:8],
-        test_name=test_data.get("name", test_path.stem),
+        test_name=test_name,
         file_stem=test_path.stem,
         url=test_data.get("url", ""),
         steps=steps,

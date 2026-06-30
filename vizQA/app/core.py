@@ -5,6 +5,7 @@ Core execution engine for vision-driven UI automation.
 # pylint: disable=invalid-name, too-many-lines
 import asyncio
 import copy
+import inspect
 import os
 import re
 import sys
@@ -27,7 +28,7 @@ from vizQA.app.exceptions import (
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
 from vizQA.app.support.weights import get_model_dir
-from vizQA.reasoning import MiniLM, SemanticParser
+from vizQA.reasoning import Intent, MiniLM, SemanticParser
 
 if TYPE_CHECKING:
     from vizQA.app.logger import SessionLogger
@@ -81,7 +82,7 @@ class Automator:
             self.logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        self.parser = SemanticParser(minilm=self.minilm, logger=self.logger)
+        self.parser = SemanticParser(semantic_provider=self.minilm, logger=self.logger)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -495,9 +496,9 @@ class Automator:
 
         intent = self.parser.parse_verify_intent(query)
         self.logger.log_debug(step.id, f"Parsed intent: {intent}")
-        keyword = str(intent.get("keyword") or "")
-        subject = str(intent.get("subject") or "")
-        position = str(intent.get("position") or "")
+        keyword = str(intent.keyword or "")
+        subject = str(intent.subject or "")
+        position = str(intent.position or "")
         if keyword:
             perc_query = f"'{keyword}' {subject} {position}"
         elif subject or position:
@@ -652,12 +653,12 @@ class Automator:
             return None
 
         intent = self.parser.parse_verify_intent(query)
-        subject = (intent.get("keyword") or intent.get("subject") or "").strip().lower()
+        subject = intent.query_text.strip().lower()
         generic_scope_values = {"", "page", "screen", "view", "viewport", "document"}
 
-        if intent.get("position") == "top" and subject in generic_scope_values:
+        if intent.position == "top" and subject in generic_scope_values:
             return "absolute_top"
-        if intent.get("position") == "bottom" and subject in generic_scope_values:
+        if intent.position == "bottom" and subject in generic_scope_values:
             return "absolute_bottom"
 
         return None
@@ -667,7 +668,7 @@ class Automator:
         if not self.page:
             return {"scroll_top": 0.0, "max_scroll_top": 0.0, "viewport_height": 720.0}
 
-        metrics = await self.page.evaluate(
+        metrics = self.page.evaluate(
             """() => {
                 const root = document.scrollingElement || document.documentElement;
                 const viewportHeight = window.innerHeight || root.clientHeight || 720;
@@ -676,6 +677,10 @@ class Automator:
                 return { scrollTop, maxScrollTop, viewportHeight };
             }"""
         )
+        if inspect.isawaitable(metrics):
+            metrics = await metrics
+        if not isinstance(metrics, dict):
+            metrics = {}
         return {
             "scroll_top": float(metrics.get("scrollTop", 0.0)),
             "max_scroll_top": float(metrics.get("maxScrollTop", 0.0)),
@@ -687,10 +692,15 @@ class Automator:
         if not self.page:
             return 0.0
 
-        value = await self.page.evaluate(
+        value = self.page.evaluate(
             "() => window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0"
         )
-        return float(value or 0.0)
+        if inspect.isawaitable(value):
+            value = await value
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     async def _build_perception_scope(self, session: TestSession) -> Optional[str]:
         """Builds a narrow backend-session scope for a stable page position within one testcase."""
@@ -831,7 +841,7 @@ class Automator:
         )
         return False
 
-    def _select_grounded_target(self, intent: Dict[str, Any], perception: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _select_grounded_target(self, intent: Intent, perception: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Selects a real target, preferring backend-ranked matches when they truly match."""
         top_matches = perception.get("top_matches") or []
         filtered_top_matches = self.parser.filter_target_candidates(intent, top_matches)
@@ -967,27 +977,27 @@ class Automator:
             raise ArtifactError(f"Failed to upload file artifact for '{file_path}'", internal_detail=str(e)) from e
 
     def _check_verification_match(
-        self, session: TestSession, intent: Dict[str, Any], perception: Dict[str, Any]
+        self, session: TestSession, intent: Intent, perception: Dict[str, Any]
     ) -> Tuple[bool, str]:
         """Checks if the current perception matches the verification intent."""
         all_elements = perception.get("elements", [])
         match_found = False
         reasoning = ""
 
-        if intent.get("negated"):
+        if intent.negated:
             match_found = self.parser.verify_negation(all_elements, intent, history_metadata=session.metadata)
             if not match_found:
                 reasoning = "Negation failure: Element remains in the view"
         else:
             match_found = self._is_positive_match(intent, all_elements, perception)
 
-        if match_found and not intent.get("negated"):
+        if match_found and not intent.negated:
             session.metadata["last_perception"] = perception
             self._update_historical_target(session, intent, all_elements)
 
         return match_found, reasoning
 
-    def _check_wait_for_match(self, intent: Dict[str, Any], perception: Dict[str, Any]) -> Tuple[bool, str]:
+    def _check_wait_for_match(self, intent: Intent, perception: Dict[str, Any]) -> Tuple[bool, str]:
         """Checks whether the target element is actually present for wait-for polling."""
         target = self._select_grounded_target(intent, perception)
         if target:
@@ -995,21 +1005,19 @@ class Automator:
         return False, "Target element not yet visible."
 
     def _is_positive_match(
-        self, intent: Dict[str, Any], all_elements: List[Dict[str, Any]], perception: Dict[str, Any]
+        self, intent: Intent, all_elements: List[Dict[str, Any]], perception: Dict[str, Any]
     ) -> bool:
         """Determines if a positive (non-negated) verification is successful."""
         filtered = self.parser.filter_elements_by_intent(intent, all_elements)
-        if filtered and (intent.get("keyword") or intent.get("color") or intent.get("position")):
+        if filtered and intent.has_targeting_clauses():
             return True
-        if perception.get("elements") and not any(intent.get(k) for k in ["keyword", "color", "position"]):
+        if perception.get("elements") and not intent.has_targeting_clauses():
             return True
         return False
 
-    def _update_historical_target(
-        self, session: TestSession, intent: Dict[str, Any], all_elements: List[Dict[str, Any]]
-    ):
+    def _update_historical_target(self, session: TestSession, intent: Intent, all_elements: List[Dict[str, Any]]):
         """Updates the session history with the matched target."""
-        subj = (intent.get("subject") or intent.get("keyword") or "").lower().strip()
+        subj = intent.normalized_subject.lower().strip()
         if not subj:
             return
 

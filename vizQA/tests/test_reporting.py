@@ -86,6 +86,7 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
 
     async def test_execute_verify_logs_candidates_with_no_selected_element(self):
         from vizQA.app.memory import TestSession, TestStep
+        from vizQA.reasoning import Intent
 
         session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
         step = TestStep(id="verify1", instruction="VERIFY: success")
@@ -96,9 +97,7 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
         self.automator.client.perceive = AsyncMock(return_value=perception)
         self.automator.logger = MagicMock()
         self.automator.verbosity = 2
-        self.automator.parser.parse_verify_intent = MagicMock(
-            return_value={"keyword": "success", "subject": "", "position": "", "color": None, "negated": False}
-        )
+        self.automator.parser.parse_verify_intent = MagicMock(return_value=Intent(keyword="success"))
 
         with (
             patch.object(self.automator, "_check_verification_match", return_value=(True, "")),
