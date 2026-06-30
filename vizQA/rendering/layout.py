@@ -54,8 +54,10 @@ def compose_layout(snapshot: RunSnapshot, *, height: int, width: int = 120) -> G
 
     if snapshot.display_mode == DisplayMode.SILENT:
         items.append(build_compact_run_row(focused_run, focused=True, width=row_width, include_pass_badges=False))
-        items.extend(_build_silent_detail_rows(focused_run, height=height, used_lines=len(items)))
+        detail_height = max(1, height - len(items) - 1)
+        items.extend(_build_silent_detail_rows(focused_run, height=detail_height, used_lines=len(items)))
         return Group(*items)
 
-    items.append(build_focused_body(snapshot, focused_run, height=height, width=row_width))
+    body_height = max(1, height - len(items))
+    items.append(build_focused_body(snapshot, focused_run, height=body_height, width=row_width))
     return Group(*items)

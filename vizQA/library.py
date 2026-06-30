@@ -1,4 +1,3 @@
-# pylint:disable=W9015
 """Public library API for embedding vizQA into Playwright tests."""
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from playwright.async_api import Page
 
 from vizQA.app.client import PerceptionClient
 from vizQA.app.core import Automator
-from vizQA.app.logger import NullLogger, get_logger
+from vizQA.app.logger import get_default_logger, get_logger, wrap_logger
 from vizQA.app.memory import TestSession, TestStep
 from vizQA.planning import StepPlanner
 
@@ -50,6 +49,7 @@ class VizQASession:
     browser lifecycle under the caller's control.
     """
 
+    # pylint: disable=too-many-arguments
     def __init__(
         self,
         page: Page,
@@ -57,6 +57,7 @@ class VizQASession:
         perception_backend: Optional[str] = None,
         verbosity: int = 0,
         debug_dir: Optional[str] = None,
+        logger: Optional[Any] = None,
     ):
         """Initialize a reusable vizQA library session.
 
@@ -67,13 +68,14 @@ class VizQASession:
         """
         self.page = page
         self.debug_dir = debug_dir
-        logger = get_logger("library") if debug_dir else NullLogger()
-        self.client = PerceptionClient(base_url=perception_backend, logger=logger)
+        normalized_logger = wrap_logger(logger) if logger is not None else None
+        self.logger = normalized_logger or (get_logger("library") if debug_dir else get_default_logger())
+        self.client = PerceptionClient(base_url=perception_backend, logger=self.logger)
         self._automator = Automator(
             perception_client=self.client,
             verbosity=verbosity,
             page=page,
-            logger=logger,
+            logger=self.logger,
             artifact_dir=debug_dir,
         )
         self._planner = StepPlanner(
@@ -87,7 +89,8 @@ class VizQASession:
         """Release vizQA-managed resources without closing the attached page."""
         await self._automator.stop()
 
-    async def run_step(self, instruction: str, **_options: Any) -> StepResult:
+    # pylint: disable=W0613,W9015
+    async def run_step(self, instruction: str, **options: Any) -> StepResult:
         """Run a single natural-language instruction against the attached page.
 
         :param instruction: A user-facing instruction such as
@@ -99,21 +102,23 @@ class VizQASession:
         success = await self._automator.run_session(session, preserve_page=True)
         return self._step_result(planned_step, session, success)
 
-    async def run_steps(self, instructions: Iterable[str], **_options: Any) -> List[StepResult]:
+    async def run_steps(self, instructions: Iterable[str], **options: Any) -> List[StepResult]:
         """Run multiple natural-language instructions in sequence.
 
         :param instructions: An iterable of natural-language instructions.
+        :param options: Optional keyword arguments for runtime configuration.
         :return: A list of :class:`StepResult` values in execution order.
         """
         results = []
         for instruction in instructions:
-            results.append(await self.run_step(instruction))
+            results.append(await self.run_step(instruction, **options))
         return results
 
     async def click(self, target: str, **options: Any) -> StepResult:
         """Click a target identified by visual or semantic description.
 
         :param target: The target description, such as ``"Sign in button"``.
+        :param options: Optional keyword arguments for runtime configuration.
         :return: The resulting :class:`StepResult`.
         """
         return await self.run_step(f"Click {target}", **options)
@@ -123,11 +128,13 @@ class VizQASession:
 
         :param target: The input target description.
         :param text: The text to type.
+        :param options: Optional keyword arguments for runtime configuration.
         :return: The resulting :class:`StepResult`.
         """
         return await self.run_step(f"Type '{text}' into {target}", **options)
 
-    async def verify(self, assertion: str, **_options: Any) -> StepResult:
+    # pylint: disable=W0613,W9015
+    async def verify(self, assertion: str, **options: Any) -> StepResult:
         """Run a visual verification against the current page state.
 
         :param assertion: The assertion to verify, such as
@@ -186,6 +193,7 @@ def attach(
     perception_backend: Optional[str] = None,
     verbosity: int = 0,
     debug_dir: Optional[str] = None,
+    logger: Optional[Any] = None,
 ) -> VizQASession:
     """Attach vizQA to an existing Playwright page.
 
@@ -193,6 +201,8 @@ def attach(
     :param perception_backend: Optional override for the perception backend URL.
     :param verbosity: Verbosity level for runtime diagnostics.
     :param debug_dir: Optional directory for persistent step artifacts.
+    :param logger: Optional application logger to receive vizQA diagnostics.
+        Can be a ``logging.Logger`` or any object exposing the vizQA logger methods.
     :return: A reusable :class:`VizQASession`.
     """
     return VizQASession(
@@ -200,6 +210,7 @@ def attach(
         perception_backend=perception_backend,
         verbosity=verbosity,
         debug_dir=debug_dir,
+        logger=logger,
     )
 
 
@@ -212,7 +223,7 @@ async def run_step(page: Page, instruction: str, **options: Any) -> StepResult:
         ``perception_backend``, ``verbosity``, or ``debug_dir``.
     :return: The resulting :class:`StepResult`.
     """
-    return await attach(page, **_attach_options(options)).run_step(instruction, **options)
+    return await attach(page, **_attachoptions(options)).run_step(instruction, **options)
 
 
 async def run_steps(page: Page, instructions: Iterable[str], **options: Any) -> List[StepResult]:
@@ -223,7 +234,7 @@ async def run_steps(page: Page, instructions: Iterable[str], **options: Any) -> 
     :param options: Optional attach-time configuration.
     :return: A list of :class:`StepResult` values.
     """
-    return await attach(page, **_attach_options(options)).run_steps(instructions, **options)
+    return await attach(page, **_attachoptions(options)).run_steps(instructions, **options)
 
 
 async def click(page: Page, target: str, **options: Any) -> StepResult:
@@ -234,7 +245,7 @@ async def click(page: Page, target: str, **options: Any) -> StepResult:
     :param options: Optional attach-time configuration.
     :return: The resulting :class:`StepResult`.
     """
-    return await attach(page, **_attach_options(options)).click(target, **options)
+    return await attach(page, **_attachoptions(options)).click(target, **options)
 
 
 # pylint:disable=redefined-builtin
@@ -247,7 +258,7 @@ async def type(page: Page, target: str, text: str, **options: Any) -> StepResult
     :param options: Optional attach-time configuration.
     :return: The resulting :class:`StepResult`.
     """
-    return await attach(page, **_attach_options(options)).type(target, text, **options)
+    return await attach(page, **_attachoptions(options)).type(target, text, **options)
 
 
 async def verify(page: Page, assertion: str, **options: Any) -> StepResult:
@@ -258,10 +269,10 @@ async def verify(page: Page, assertion: str, **options: Any) -> StepResult:
     :param options: Optional attach-time configuration.
     :return: The resulting :class:`StepResult`.
     """
-    return await attach(page, **_attach_options(options)).verify(assertion, **options)
+    return await attach(page, **_attachoptions(options)).verify(assertion, **options)
 
 
-def _attach_options(options: Dict[str, Any]) -> Dict[str, Any]:
+def _attachoptions(options: Dict[str, Any]) -> Dict[str, Any]:
     """Extract attach-relevant keyword arguments from a call.
 
     :param options: Arbitrary keyword arguments passed to a helper.
@@ -271,6 +282,7 @@ def _attach_options(options: Dict[str, Any]) -> Dict[str, Any]:
         "perception_backend": options.get("perception_backend"),
         "verbosity": options.get("verbosity", 0),
         "debug_dir": options.get("debug_dir"),
+        "logger": options.get("logger"),
     }
 
 

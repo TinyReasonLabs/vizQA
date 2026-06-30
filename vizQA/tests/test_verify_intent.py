@@ -6,6 +6,8 @@ and semantic slow-path), and combined cases — all without requiring MiniLM
 (uses keyword/regex fallbacks).
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from vizQA.reasoning import SemanticParser
@@ -103,6 +105,14 @@ VERIFY_INTENT_CASES = [
         "'Sign In' modal should disappear",
         {"negated": True, "subject": "modal", "keyword": "Sign In"},
     ),
+    (
+        "for the submit button",
+        {"subject": "submit button"},
+    ),
+    (
+        "to the reviews section",
+        {"subject": "reviews section"},
+    ),
 ]
 
 
@@ -115,6 +125,24 @@ def test_parse_verify_intent(query, expected):
         assert intent[key] == value, (
             f"Intent[{key!r}] expected {value!r}, got {intent[key]!r}\n" f"  query:  {query!r}\n" f"  intent: {intent}"
         )
+
+
+def test_has_specific_target_subject_rejects_generic_scope_terms_via_minilm():
+    mock_minilm = MagicMock()
+    mock_minilm.semantic_match.return_value = [0]
+    parser = SemanticParser(minilm=mock_minilm)
+
+    assert parser.has_specific_target_subject("to the page") is False
+    mock_minilm.semantic_match.assert_called_once()
+
+
+def test_has_specific_target_subject_accepts_specific_targets_via_minilm():
+    mock_minilm = MagicMock()
+    mock_minilm.semantic_match.return_value = []
+    parser = SemanticParser(minilm=mock_minilm)
+
+    assert parser.has_specific_target_subject("to the reviews section") is True
+    mock_minilm.semantic_match.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

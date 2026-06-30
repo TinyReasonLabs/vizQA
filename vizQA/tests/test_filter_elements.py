@@ -82,6 +82,40 @@ class TestSubstringFallback:
         result = parser.filter_elements_by_intent(_intent(keyword="Submit"), [])
         assert result == []
 
+    def test_filter_target_candidates_prefers_exact_phrase(self):
+        parser = SemanticParser()
+        candidates = [
+            {"text": "General Settings", "label": "settings-panel"},
+            {"text": "Settings", "label": "settings-button"},
+        ]
+
+        result = parser.filter_target_candidates(_intent(keyword="Settings"), candidates)
+
+        assert result == [candidates[1]]
+
+    def test_filter_target_candidates_falls_back_to_overlap_without_stop_words(self):
+        parser = SemanticParser()
+        candidates = [
+            {"text": "Debug Controls", "label": "debug-controls"},
+            {"text": "Welcome Card", "label": "welcome-card"},
+            {"text": "Section 1", "label": "section"},
+        ]
+
+        result = parser.filter_target_candidates(_intent(subject="debug controls section"), candidates)
+
+        assert result == [candidates[0]]
+
+    def test_filter_target_candidates_prefers_earlier_specific_terms_on_ties(self):
+        parser = SemanticParser()
+        candidates = [
+            {"text": "Reviews", "label": "reviews-link"},
+            {"text": "Section 1", "label": "section"},
+        ]
+
+        result = parser.filter_target_candidates(_intent(subject="reviews section"), candidates)
+
+        assert result == [candidates[0]]
+
 
 # ---------------------------------------------------------------------------
 # With MiniLM

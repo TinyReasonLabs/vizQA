@@ -44,6 +44,83 @@ def test_perception_service_error_wrapping():
         assert "Connection refused" in excinfo.value.internal_detail
 
 
+def test_perceive_without_scope_does_not_send_previous_session_id(tmp_path):
+    """Verify that fresh screenshots stay independent when no scope is provided."""
+    image_path = tmp_path / "fake.jpg"
+    image_path.write_bytes(b"fake image bytes")
+
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+    seen_payloads = []
+
+    class _FakeResponse:
+        def __init__(self, session_id: str):
+            self._session_id = session_id
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": self._session_id, "elements": [], "top_matches": []}
+
+    async def _fake_post(_url, files=None, data=None):
+        seen_payloads.append(dict(data or {}))
+        return _FakeResponse(f"session-{len(seen_payloads)}")
+
+    with patch("httpx.AsyncClient.post", side_effect=_fake_post):
+
+        async def run_perc():
+            await client.perceive(str(image_path), "first")
+            await client.perceive(str(image_path), "second")
+
+        import asyncio
+
+        asyncio.run(run_perc())
+
+    assert client.session_id == "session-2"
+    assert seen_payloads[0]["query"] == "first"
+    assert seen_payloads[1]["query"] == "second"
+    assert "session_id" not in seen_payloads[0]
+    assert "session_id" not in seen_payloads[1]
+
+
+def test_perceive_reuses_session_id_within_same_scope(tmp_path):
+    """Verify that the backend session is reused only for the same caller-provided scope."""
+    image_path = tmp_path / "fake.jpg"
+    image_path.write_bytes(b"fake image bytes")
+
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+    seen_payloads = []
+
+    class _FakeResponse:
+        def __init__(self, session_id: str):
+            self._session_id = session_id
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": self._session_id, "elements": [], "top_matches": []}
+
+    async def _fake_post(_url, files=None, data=None):
+        seen_payloads.append(dict(data or {}))
+        return _FakeResponse(f"session-{len(seen_payloads)}")
+
+    with patch("httpx.AsyncClient.post", side_effect=_fake_post):
+
+        async def run_perc():
+            await client.perceive(str(image_path), "first", session_scope="test|page-a|y=0")
+            await client.perceive(str(image_path), "second", session_scope="test|page-a|y=0")
+            await client.perceive(str(image_path), "third", session_scope="test|page-a|y=400")
+
+        import asyncio
+
+        asyncio.run(run_perc())
+
+    assert "session_id" not in seen_payloads[0]
+    assert seen_payloads[1]["session_id"] == "session-1"
+    assert "session_id" not in seen_payloads[2]
+
+
 def test_planner_line_reporting():
     """Verify that StepPlanner reports line numbers from YAML metadata."""
     planner = StepPlanner(logger=MagicMock())  # Use a mock logger to suppress output

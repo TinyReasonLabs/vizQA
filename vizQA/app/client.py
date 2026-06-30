@@ -19,9 +19,12 @@ class PerceptionClient:
     def __init__(self, base_url: Optional[str] = None, logger: Optional[Any] = None):
         self.base_url = base_url or PERCEPTION_BACKEND
         self.session_id = None
+        self._scoped_session_ids: Dict[str, str] = {}
         self._logger = logger or get_logger()
 
-    async def perceive(self, image_path: str, query: Optional[str] = None) -> Dict[str, Any]:
+    async def perceive(
+        self, image_path: str, query: Optional[str] = None, session_scope: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Send a screenshot to the perception API."""
         async with httpx.AsyncClient() as client:
             with open(image_path, "rb") as file:
@@ -31,15 +34,17 @@ class PerceptionClient:
                 }
                 if query:
                     data["query"] = query
-
-                if self.session_id:
-                    data["session_id"] = self.session_id
+                if session_scope and session_scope in self._scoped_session_ids:
+                    data["session_id"] = self._scoped_session_ids[session_scope]
 
                 try:
                     response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)
                     response.raise_for_status()
-                    self.session_id = response.json().get("session_id")
-                    return response.json()
+                    payload = response.json()
+                    self.session_id = payload.get("session_id")
+                    if session_scope and self.session_id:
+                        self._scoped_session_ids[session_scope] = self.session_id
+                    return payload
                 except (httpx.ConnectError, httpx.TimeoutException) as e:
                     self._logger.log_exception("client", e)
                     raise PerceptionServiceError(

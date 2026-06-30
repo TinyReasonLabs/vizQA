@@ -108,3 +108,27 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(success)
         self.automator.logger.log_perception.assert_called_once_with(step.id, "'success'  ", perception, selected=None)
+
+    async def test_execute_find_calls_perceive_with_explicit_session_scope(self):
+        from vizQA.app.memory import TestSession, TestStep
+
+        session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
+        step = TestStep(id="find1", instruction="FIND: Sign in")
+        perception = {"elements": [{"text": "Sign in"}]}
+
+        async def scoped_perceive(_path, query=None, session_scope=None):
+            self.assertEqual(query, "Sign in")
+            self.assertEqual(session_scope, "test_sess|http://test.com|y=0")
+            return perception
+
+        self.automator.page = MagicMock()
+        self.automator.page.screenshot = AsyncMock()
+        self.automator.page.evaluate = AsyncMock(return_value=0)
+        self.automator.client.perceive = AsyncMock(side_effect=scoped_perceive)
+        self.automator.logger = MagicMock()
+        self.automator.verbosity = 2
+
+        success = await self.automator._execute_find(session, step, "Sign in")
+
+        self.assertTrue(success)
+        self.automator.client.perceive.assert_awaited()
