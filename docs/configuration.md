@@ -115,6 +115,7 @@ Use this when:
 
 - the target element may take time to appear
 - your page needs more time after async work or network activity
+- you are using semantic actions like `Wait for the success toast` or `Wait for the dashboard to load`
 
 ### `VIZQA_WAIT_FOR_POLL_INTERVAL`
 
@@ -136,6 +137,8 @@ Use a smaller value when:
 - you want faster reactions to appearing elements
 - the page changes quickly and predictably
 
+This applies to semantic wait steps such as `Wait for the loader to disappear` as well as plain timed pauses.
+
 ### `VIZQA_SCROLL_CENTER_BAND_MIN` / `VIZQA_SCROLL_CENTER_BAND_MAX`
 
 Control the vertical band used by `scroll to {elem}` to decide whether the target is close enough to the center of the viewport.
@@ -148,6 +151,8 @@ export VIZQA_SCROLL_CENTER_BAND_MAX=0.65
 ```
 
 The defaults treat a target as centered when its vertical midpoint falls roughly in the middle 30% of the screen.
+
+These settings affect target-seeking scroll actions like `Scroll to the 'Debug controls' section` and `Scroll to the bottom of the page`.
 
 ### `VIZQA_STEP_DELAY_SECONDS`
 

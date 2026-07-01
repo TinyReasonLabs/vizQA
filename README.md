@@ -27,6 +27,8 @@ Modern UI automation has moved beyond brittle selectors and test-only frontend i
 - **Better Across Screen Sizes**: Useful for debugging and validating responsive behavior across different viewports, resolutions, and layout breakpoints.
 - **Better for Debugging**: Makes it easier to understand what was actually rendered at the time of failure, especially with transient UI, overlays, and state that only appears in certain conditions.
 
+## Flow design
+![High-level architecture](docs/high-level.png)
 ---
 
 ## Key Features
@@ -209,7 +211,7 @@ steps:
 vizQA follows a three-stage execution cycle for every step:
 
 1.  **Perception**: Takes a screenshot and sends it to the Perception API to identify all visual elements and their properties (bounds, text, color, state).
-2.  **Planning**: Uses semantic matching to understand intent and internally breaks down high-level instructions into atomic `find`, `do`, and `verify` commands to handle complex interactions.
+2.  **Planning**: Uses semantic matching to understand intent and internally breaks down high-level instructions into atomic `find`, `do`, and `verify` commands to handle complex interactions, including semantic actions like `scroll to` and `wait for`.
 3.  **Execution**: Performs the interaction via Playwright using precise pixel coordinates, ensuring we interact exactly with what was "seen."
 
 ---
