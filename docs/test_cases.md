@@ -204,11 +204,22 @@ Clicking:
 - action: "Click on 'Orders' in the navigation menu"
 ```
 
+Scrolling:
+
+```yaml
+- action: "Scroll to the 'Debug controls' section"
+  expect: "'Expire current session' button should be visible"
+- action: "Scroll to the bottom of the page"
+```
+
 Waiting:
 
 ```yaml
 - action: "Wait for the 'Recent Deals' table to load"
   expect: "Should see Acme Corp and Nebula Inc in the table"
+- action: "Wait for the success toast"
+  expect: "The success toast should appear"
+- action: "Wait for 5 seconds"
 ```
 
 Drag and drop:
@@ -279,6 +290,15 @@ Split broad scenarios into pre-requisites when state handoff matters.
 ### Keep expectations readable
 
 If an expectation becomes long, break the flow into more steps instead of packing multiple assertions into one sentence.
+
+### Use semantic scroll and wait commands
+
+`vizQA` understands two common semantic commands directly in test actions:
+
+- `Scroll to ...` for target-seeking scrolling, including section names and page-scope phrases like `top` and `bottom`
+- `Wait for ...` for both time-based pauses and semantic UI conditions such as a toast, table, modal, or loader state
+
+Prefer these forms when the action is really about reaching a visible target or waiting for a visible state, rather than describing lower-level mechanics.
 
 ### Use artifacts for repeated values
 
