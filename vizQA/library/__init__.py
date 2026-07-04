@@ -1,4 +1,4 @@
-# pylint: disable=W0622
+# pylint: disable=W0622,R0801
 """Public library package exports for vizQA."""
 
 from vizQA.library.core import (
