@@ -1,4 +1,5 @@
 import os
+from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -119,6 +120,81 @@ def test_perceive_reuses_session_id_within_same_scope(tmp_path):
     assert "session_id" not in seen_payloads[0]
     assert seen_payloads[1]["session_id"] == "session-1"
     assert "session_id" not in seen_payloads[2]
+
+
+def test_perceive_accepts_in_memory_bytes():
+    """Verify that PerceptionClient can send bytes without a filesystem path."""
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "bytes-session", "elements": [], "top_matches": []}
+
+    async def _fake_post(_url, files=None, data=None):
+        upload = files["file"]
+        assert upload.read() == b"fake image bytes"
+        assert data["query"] == "bytes-query"
+        return _FakeResponse()
+
+    with patch("httpx.AsyncClient.post", side_effect=_fake_post):
+
+        async def run_perc():
+            return await client.perceive(image_bytes=b"fake image bytes", query="bytes-query")
+
+        import asyncio
+
+        payload = asyncio.run(run_perc())
+
+    assert payload["session_id"] == "bytes-session"
+
+
+def test_perceive_accepts_file_objects():
+    """Verify that PerceptionClient can send an already-open file object."""
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "file-session", "elements": [], "top_matches": []}
+
+    async def _fake_post(_url, files=None, data=None):
+        upload = files["file"]
+        assert upload.read() == b"fake image bytes"
+        assert data["query"] == "file-query"
+        return _FakeResponse()
+
+    with patch("httpx.AsyncClient.post", side_effect=_fake_post):
+
+        async def run_perc():
+            file_obj = BytesIO(b"fake image bytes")
+            file_obj.name = "fake.jpg"
+            return await client.perceive(image_file=file_obj, query="file-query")
+
+        import asyncio
+
+        payload = asyncio.run(run_perc())
+
+    assert payload["session_id"] == "file-session"
+
+
+def test_perceive_requires_exactly_one_image_source():
+    """Verify that callers must provide exactly one image source."""
+    client = PerceptionClient(base_url="http://example.test", logger=MagicMock())
+
+    with pytest.raises(ValueError, match="exactly one"):
+        import asyncio
+
+        asyncio.run(client.perceive(query="missing-source"))
+
+    with pytest.raises(ValueError, match="exactly one"):
+        import asyncio
+
+        asyncio.run(client.perceive("fake.jpg", image_bytes=b"fake image bytes", query="too-many"))
 
 
 def test_planner_line_reporting():

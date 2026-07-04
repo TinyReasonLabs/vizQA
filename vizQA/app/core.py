@@ -9,7 +9,6 @@ import inspect
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -380,10 +379,9 @@ class Automator:
         :return: True if the step was executed successfully, False otherwise.
         """
         test_slug = _test_slug(session)
-        path, persistent = self._artifact_path(test_slug, f"{step.id}_before")
-        await self.page.screenshot(path=path, type="jpeg")
+        image_input, persistent = await self._capture_perception_input(test_slug, f"{step.id}_before")
         if persistent:
-            step.screenshot_before = path
+            step.screenshot_before = image_input["image_path"]
 
         # Check if the query refers to an artifact
         artifact_match = re.fullmatch(r"\{([a-zA-Z0-9_]+)\}", query)
@@ -397,13 +395,9 @@ class Automator:
             self.logger.log_warning(step.id, f"Artifact '{art_name}' not found in session.")
             raise ValueError(f"Artifact '{art_name}' not found in session.")
 
-        try:
-            perception_scope = await self._build_perception_scope(session)
-            perception = await self.client.perceive(path, query=query, session_scope=perception_scope)
-            step.perception_result = perception
-        finally:
-            if not persistent:
-                self._cleanup_temporary_artifact(path)
+        perception_scope = await self._build_perception_scope(session)
+        perception = await self.client.perceive(query=query, session_scope=perception_scope, **image_input)
+        step.perception_result = perception
 
         target = None
         if perception.get("top_matches"):
@@ -510,20 +504,16 @@ class Automator:
         reasoning = ""
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
-            path, persistent = self._artifact_path(test_slug, f"{step.id}_{screenshot_suffix}")
-            await self.page.screenshot(path=path, type="jpeg")
+            image_input, persistent = await self._capture_perception_input(test_slug, f"{step.id}_{screenshot_suffix}")
             if persistent:
-                step.screenshot_after = path
+                step.screenshot_after = image_input["image_path"]
 
             try:
                 perception_scope = await self._build_perception_scope(session)
-                perception = await self.client.perceive(path, query=perc_query, session_scope=perception_scope)
+                perception = await self.client.perceive(query=perc_query, session_scope=perception_scope, **image_input)
                 step.perception_result = perception
             except Exception:  # pylint: disable=broad-exception-caught
                 perception = {}
-            finally:
-                if not persistent:
-                    self._cleanup_temporary_artifact(path)
 
             if perception:
                 self._log_perception_summary(step.id, perc_query, perception, selected=None)
@@ -755,20 +745,16 @@ class Automator:
         perception: Dict[str, Any] = {}
 
         for _ in range(max_iterations):
-            path, persistent = self._artifact_path(test_slug, screenshot_name)
-            await self.page.screenshot(path=path, type="jpeg")
+            image_input, persistent = await self._capture_perception_input(test_slug, screenshot_name)
             if persistent:
-                step.screenshot_after = path
+                step.screenshot_after = image_input["image_path"]
 
             try:
                 perception_scope = await self._build_perception_scope(session)
-                perception = await self.client.perceive(path, query=query, session_scope=perception_scope)
+                perception = await self.client.perceive(query=query, session_scope=perception_scope, **image_input)
                 step.perception_result = perception
             except Exception:  # pylint: disable=broad-exception-caught
                 perception = {}
-            finally:
-                if not persistent:
-                    self._cleanup_temporary_artifact(path)
 
             self._log_perception_summary(step.id, query, perception, selected=None)
             target = None
@@ -1037,18 +1023,13 @@ class Automator:
         :return: True if the step was executed successfully, False otherwise.
         """
         test_slug = _test_slug(session)
-        before_path, persistent = self._artifact_path(test_slug, f"{step.id}_before")
-        await self.page.screenshot(path=before_path, type="jpeg")
+        image_input, persistent = await self._capture_perception_input(test_slug, f"{step.id}_before")
         if persistent:
-            step.screenshot_before = before_path
+            step.screenshot_before = image_input["image_path"]
 
-        try:
-            perception_scope = await self._build_perception_scope(session)
-            perception = await self.client.perceive(before_path, query=step.instruction, session_scope=perception_scope)
-            step.perception_result = perception
-        finally:
-            if not persistent:
-                self._cleanup_temporary_artifact(before_path)
+        perception_scope = await self._build_perception_scope(session)
+        perception = await self.client.perceive(query=step.instruction, session_scope=perception_scope, **image_input)
+        step.perception_result = perception
 
         self._log_perception_summary(
             step.id, step.instruction, perception, selected=self._select_perception_target(perception)
@@ -1249,12 +1230,13 @@ class Automator:
         test_slug = _test_slug(session)
 
         while (datetime.now() - start_wait).total_seconds() < timeout:
-            path, persistent = self._artifact_path(test_slug, f"{step.id}_after")
-            await self.page.screenshot(path=path, type="jpeg")
+            image_input, persistent = await self._capture_perception_input(test_slug, f"{step.id}_after")
 
             try:
                 perception_scope = await self._build_perception_scope(session)
-                result = await self.client.perceive(path, query=step.expectation, session_scope=perception_scope)
+                result = await self.client.perceive(
+                    query=step.expectation, session_scope=perception_scope, **image_input
+                )
                 self._log_perception_summary(step.id, step.expectation, result, selected=None)
 
                 match_found = False
@@ -1271,14 +1253,10 @@ class Automator:
 
                 if match_found:
                     if persistent:
-                        step.screenshot_after = path
+                        step.screenshot_after = image_input["image_path"]
                     return StepStatus.PASSED
             except Exception:
                 pass
-            finally:
-                if not persistent:
-                    self._cleanup_temporary_artifact(path)
-
             await asyncio.sleep(1)
 
         step.failure_type = FailureType.TIMEOUT
@@ -1309,23 +1287,28 @@ class Automator:
             return perception["elements"][0]
         return None
 
-    def _artifact_path(self, test_slug: str, name: str) -> Tuple[str, bool]:
-        """Returns a screenshot path and whether it should be kept as an artifact."""
+    async def _capture_perception_input(self, test_slug: str, name: str) -> Tuple[Dict[str, Any], bool]:
+        """Capture a JPEG for perception and return one valid image source payload.
+
+        :param test_slug: The slug for the current test session.
+        :param name: The name for the screenshot artifact.
+        :return: A tuple of (image_input, persistent) where image_input is a dict containing either
+                 'image_path' or 'image_bytes', and persistent is a boolean indicating whether the
+                 screenshot was saved to disk.
+        """
         if self.artifact_dir:
-            return str(Path(self.artifact_dir) / f"{test_slug}_{name}.jpg"), True
+            path = str(Path(self.artifact_dir) / f"{test_slug}_{name}.jpg")
+            await self.page.screenshot(path=path, type="jpeg")
+            return {"image_path": path}, True
 
-        temp_file = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with
-            prefix=f"vizqa_{test_slug}_{name}_", suffix=".jpg", delete=False
-        )
-        temp_file.close()
-        return temp_file.name, False
+        image_bytes = await self.page.screenshot(type="jpeg")
+        return {"image_bytes": image_bytes}, False
 
-    def _cleanup_temporary_artifact(self, path: str) -> None:
-        """Removes a non-persistent screenshot used only for perception."""
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
+    def _artifact_path(self, test_slug: str, name: str) -> Tuple[str, bool]:
+        """Returns a persistent artifact path for screenshots that should be kept."""
+        if not self.artifact_dir:
+            return "", False
+        return str(Path(self.artifact_dir) / f"{test_slug}_{name}.jpg"), True
 
 
 # ------------------------------------------------------------------

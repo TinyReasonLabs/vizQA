@@ -1,6 +1,8 @@
+import io
+import logging
 from pathlib import Path
 
-from vizQA.app.logger import configure_logging, get_logger, reset_logger
+from vizQA.app.logger import configure_logging, get_logger, reset_logger, wrap_logger
 
 
 def test_get_logger_uses_shared_timestamp_with_viewport_suffixes(tmp_path, monkeypatch):
@@ -114,3 +116,38 @@ def test_configure_logging_hides_debug_entries_when_disabled(tmp_path, monkeypat
     lines = Path(logger.log_path).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert "SESSION" in lines[0]
+
+
+def test_stdlib_logger_adapter_uses_same_compact_perception_format():
+    stream = io.StringIO()
+    logger = logging.getLogger("vizqa.test.logger.adapter")
+    logger.handlers.clear()
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    logger.addHandler(logging.StreamHandler(stream))
+
+    try:
+        adapter = wrap_logger(logger)
+        response = {
+            "elements": [
+                {
+                    "text": "Sign in",
+                    "salience": 0.91,
+                    "similarity": 0.88,
+                    "bounds": [10, 20, 50, 60],
+                    "spatial": {"position": "top-right"},
+                }
+            ]
+        }
+
+        adapter.log_perception("step-4", "sign in button", response, selected=response["elements"][0])
+    finally:
+        logger.handlers.clear()
+
+    output = stream.getvalue().splitlines()
+    assert len(output) == 2
+    assert (
+        "[step-4] PERCEPTION query='sign in button' candidate=#1[src=elements text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]"
+        in output[0]
+    )
+    assert "selected=#1[src=elements text='Sign in' pos=top-right sal=0.91 sim=0.88 geom=b(10,20,50,60)]" in output[1]

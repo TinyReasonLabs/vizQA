@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config-backed reasoning language packs under `vizQA/reasoning/languages`, including the default English pack for action synonyms, semantic anchors, verification vocabulary, state/color/position terms, generic page-scope terms, and salience terms.
 - A typed language-pack loader and canonical `Intent` model for parser, ranking, and runtime semantic reasoning.
 - Extra semantic metadata in installed weights metadata, including language id, language schema version, provider id, and provider revision.
+- A new low-level library search API for inspecting the current page without executing an interaction, including `VizQASession.search(...)` plus the top-level `vizQA.search.search(...)` helper.
+- Typed search-layer result models, including `SearchResult` and `ElementMatch`, for callers that need bounds, centers, ranks, and backend metadata from perception results.
+- Perception-client coverage for all supported image sources (`image_path`, `image_bytes`, and `image_file`) plus validation that exactly one source is provided.
+- Library regression tests covering the in-memory screenshot path and the internal captured-image payload contract.
 
 ### Changed
 
@@ -23,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MiniLM is now treated as a semantic provider implementation rather than the owner of product vocabulary; its action/state/color/position/negation anchors are sourced from the language pack instead of being hardcoded in the model adapter.
 - Parser and planner/provider wiring now consistently use the semantic-provider boundary, removing leftover `parser.minilm` coupling and other legacy intent/model compatibility paths.
 - Definition and planning failures are now reported as blocked test sessions instead of lane-level errors, so the failure stays attached to the relevant test case and the run continues.
+- Clean logger.py, making similar code shared across loggers.
+- The embedded Python library API is now split into a high-level step layer and a low-level perception/search layer, while preserving the existing `attach`, `click`, `type`, `verify`, `run_step`, and `run_steps` entrypoints.
+- Search-related library symbols now live under the dedicated `vizQA.search` namespace instead of the root package import surface, and the implementation is organized under the new `vizQA/library/` package.
+- `PerceptionClient.perceive(...)` now accepts exactly one image source via `image_path`, `image_bytes`, or `image_file`, unifying path-based and in-memory uploads behind a single API.
+- Library-mode perception no longer creates temporary screenshot files on disk when `debug_dir` is unset; non-persistent screenshots stay in memory while persistent debug artifacts still use file paths.
+- Internal perception capture now returns a single image-source payload plus a persistence flag, reducing branching in the automator and library search paths.
 
 ## [0.3.1] - 2026-05-22
 
