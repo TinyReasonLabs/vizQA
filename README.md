@@ -7,6 +7,9 @@
 
 **vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA lets you write tests in natural language without brittle CSS selectors or XPath. It is not an LLM-based test runner: execution is rule-driven, CPU-friendly, and designed for repeatable, idempotent regression.
 
+> [!NOTE]
+> vizQA is currently in early alpha and still evolving as we work toward a more unified API. Expect some changes along the way, and feel free to share feedback as it develops.
+
 ![VizQA demo run](docs/header-demo-run.gif)
 
 
@@ -24,6 +27,8 @@ Modern UI automation has moved beyond brittle selectors and test-only frontend i
 - **Better Across Screen Sizes**: Useful for debugging and validating responsive behavior across different viewports, resolutions, and layout breakpoints.
 - **Better for Debugging**: Makes it easier to understand what was actually rendered at the time of failure, especially with transient UI, overlays, and state that only appears in certain conditions.
 
+## Flow design
+![High-level architecture](docs/high-level.png)
 ---
 
 ## Key Features
@@ -106,7 +111,21 @@ vizqa run tests/
 
 ### Use As a Library
 
-You can also embed `vizQA` inside an existing Playwright test and mix DOM-based and visual steps:
+You can also embed `vizQA` inside an existing Playwright test and mix DOM-based
+and visual steps. The library now exposes two additive levels:
+
+- high-level step execution with `click`, `type`, `verify`, and `run_step`
+- low-level perception/search via `vizQA.search` when another tool needs
+  coordinates and structured UI metadata without triggering an interaction
+
+Recommended imports:
+
+```python
+from vizQA import attach, click, run_step, run_steps, type, verify
+from vizQA.search import ElementMatch, SearchResult, search
+```
+
+High-level example:
 
 ```python
 from vizQA import attach
@@ -119,6 +138,23 @@ async def test_login(page):
     await page.get_by_label("Password").fill("AnalystPass!23")
     await vizqa.click("Sign in button")
     await vizqa.verify("Overview dashboard")
+```
+
+Low-level search example:
+
+```python
+from vizQA import attach
+from vizQA.search import search
+
+
+async def inspect_login(page):
+    vizqa = attach(page)
+    result = await vizqa.search("sign in button")
+
+    if result.best_match:
+        print(result.best_match.label)
+        print(result.best_match.center)
+        print(result.best_match.location)
 ```
 
 Library usage is artifact-light by default. If you want persistent screenshots for debugging, pass `debug_dir=...` when attaching.
@@ -206,7 +242,7 @@ steps:
 vizQA follows a three-stage execution cycle for every step:
 
 1.  **Perception**: Takes a screenshot and sends it to the Perception API to identify all visual elements and their properties (bounds, text, color, state).
-2.  **Planning**: Uses semantic matching to understand intent and internally breaks down high-level instructions into atomic `find`, `do`, and `verify` commands to handle complex interactions.
+2.  **Planning**: Uses semantic matching to understand intent and internally breaks down high-level instructions into atomic `find`, `do`, and `verify` commands to handle complex interactions, including semantic actions like `scroll to` and `wait for`.
 3.  **Execution**: Performs the interaction via Playwright using precise pixel coordinates, ensuring we interact exactly with what was "seen."
 
 ---

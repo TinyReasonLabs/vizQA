@@ -11,9 +11,12 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from vizQA.app.config import CONFIG
 from vizQA.app.logger import get_logger
+from vizQA.reasoning.clause_splitting import split_verify_conjunctions
+from vizQA.reasoning.intent import Intent, IntentAttributes
+from vizQA.reasoning.language import LanguagePack, default_language_pack
 from vizQA.reasoning.model_protocols import SemanticModel
+from vizQA.reasoning.query_semantics import lexical_term_score
 from vizQA.reasoning.ranking import RankingEngine
-from vizQA.reasoning.vocabulary import ParserVocabulary
 
 
 class SemanticNode(NamedTuple):
@@ -23,23 +26,36 @@ class SemanticNode(NamedTuple):
     value: str
 
 
+# pylint: disable=too-many-instance-attributes
 class SemanticParser:
     """
     Advanced Rule-Based Engine (AST Parser) for dissecting UI testing instructions.
     Optionally enhanced with MiniLM embeddings for robust intent classification.
     """
 
-    def __init__(self, minilm: Optional[SemanticModel] = None, logger: Optional[Any] = None):
+    def __init__(
+        self,
+        logger: Optional[Any] = None,
+        language_pack: Optional[LanguagePack] = None,
+        semantic_provider: Optional[SemanticModel] = None,
+    ):
         """Initialise the parser."""
-        self.minilm = minilm
+        self.language_pack = language_pack or default_language_pack()
+        self.semantic_provider = semantic_provider
         self.config = CONFIG
-        self._ranking_engine = RankingEngine(minilm) if minilm else None
+        self._ranking_engine = (
+            RankingEngine(self.semantic_provider, language_pack=self.language_pack) if self.semantic_provider else None
+        )
         self._logger = logger or get_logger()
+        self._negation_re = self.language_pack.negation_regex
+        self._action_anchor_groups = {
+            action_name: spec.anchors for action_name, spec in self.language_pack.actions.items() if spec.anchors
+        }
 
         # Cache length-sorted action synonyms for stable regex fallback
         self._action_synonyms_ordered = []
-        for ax_type, synonyms in ParserVocabulary.ACTION_VERBS.items():
-            for syn in synonyms:
+        for ax_type, spec in self.language_pack.actions.items():
+            for syn in spec.synonyms:
                 self._action_synonyms_ordered.append((syn, ax_type))
         self._action_synonyms_ordered.sort(key=lambda x: len(x[0]), reverse=True)
 
@@ -60,7 +76,7 @@ class SemanticParser:
 
         return nodes
 
-    def parse_verify_intent(self, query: str) -> Dict[str, Any]:
+    def parse_verify_intent(self, query: str) -> Intent:
         """
         Parses a verification query to extract specific intents.
 
@@ -72,27 +88,27 @@ class SemanticParser:
         detected via a fast regex pass **and** a semantic slow-path so that
         paraphrases like "the overlay should vanish" are also caught.
         """
-        intent: Dict[str, Any] = {
-            "keyword": None,
-            "color": None,
-            "position": None,
-            "state": None,
-            "negated": False,
-            "subject": query,
-        }
+        query = self.normalize_verify_query(query)
+        intent = Intent(subject=query)
         subject = query
 
         # 1. Extract quoted keyword
         quote_match = re.search(r"(['\"])(.*?)\1", query)
         if quote_match:
-            intent["keyword"] = quote_match.group(2)
+            intent = Intent(
+                keyword=quote_match.group(2),
+                subject=intent.subject,
+                negated=intent.negated,
+                attributes=intent.attributes,
+                source=intent.source,
+            )
             subject = subject.replace(quote_match.group(0), "")
 
         # 2. Extract specific attributes
-        intent["negated"], subject = self._extract_negation(query, subject)
-        intent["color"], subject = self._extract_color(query, subject)
-        intent["position"], subject = self._extract_position(query, subject)
-        intent["state"], subject = self._extract_state(query, subject)
+        negated, subject = self._extract_negation(query, subject)
+        color, subject = self._extract_color(query, subject)
+        position, subject = self._extract_position(query, subject)
+        state, subject = self._extract_state(query, subject)
 
         # 3. Clean up final subject
         subject = re.sub(r"\b(appears?|visible|shows?|exists?|present|displayed|opened?)\b", "", subject, flags=re.I)
@@ -105,29 +121,59 @@ class SemanticParser:
             subject,
             flags=re.IGNORECASE,
         )
-        intent["subject"] = re.sub(r"\s+", " ", subject).strip()
-        return intent
+        return Intent(
+            keyword=intent.keyword,
+            subject=re.sub(r"\s+", " ", subject).strip(),
+            negated=negated,
+            attributes=IntentAttributes(color=color, position=position, state=state),
+            source="rule",
+        )
+
+    def has_specific_target_subject(self, query_or_intent: Any) -> bool:
+        """Returns whether the parsed target is semantically more specific than generic page scope."""
+        intent = (
+            query_or_intent if isinstance(query_or_intent, Intent) else self.parse_verify_intent(str(query_or_intent))
+        )
+        target_text = intent.query_text.strip()
+        if not target_text:
+            return False
+        if not self.semantic_provider:
+            raise RuntimeError("SemanticParser.has_specific_target_subject requires a MiniLM-backed parser.")
+
+        generic_matches = self.semantic_provider.semantic_match(
+            target_text,
+            self.language_pack.generic_scope_terms,
+            threshold=self.config.semantic_match_threshold,
+        )
+        return not bool(generic_matches)
+
+    def normalize_verify_query(self, query: str) -> str:
+        """Strips generic wait/scroll prefixes before intent parsing."""
+        normalized = query.strip()
+        normalized = re.sub(r"^(for\s+the|for\s+an|for\s+a|for)\s+", "", normalized, flags=re.I)
+        normalized = re.sub(r"^(to\s+the|to\s+an|to\s+a|to)\s+", "", normalized, flags=re.I)
+        return normalized.strip()
 
     def _extract_negation(self, query: str, subject: str) -> Tuple[bool, str]:
         """Extracts negation intent."""
-        is_negated = bool(ParserVocabulary.NEGATION_RE.search(query))
-        if not is_negated and self.minilm:
-            is_negated = self.minilm.is_negation(query)
+        is_negated = bool(self._negation_re.search(query))
+        if not is_negated and self.semantic_provider:
+            is_negated = self.semantic_provider.is_negation(query)
 
         if is_negated:
-            subject = ParserVocabulary.NEGATION_RE.sub("", subject)
+            subject = self._negation_re.sub("", subject)
         return is_negated, subject
 
     def _extract_color(self, query: str, subject: str) -> Tuple[Optional[str], str]:
         """Extracts color intent."""
         for word in query.lower().split():
-            if word in ParserVocabulary.COLORS:
+            if word in self.language_pack.colors:
                 return word, re.sub(rf"\b{re.escape(word)}\b", "", subject, flags=re.I)
 
-        if self.minilm:
-            color = self.minilm.classify_anchor_group(query, threshold=self.config.intent_threshold)
+        if self.semantic_provider:
+            color = self.semantic_provider.classify_anchor_group(query, threshold=self.config.intent_threshold)
             if color:  # It returned a group name like 'color' or specific match
-                for c in ParserVocabulary.COLORS:
+                for c in self.language_pack.colors:
                     if re.search(rf"\b{re.escape(c)}\b", query, re.I):
                         return c, re.sub(rf"\b{re.escape(c)}\b", "", subject, flags=re.I)
         return None, subject
@@ -143,27 +189,28 @@ class SemanticParser:
 
     def _extract_state(self, query: str, subject: str) -> Tuple[Optional[str], str]:
         """Extracts state intent."""
-        for s in ParserVocabulary.STATES:
+        for s in self.language_pack.states:
             if re.search(rf"\b{re.escape(s)}\b", query.lower()):
                 return s, re.sub(rf"\b{re.escape(s)}\b", "", subject, flags=re.I)
         return None, subject
 
-    def filter_elements_by_intent(self, intent: Dict[str, Any], elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def filter_elements_by_intent(self, intent: Intent, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filters a list of perception elements based on a parsed intent dict."""
         if not elements:
             return []
 
         if self.config.use_advanced_ranking and self._ranking_engine:
-            query = intent.get("keyword") or intent.get("subject") or ""
+            query = intent.query_text
             return self._ranking_engine.rank(query, intent, elements)
 
-        query = intent.get("keyword") or intent.get("subject") or ""
+        query = intent.query_text
         current = self._filter_by_query(query, intent, elements) if query else elements
 
         # Non-destructive attribute filters
         for attr in ["color", "state"]:
-            if intent.get(attr):
-                val = intent[attr].lower()
+            val = getattr(intent, attr)
+            if val:
+                val = val.lower()
                 filtered = [
                     el
                     for el in current
@@ -173,38 +220,60 @@ class SemanticParser:
                 if filtered:
                     current = filtered
 
-        if intent.get("position"):
-            pos_filtered = self._filter_by_position(intent["position"], current)
+        if intent.position:
+            pos_filtered = self._filter_by_position(intent.position, current)
             if pos_filtered:
                 current = pos_filtered
 
         return current
 
-    def _filter_by_query(
-        self, query: str, intent: Dict[str, Any], elements: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def filter_target_candidates(self, intent: Intent, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter candidates for direct target grounding with stricter matching."""
+        if not candidates:
+            return []
+
+        query = intent.query_text.strip()
+        if not query:
+            return []
+
+        phrase_matches = [
+            candidate for candidate in candidates if self._phrase_match(query, self._candidate_match_text(candidate))
+        ]
+        if phrase_matches:
+            return self._prioritize_exact_matches(query, intent.keyword, phrase_matches)
+
+        strict_intent = intent.with_threshold(min(0.95, self.config.semantic_match_threshold + 0.05))
+        filtered = self.filter_elements_by_intent(strict_intent, candidates)
+        if filtered:
+            return filtered
+
+        return self._overlap_grounding_fallback(query, candidates)
+
+    def _filter_by_query(self, query: str, intent: Intent, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Core semantic and substring filtering logic."""
         candidates = [
             " ".join(filter(None, [el.get("placeholder") or el.get("text"), el.get("label"), el.get("name")]))
             for el in elements
         ]
 
-        if self.minilm:
+        if self.semantic_provider:
             matched_idxs = set(
-                self.minilm.semantic_match(query, candidates, threshold=self.config.semantic_match_threshold)
+                self.semantic_provider.semantic_match(query, candidates, threshold=self.config.semantic_match_threshold)
             )
-            if not matched_idxs and (intent.get("color") or intent.get("position")):
+            if not matched_idxs and (intent.color or intent.position):
                 matched_idxs = set(
-                    self.minilm.semantic_match(query, candidates, threshold=self.config.semantic_match_threshold - 0.10)
+                    self.semantic_provider.semantic_match(
+                        query, candidates, threshold=self.config.semantic_match_threshold - 0.10
+                    )
                 )
             base_filtered = [el for i, el in enumerate(elements) if i in matched_idxs]
         else:
             base_filtered = []
 
         if not base_filtered:
-            base_filtered = self._substring_fallback(query, intent.get("keyword"), elements)
+            base_filtered = self._substring_fallback(query, intent.keyword, elements)
 
-        return self._prioritize_exact_matches(query, intent.get("keyword"), base_filtered)
+        return self._prioritize_exact_matches(query, intent.keyword, base_filtered)
 
     def _substring_fallback(
         self, query: str, kw: Optional[str], elements: List[Dict[str, Any]]
@@ -254,6 +323,41 @@ class SemanticParser:
         ]
         return exact if exact else elements
 
+    def _overlap_grounding_fallback(self, query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fallback target grounding using generic lexical overlap, not stop-word pruning."""
+        terms = [term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) >= 3]
+        if len(terms) < 2:
+            return []
+
+        ranked_candidates = []
+        for index, candidate in enumerate(candidates):
+            candidate_text = self._candidate_match_text(candidate)
+            if not candidate_text:
+                continue
+
+            matched_terms = [
+                (term_index, len(term))
+                for term_index, term in enumerate(terms)
+                if lexical_term_score(term, candidate_text) > 0.0
+            ]
+            if not matched_terms:
+                continue
+
+            coverage = len(matched_terms) / len(terms)
+            if coverage < 0.5:
+                continue
+
+            total_length = sum(term_length for _, term_length in matched_terms)
+            first_match_index = min(term_index for term_index, _ in matched_terms)
+            ranked_candidates.append((coverage, total_length, -first_match_index, -index, candidate))
+
+        if not ranked_candidates:
+            return []
+
+        ranked_candidates.sort(reverse=True)
+        best_signature = ranked_candidates[0][:4]
+        return [candidate for *signature, candidate in ranked_candidates if tuple(signature) == best_signature]
+
     def _filter_by_position(self, p: str, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filters elements by spatial position."""
         filtered = []
@@ -285,6 +389,19 @@ class SemanticParser:
                 filtered.append(el)
         return filtered
 
+    @staticmethod
+    def _candidate_match_text(candidate: Dict[str, Any]) -> str:
+        """Build a searchable string for one perception candidate."""
+        parts = [candidate.get(key) for key in ("placeholder", "text", "label", "name")]
+        return " ".join(str(part).strip() for part in parts if part)
+
+    @staticmethod
+    def _phrase_match(query: str, candidate_text: str) -> bool:
+        """Return whether the candidate contains the requested phrase."""
+        q = re.sub(r"['\"]", "", query.lower()).strip()
+        c = re.sub(r"['\"]", "", candidate_text.lower()).strip()
+        return bool(q and c and q in c)
+
     def normalize_subject(self, subject: str) -> str:
         """
         Normalizes a subject string for consistent historical lookup.
@@ -293,14 +410,11 @@ class SemanticParser:
         """
         if not subject:
             return ""
-        return (
-            (self.parse_verify_intent(subject)["keyword"] or self.parse_verify_intent(subject)["subject"])
-            .lower()
-            .strip()
-        )
+        intent = self.parse_verify_intent(subject)
+        return intent.query_text.lower().strip()
 
     def resolve_historical_target(
-        self, intent: Dict[str, Any], history_metadata: Dict[str, Any]
+        self, intent: Intent, history_metadata: Dict[str, Any]
     ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
         """
         Resolves a historical target and its associated perception elements
@@ -308,7 +422,7 @@ class SemanticParser:
 
         Returns (target, before_elements).
         """
-        subj = intent.get("subject") or intent.get("keyword") or ""
+        subj = intent.normalized_subject
         if not subj:
             return None, []
 
@@ -322,9 +436,9 @@ class SemanticParser:
 
         # 2. Semantic lookup if direct match fails
         # history["history"] is expected to be Dict[norm_subj, {target, elements}]
-        if history and self.minilm:
+        if history and self.semantic_provider:
             history_keys = list(history.keys())
-            matched_idxs = self.minilm.semantic_match(
+            matched_idxs = self.semantic_provider.semantic_match(
                 norm_subj, history_keys, threshold=self.config.semantic_match_threshold + 0.05
             )
             if matched_idxs:
@@ -356,12 +470,12 @@ class SemanticParser:
         :return: True if the element is effectively 'gone'.
         """
         # 1. Normalize intent
-        if isinstance(intent_or_subject, dict):
+        if isinstance(intent_or_subject, Intent):
             intent = intent_or_subject
         else:
             intent = self.parse_verify_intent(str(intent_or_subject))
 
-        if not intent.get("keyword") and not intent.get("subject"):
+        if not intent.keyword and not intent.subject:
             return False
 
         # 2. Resolve target from history if needed
@@ -371,8 +485,7 @@ class SemanticParser:
         # 3. Identity-based check if target is provided
         if target:
             # Does the target actually match the intent?
-            pos_intent = intent.copy()
-            pos_intent["negated"] = False
+            pos_intent = intent.with_negated(False)
             matches_intent = self.filter_elements_by_intent(pos_intent, [target])
 
             if matches_intent:
@@ -393,8 +506,7 @@ class SemanticParser:
                 return True
 
         # 4. Fallback: Collective check
-        pos_intent = intent.copy()
-        pos_intent["negated"] = False
+        pos_intent = intent.with_negated(False)
         after_matches = self.filter_elements_by_intent(pos_intent, after_elements)
         self._logger.log_debug("verify_negation", f"after_matches={after_matches}")
         return len(after_matches) == 0
@@ -416,18 +528,22 @@ class SemanticParser:
         cleaned = re.sub(r"^(the|a|an)\b", "", cleaned, flags=re.IGNORECASE).strip()
         cleaned = re.sub(r"^(loader disappears)\b", r"\1", cleaned, flags=re.IGNORECASE).strip()  # Specific cleanup
 
-        # Split multiple verifications if "and" is present
-        # e.g. "is red and aligned right" -> ["is red", "aligned right"]
-        if re.search(r"\band\b", cleaned, re.I):
-            # Split if "and" is followed by a state, position, or another subject/boilerplate
-            # pylint: disable=line-too-long
-            parts = re.split(
-                r"\s+and\s+(?='|\"|the|a|an|it|is|should|must|at|in|on|color|state|visible|hidden|displayed|present|aligned|centered|top|bottom|left|right)",
-                cleaned,
-                flags=re.I,
-            )
-            if len(parts) > 1:
-                return [SemanticNode(type="VERIFY", value=p.strip()) for p in parts if p.strip()]
+        quotes: List[str] = []
+
+        def _protect_quote(match: re.Match[str]) -> str:
+            quotes.append(match.group(0))
+            return f"__QUOTE_{len(quotes)-1}__"
+
+        protected = re.sub(r"(['\"])(.*?)\1", _protect_quote, cleaned)
+        parts = split_verify_conjunctions(protected)
+        if len(parts) > 1:
+            restored_parts = []
+            for part in parts:
+                restored = part
+                for i, quote in enumerate(quotes):
+                    restored = restored.replace(f"__QUOTE_{i}__", quote)
+                restored_parts.append(SemanticNode(type="VERIFY", value=restored.strip()))
+            return restored_parts
 
         return [SemanticNode(type="VERIFY", value=cleaned)]
 
@@ -468,8 +584,8 @@ class SemanticParser:
         """Processes a single chunk in a sequence, handling inheritance and distributive targets."""
         lower_chunk = chunk.lower()
         is_verify = (
-            any(lower_chunk.startswith(v) for v in ParserVocabulary.VERIFY_VERBS)
-            or any(v in lower_chunk for v in ParserVocabulary.VERIFY_BOILERPLATE)
+            any(lower_chunk.startswith(v) for v in self.language_pack.verify_verbs)
+            or any(v in lower_chunk for v in self.language_pack.verify_boilerplate)
             or (
                 idx > 0
                 and nodes
@@ -569,20 +685,21 @@ class SemanticParser:
         if first in ["clear", "empty"]:
             return first, "clear"
 
-        if self.minilm:
-            # pylint: disable=protected-access
-            dtype = self.minilm.classify_anchor_group(
-                original, groups=self.minilm._action_groups, threshold=self.config.action_threshold
+        if self.semantic_provider:
+            dtype = self.semantic_provider.classify_anchor_group(
+                original, groups=self._action_anchor_groups, threshold=self.config.action_threshold
             )
             if dtype:
-                for syn in sorted(ParserVocabulary.ACTION_VERBS.get(dtype, []), key=len, reverse=True):
+                synonym_values = self.language_pack.actions[dtype].synonyms
+                for syn in sorted(synonym_values, key=len, reverse=True):
                     # Avoid matching "input" as verb if it's "the input"
                     pattern = rf"\b{re.escape(syn)}\b"
                     if syn == "input":
                         pattern = r"(?<!the\s)\binput\b"
                     if re.search(pattern, lower):
                         return syn, dtype
-                return ParserVocabulary.ACTION_VERBS[dtype][0], dtype
+                first_word = re.findall(r"[a-zA-Z-]+", lower)
+                return (first_word[0] if first_word else synonym_values[0]), dtype
 
         for syn, atype in self._action_synonyms_ordered:
             pattern = rf"\b{re.escape(syn)}\b"
@@ -598,7 +715,7 @@ class SemanticParser:
         """Attempts to inherit action from previous context."""
         words = protected.lower().split()
         if len(words) <= 3 or any(w in ["into", "to", "on", "in"] for w in words):
-            atype = next((at for at, syns in ParserVocabulary.ACTION_VERBS.items() if implicit in syns), None)
+            atype = next((at for at, spec in self.language_pack.actions.items() if implicit in spec.synonyms), None)
             return implicit, atype
         return None, None
 
@@ -701,11 +818,17 @@ class SemanticParser:
             if "until" in val:
                 return self._parse_verify(re.sub(rf"^{verb}\s+until\s+", "", val)), "element", None
             return [SemanticNode("DO", val)], "element", verb
+        if atype == "scroll":
+            scroll_target = self._clean_target_string(chunk, verb, atype)
+            return [SemanticNode("DO", chunk.lower().strip())], scroll_target or "element", verb
         if atype == "find":
             return [], target, None
 
         nodes = [SemanticNode("FIND", target)]
-        do_name = atype or verb or "interact"
+        canonical_synonyms = (
+            self.language_pack.actions.get(atype).synonyms if atype in self.language_pack.actions else []
+        )
+        do_name = verb if verb in canonical_synonyms else (atype or verb or "interact")
         do_val = (
             f"press {payload}" if atype == "click" and payload else (f"{do_name} {payload}" if payload else do_name)
         )

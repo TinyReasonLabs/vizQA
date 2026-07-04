@@ -14,8 +14,9 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 
 from vizQA.app.logger import get_logger
+from vizQA.reasoning.clause_splitting import split_verify_conjunctions
+from vizQA.reasoning.language import LanguagePack, default_language_pack
 from vizQA.reasoning.query_semantics import lexical_term_score, normalize_boolean_term, split_boolean_query
-from vizQA.reasoning.vocabulary import ParserVocabulary
 
 
 @dataclass
@@ -37,63 +38,6 @@ class MiniLM:
     Handles MiniLM ONNX inference for semantic similarity and intent classification.
     """
 
-    # Anchor word lists — used to build pre-computed embedding groups
-    _COLOR_ANCHORS = ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray"]
-    _STATE_ANCHORS = ["disabled", "enabled", "visible", "invisible", "hidden", "checked", "unchecked", "active"]
-    _POSITION_ANCHORS = [
-        "top",
-        "bottom",
-        "left",
-        "right",
-        "center",
-        "middle",
-        "top-left",
-        "top-right",
-        "bottom-left",
-        "bottom-right",
-    ]
-    _NEGATION_ANCHORS = [
-        "element is not present",
-        "element is no longer visible",
-        "element has disappeared",
-        "element was removed",
-        "element is absent",
-        "element is hidden from view",
-        "element is no longer displayed",
-        "element has vanished",
-        "element is gone from the page",
-        "element is not showing anymore",
-        "element should be done",
-        # state transitions
-        "element disappears",
-        "element vanishes",
-        "element gets removed",
-        "element closes",
-        "element is done",
-        "element is out of view",
-        "element is not in view",
-        "element is invisible",
-        "element is not visible",
-    ]
-
-    _POSITIVE_ANCHORS = [
-        "element is present",
-        "element is visible",
-        "element is displayed",
-        "element appears on the page",
-        "element becomes visible",
-        "element is shown",
-        "element exists on the screen",
-        "element is active and visible",
-        "element is currently displayed",
-        # state transitions
-        "element appears",
-        "element shows up",
-        "element becomes visible",
-        "element opens",
-        "element comes into view",
-        "element is in view",
-    ]
     _NEGATION_REGEX = re.compile(
         (
             r"\b("
@@ -114,40 +58,13 @@ class MiniLM:
         re.IGNORECASE,
     )
 
-    _ACTION_ANCHOR_GROUPS = {
-        "click": [
-            "click the button",
-            "click on the link",
-            "tap the icon",
-            "press the button",
-            "hit submit",
-            "click navigation item",
-            "click sidebar link",
-            "navigate to page",
-            "go to section",
-            "click on the menu item",
-        ],
-        "right-click": [
-            "right-click the element",
-            "right-click on the image",
-            "context-click",
-            "open context menu",
-            "right click the link",
-            "perform right-click",
-        ],
-        "type": ["type into the field", "enter text", "input the password", "fill in the form"],
-        "hover": ["hover over the element", "move mouse to", "point at the icon"],
-        "scroll": ["scroll down", "scroll to the bottom", "scroll the list", "drag scrollbar"],
-        "select": ["select from the dropdown", "choose an option", "pick from the list"],
-        "check": ["check the box", "tick the checkbox", "mark as done"],
-        "drag": ["drag the element", "drag and drop", "pull the slider"],
-        "clear": ["clear the field", "empty the input", "erase the text"],
-        "wait": ["wait for the element", "pause for 2 seconds", "sleep", "wait until visible"],
-    }
     _KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
 
     def __init__(self, model_dir: str, logger: Optional[Any] = None):
         self._logger = logger or get_logger()
+        self.language_pack: LanguagePack = default_language_pack()
+        self.provider_id = "minilm"
+        self.revision = "unknown"
         self.model_path = os.path.join(model_dir, "model.onnx")
         self.tokenizer_path = os.path.join(model_dir, "tokenizer.json")
 
@@ -163,33 +80,24 @@ class MiniLM:
         self.session = ort.InferenceSession(self.model_path)
         self.input_names = [i.name for i in self.session.get_inputs()]
 
-        # Pre-compute semantic anchors for step decomposition
-        self._action_anchors = self._compute_anchor_embeddings(
-            ["click", "type", "enter", "press", "hover", "verify", "check", "ensure", "assert"]
-        )
-        self._target_anchors = self._compute_anchor_embeddings(
-            ["button", "field", "input", "link", "icon", "text", "element", "box", "modal", "toast", "alert", "menu"]
-        )
-        self._conjunction_anchors = self._compute_anchor_embeddings(["and", "then", "after", "next", ",", "also"])
-
         # Pre-compute intent classification anchor groups
         self._intent_anchor_groups: Dict[str, np.ndarray] = {
-            "color": self._compute_anchor_embeddings(self._COLOR_ANCHORS),
-            "state": self._compute_anchor_embeddings(self._STATE_ANCHORS),
-            "position": self._compute_anchor_embeddings(self._POSITION_ANCHORS),
-            "negation": self._compute_anchor_embeddings(self._NEGATION_ANCHORS),
-            "positive": self._compute_anchor_embeddings(self._POSITIVE_ANCHORS),
+            "color": self._compute_anchor_embeddings(self.language_pack.colors),
+            "state": self._compute_anchor_embeddings(self.language_pack.states),
+            "position": self._compute_anchor_embeddings(self.language_pack.positions),
+            "negation": self._compute_anchor_embeddings(self.language_pack.negation_anchors),
+            "positive": self._compute_anchor_embeddings(self.language_pack.positive_anchors),
         }
 
         # Pre-compute action anchors
         self._action_groups: Dict[str, np.ndarray] = {
-            name: self._compute_anchor_embeddings(anchors) for name, anchors in self._ACTION_ANCHOR_GROUPS.items()
+            name: self._compute_anchor_embeddings(spec.anchors) for name, spec in self.language_pack.actions.items()
         }
 
         # Pre-compute action synonyms for semantic dissection
         all_syns = []
-        for ct, syn_list in ParserVocabulary.ACTION_VERBS.items():
-            for s in syn_list:
+        for ct, spec in self.language_pack.actions.items():
+            for s in spec.synonyms:
                 all_syns.append((s.lower(), ct))
         self._all_syns_sorted = sorted(all_syns, key=lambda x: len(x[0]), reverse=True)
         self._action_syn_set = set(s for s, _ in self._all_syns_sorted)
@@ -231,29 +139,6 @@ class MiniLM:
         """Splits a query into OR groups, each containing AND clauses, while preserving quoted text."""
         return split_boolean_query(query)
 
-    def best_anchor_similarity_centroid(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
-        """
-        Returns cosine similarity between vec and the centroid of anchor_matrix
-        (replaces max pooling with centroid-based similarity).
-        """
-        # Normalize input vector
-        norm_v = np.linalg.norm(vec)
-        if norm_v == 0:
-            return 0.0
-        vec_n = vec / norm_v
-
-        # Compute centroid of anchors
-        centroid = np.mean(anchor_matrix, axis=0)
-
-        # Normalize centroid
-        norm_c = np.linalg.norm(centroid)
-        if norm_c == 0:
-            return 0.0
-        centroid_n = centroid / norm_c
-
-        # Cosine similarity
-        return float(np.dot(vec_n, centroid_n))
-
     def best_anchor_similarity(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """Returns the highest cosine similarity between vec and any row in anchor_matrix."""
         norms_a = np.linalg.norm(anchor_matrix, axis=-1, keepdims=True)
@@ -279,6 +164,15 @@ class MiniLM:
         """
         if groups is None:
             groups = self._intent_anchor_groups
+        else:
+            groups = {
+                group_name: (
+                    anchor_matrix
+                    if isinstance(anchor_matrix, np.ndarray)
+                    else self._compute_anchor_embeddings(list(anchor_matrix))
+                )
+                for group_name, anchor_matrix in groups.items()
+            }
 
         vec = self.encode(text)
         best_group: Optional[str] = None
@@ -579,8 +473,8 @@ class MiniLM:
         protected_val = re.sub(
             r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", protected_val, flags=re.I
         ).strip()
-        # Split VERIFY on 'and' to emit separate VERIFY steps
-        for vp in re.split(r"\band\b", protected_val, flags=re.I):
+        # Split only on real verification conjunctions, not quoted/noun phrases.
+        for vp in split_verify_conjunctions(protected_val):
             vp = self._sd_restore(vp, quotes)
             vp = re.sub(r"\s+", " ", vp).strip()
             if vp:
@@ -879,6 +773,15 @@ class MiniLM:
             handled, nt = self._sd_handle_press_and_hold(lower_real, prev_target, all_steps)
             if handled:
                 prev_target = nt
+                continue
+
+            if canonical_type == "scroll":
+                scroll_payload = self._sd_restore(target_area, quotes).strip()
+                scroll_value = " ".join(
+                    part for part in [saved_literal or canonical_type, scroll_payload] if part
+                ).strip()
+                all_steps.append({"type": "DO", "value": scroll_value})
+                prev_target = self._sd_clean_target(scroll_payload) or prev_target or "element"
                 continue
 
             # 5. FINAL FALLBACK (standard verb + noun)

@@ -101,6 +101,59 @@ Use this when:
 - remote environments have higher rendering latency
 - you want faster local failures during development
 
+### `VIZQA_WAIT_FOR_TIMEOUT`
+
+Controls how long `wait for {elem}` polls before timing out.
+
+Example:
+
+```bash
+export VIZQA_WAIT_FOR_TIMEOUT=120
+```
+
+Use this when:
+
+- the target element may take time to appear
+- your page needs more time after async work or network activity
+- you are using semantic actions like `Wait for the success toast` or `Wait for the dashboard to load`
+
+### `VIZQA_WAIT_FOR_POLL_INTERVAL`
+
+Controls the polling cadence for `wait for {elem}`.
+
+Example:
+
+```bash
+export VIZQA_WAIT_FOR_POLL_INTERVAL=1.0
+```
+
+Use a larger value when:
+
+- you want fewer perception checks
+- the UI is expensive to inspect repeatedly
+
+Use a smaller value when:
+
+- you want faster reactions to appearing elements
+- the page changes quickly and predictably
+
+This applies to semantic wait steps such as `Wait for the loader to disappear` as well as plain timed pauses.
+
+### `VIZQA_SCROLL_CENTER_BAND_MIN` / `VIZQA_SCROLL_CENTER_BAND_MAX`
+
+Control the vertical band used by `scroll to {elem}` to decide whether the target is close enough to the center of the viewport.
+
+Example:
+
+```bash
+export VIZQA_SCROLL_CENTER_BAND_MIN=0.35
+export VIZQA_SCROLL_CENTER_BAND_MAX=0.65
+```
+
+The defaults treat a target as centered when its vertical midpoint falls roughly in the middle 30% of the screen.
+
+These settings affect target-seeking scroll actions like `Scroll to the 'Debug controls' section` and `Scroll to the bottom of the page`.
+
 ### `VIZQA_STEP_DELAY_SECONDS`
 
 Controls the small delay between interaction steps.

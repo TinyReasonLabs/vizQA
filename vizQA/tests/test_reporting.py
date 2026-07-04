@@ -86,6 +86,7 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
 
     async def test_execute_verify_logs_candidates_with_no_selected_element(self):
         from vizQA.app.memory import TestSession, TestStep
+        from vizQA.reasoning import Intent
 
         session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
         step = TestStep(id="verify1", instruction="VERIFY: success")
@@ -96,9 +97,7 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
         self.automator.client.perceive = AsyncMock(return_value=perception)
         self.automator.logger = MagicMock()
         self.automator.verbosity = 2
-        self.automator.parser.parse_verify_intent = MagicMock(
-            return_value={"keyword": "success", "subject": "", "position": "", "color": None, "negated": False}
-        )
+        self.automator.parser.parse_verify_intent = MagicMock(return_value=Intent(keyword="success"))
 
         with (
             patch.object(self.automator, "_check_verification_match", return_value=(True, "")),
@@ -108,3 +107,31 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(success)
         self.automator.logger.log_perception.assert_called_once_with(step.id, "'success'  ", perception, selected=None)
+
+    async def test_execute_find_calls_perceive_with_explicit_session_scope(self):
+        from vizQA.app.memory import TestSession, TestStep
+
+        session = TestSession(id="test_sess", test_name="Test", url="http://test.com")
+        step = TestStep(id="find1", instruction="FIND: Sign in")
+        perception = {"elements": [{"text": "Sign in"}]}
+
+        async def scoped_perceive(
+            image_path=None, query=None, session_scope=None, *, image_bytes=None, image_file=None
+        ):
+            self.assertEqual(query, "Sign in")
+            self.assertEqual(session_scope, "test_sess|http://test.com|y=0")
+            self.assertIsNotNone(image_path)
+            self.assertIsNone(image_bytes)
+            return perception
+
+        self.automator.page = MagicMock()
+        self.automator.page.screenshot = AsyncMock()
+        self.automator.page.evaluate = AsyncMock(return_value=0)
+        self.automator.client.perceive = AsyncMock(side_effect=scoped_perceive)
+        self.automator.logger = MagicMock()
+        self.automator.verbosity = 2
+
+        success = await self.automator._execute_find(session, step, "Sign in")
+
+        self.assertTrue(success)
+        self.automator.client.perceive.assert_awaited()

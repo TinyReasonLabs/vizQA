@@ -15,6 +15,7 @@ Usage::
 
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -55,7 +56,160 @@ class NullLogger:
         del args, kwargs
 
 
-class SessionLogger:
+class _StructuredLoggerBase:
+    """Shared structured logging helpers for file and stdlib-backed loggers."""
+
+    _logger: logging.Logger
+
+    def _prepare_log(self) -> None:
+        """Allow subclasses to lazily prepare their backing logger."""
+
+    def log_perception(
+        self,
+        step_id: str,
+        query: str,
+        response: Dict[str, Any],
+        selected: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Log perception candidates in vizQA's compact structured format."""
+        self._prepare_log()
+        candidates = response.get("elements", [])
+        ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
+
+        if ordered:
+            for index, element in enumerate(ordered, start=1):
+                self._logger.debug(
+                    "[%s] PERCEPTION query=%r candidate=%s",
+                    step_id,
+                    query,
+                    self._format_perception_candidate(element, index, "elements"),
+                )
+        else:
+            self._logger.debug("[%s] PERCEPTION query=%r candidate=none", step_id, query)
+
+        if selected is None:
+            self._logger.debug("[%s] PERCEPTION selected=none", step_id)
+            return
+
+        selected_rank = next((index + 1 for index, element in enumerate(candidates) if element is selected), 1)
+        self._logger.debug(
+            "[%s] PERCEPTION selected=%s",
+            step_id,
+            self._format_perception_candidate(selected, selected_rank, "elements"),
+        )
+
+    def log_step(
+        self,
+        step_id: str,
+        stage: str,
+        status: Any,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Log a step transition at INFO or ERROR level."""
+        self._prepare_log()
+        msg = "[%s] STEP  stage=%s  status=%s"
+        args: tuple = (step_id, stage, str(status))
+        if reason:
+            msg += "  reason=%r"
+            args = args + (reason,)
+
+        if "fail" in str(status).lower() or "error" in str(status).lower():
+            self._logger.error(msg, *args)
+        else:
+            self._logger.info(msg, *args)
+
+    def log_session(self, session_id: str, event: str, detail: str = "") -> None:
+        """Log a session lifecycle event."""
+        self._prepare_log()
+        self._logger.info("[%s] SESSION  event=%s  %s", session_id, event, detail)
+
+    def log_warning(self, step_id: str, message: str) -> None:
+        """Log a warning message."""
+        self._prepare_log()
+        self._logger.warning("[%s] WARN  %s", step_id, message)
+
+    def log_exception(self, step_id: str, exc: Exception) -> None:
+        """Log an exception with traceback."""
+        self._prepare_log()
+        self._logger.error("[%s] EXCEPTION  %s", step_id, str(exc), exc_info=exc)
+
+    def log_debug(self, step_id: str, message: str) -> None:
+        """Log a debug message."""
+        self._prepare_log()
+        self._logger.debug("[%s] %s", step_id, message)
+
+    def _format_perception_candidate(self, element: Dict[str, Any], rank: int, source: str) -> str:
+        text = element.get("text") or element.get("placeholder") or element.get("label") or element.get("name") or "-"
+        position = element.get("spatial", {}).get("position") or element.get("position") or "-"
+        salience = self._format_optional_float(element.get("salience"))
+        similarity = self._format_optional_float(element.get("similarity"))
+        geometry = self._format_geometry(element)
+        return f"#{rank}[src={source} text={text!r} pos={position} sal={salience} sim={similarity} geom={geometry}]"
+
+    def _format_geometry(self, element: Dict[str, Any]) -> str:
+        bounds = element.get("bounds")
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            joined = ",".join(self._format_coord(value) for value in bounds)
+            return f"b({joined})"
+
+        location = element.get("location")
+        if isinstance(location, (list, tuple)) and len(location) == 4:
+            joined = ",".join(f"{float(value):.2f}" for value in location)
+            return f"loc({joined})"
+
+        return "-"
+
+    @staticmethod
+    def _format_optional_float(value: Any) -> str:
+        if value is None:
+            return "-"
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "-"
+
+    @staticmethod
+    def _format_coord(value: Any) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.2f}"
+
+
+class StdlibLoggerAdapter(_StructuredLoggerBase):
+    """Adapts a stdlib logging.Logger to the vizQA structured logger interface."""
+
+    log_path: Optional[str] = None
+
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+
+
+def wrap_logger(logger: Any) -> Any:
+    """Return a logger compatible with vizQA's structured logging calls."""
+    if isinstance(logger, logging.Logger):
+        return StdlibLoggerAdapter(logger)
+    return logger
+
+
+def get_default_logger() -> Any:
+    """Return a logger that integrates with standard Python logging without file output."""
+    logger = logging.getLogger("vizqa")
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = True
+
+    if not logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        logger.addHandler(handler)
+
+    return StdlibLoggerAdapter(logger)
+
+
+class SessionLogger(_StructuredLoggerBase):
     """
     Thin wrapper around stdlib ``logging`` that persists developer debug
     information (perception responses, flow events, exceptions) to a file.
@@ -95,127 +249,8 @@ class SessionLogger:
         self._logger.addHandler(handler)
         self._handler_attached = True
 
-    # ------------------------------------------------------------------
-    # Structured log helpers
-    # ------------------------------------------------------------------
-
-    def log_perception(
-        self,
-        step_id: str,
-        query: str,
-        response: Dict[str, Any],
-        selected: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Logs compact, one-line perception diagnostics at DEBUG level."""
+    def _prepare_log(self) -> None:
         self._ensure_handler()
-        candidates = response.get("elements", [])
-        ordered = candidates[:_PERCEPTION_CANDIDATE_LIMIT]
-
-        if ordered:
-            for index, element in enumerate(ordered, start=1):
-                self._logger.debug(
-                    "[%s] PERCEPTION query=%r candidate=%s",
-                    step_id,
-                    query,
-                    self._format_perception_candidate(element, index, "elements"),
-                )
-        else:
-            self._logger.debug("[%s] PERCEPTION query=%r candidate=none", step_id, query)
-
-        if selected is None:
-            self._logger.debug("[%s] PERCEPTION selected=none", step_id)
-            return
-
-        selected_rank = next((index + 1 for index, element in enumerate(candidates) if element is selected), 1)
-        self._logger.debug(
-            "[%s] PERCEPTION selected=%s",
-            step_id,
-            self._format_perception_candidate(selected, selected_rank, "elements"),
-        )
-
-    def log_step(
-        self,
-        step_id: str,
-        stage: str,
-        status: Any,
-        reason: Optional[str] = None,
-    ) -> None:
-        """Logs a step status transition at INFO or ERROR level."""
-        self._ensure_handler()
-        msg = "[%s] STEP  stage=%s  status=%s"
-        args: tuple = (step_id, stage, str(status))
-        if reason:
-            msg += "  reason=%r"
-            args = args + (reason,)
-
-        if "fail" in str(status).lower() or "error" in str(status).lower():
-            self._logger.error(msg, *args)
-        else:
-            self._logger.info(msg, *args)
-
-    def log_session(self, session_id: str, event: str, detail: str = "") -> None:
-        """Logs a session-level lifecycle event (start, end, etc.)."""
-        self._ensure_handler()
-        self._logger.info("[%s] SESSION  event=%s  %s", session_id, event, detail)
-
-    def log_warning(self, step_id: str, message: str) -> None:
-        """Logs a degradation or fallback warning."""
-        self._ensure_handler()
-        self._logger.warning("[%s] WARN  %s", step_id, message)
-
-    def log_exception(self, step_id: str, exc: Exception) -> None:
-        """Logs an exception with full traceback."""
-        self._ensure_handler()
-        self._logger.error("[%s] EXCEPTION  %s", step_id, str(exc), exc_info=exc)
-
-    def log_debug(self, step_id: str, message: str) -> None:
-        """General-purpose DEBUG entry."""
-        self._ensure_handler()
-        self._logger.debug("[%s] %s", step_id, message)
-
-    def _format_perception_candidate(self, element: Dict[str, Any], rank: int, source: str) -> str:
-        """Formats one candidate into a compact, single-line summary."""
-        text = element.get("text") or element.get("placeholder") or element.get("label") or element.get("name") or "-"
-        position = element.get("spatial", {}).get("position") or element.get("position") or "-"
-        salience = self._format_optional_float(element.get("salience"))
-        similarity = self._format_optional_float(element.get("similarity"))
-        geometry = self._format_geometry(element)
-        return f"#{rank}[src={source} text={text!r} pos={position} " f"sal={salience} sim={similarity} geom={geometry}]"
-
-    def _format_geometry(self, element: Dict[str, Any]) -> str:
-        """Returns a compact geometry summary from bounds or normalized location."""
-        bounds = element.get("bounds")
-        if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
-            joined = ",".join(self._format_coord(value) for value in bounds)
-            return f"b({joined})"
-
-        location = element.get("location")
-        if isinstance(location, (list, tuple)) and len(location) == 4:
-            joined = ",".join(f"{float(value):.2f}" for value in location)
-            return f"loc({joined})"
-
-        return "-"
-
-    @staticmethod
-    def _format_optional_float(value: Any) -> str:
-        """Formats optional numeric values with short placeholders when missing."""
-        if value is None:
-            return "-"
-        try:
-            return f"{float(value):.2f}"
-        except (TypeError, ValueError):
-            return "-"
-
-    @staticmethod
-    def _format_coord(value: Any) -> str:
-        """Formats coordinates without trailing .0 for integer-like values."""
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value)
-        if number.is_integer():
-            return str(int(number))
-        return f"{number:.2f}"
 
 
 def get_logger(log_suffix: Optional[str] = None) -> SessionLogger:

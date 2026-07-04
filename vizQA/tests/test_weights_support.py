@@ -70,6 +70,10 @@ def test_write_weights_metadata_persists_expected_fields(tmp_path):
     assert data["package_version"] == "0.3.0"
     assert data["weights_revision"] == "0.2.0"
     assert data["metadata_version"] == 1
+    assert data["language"] == "en"
+    assert data["language_schema_version"] == 1
+    assert data["provider_id"] == "minilm"
+    assert data["provider_revision"] == "0.2.0"
     assert "installed_at" in data
 
 
