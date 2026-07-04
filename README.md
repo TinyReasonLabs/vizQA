@@ -111,7 +111,21 @@ vizqa run tests/
 
 ### Use As a Library
 
-You can also embed `vizQA` inside an existing Playwright test and mix DOM-based and visual steps:
+You can also embed `vizQA` inside an existing Playwright test and mix DOM-based
+and visual steps. The library now exposes two additive levels:
+
+- high-level step execution with `click`, `type`, `verify`, and `run_step`
+- low-level perception/search via `vizQA.search` when another tool needs
+  coordinates and structured UI metadata without triggering an interaction
+
+Recommended imports:
+
+```python
+from vizQA import attach, click, run_step, run_steps, type, verify
+from vizQA.search import ElementMatch, SearchResult, search
+```
+
+High-level example:
 
 ```python
 from vizQA import attach
@@ -124,6 +138,23 @@ async def test_login(page):
     await page.get_by_label("Password").fill("AnalystPass!23")
     await vizqa.click("Sign in button")
     await vizqa.verify("Overview dashboard")
+```
+
+Low-level search example:
+
+```python
+from vizQA import attach
+from vizQA.search import search
+
+
+async def inspect_login(page):
+    vizqa = attach(page)
+    result = await vizqa.search("sign in button")
+
+    if result.best_match:
+        print(result.best_match.label)
+        print(result.best_match.center)
+        print(result.best_match.location)
 ```
 
 Library usage is artifact-light by default. If you want persistent screenshots for debugging, pass `debug_dir=...` when attaching.

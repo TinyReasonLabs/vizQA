@@ -2,7 +2,8 @@
 Client for interacting with the perception API.
 """
 
-from typing import Any, Dict, Optional
+from io import BytesIO
+from typing import Any, BinaryIO, Dict, Optional
 
 import httpx
 
@@ -22,47 +23,79 @@ class PerceptionClient:
         self._scoped_session_ids: Dict[str, str] = {}
         self._logger = logger or get_logger()
 
+    # pylint: disable=too-many-arguments
     async def perceive(
-        self, image_path: str, query: Optional[str] = None, session_scope: Optional[str] = None
+        self,
+        image_path: Optional[str] = None,
+        query: Optional[str] = None,
+        session_scope: Optional[str] = None,
+        *,
+        image_bytes: Optional[bytes] = None,
+        image_file: Optional[BinaryIO] = None,
     ) -> Dict[str, Any]:
-        """Send a screenshot to the perception API."""
-        async with httpx.AsyncClient() as client:
-            with open(image_path, "rb") as file:
-                files = {"file": file}
-                data = {
-                    "similarity_threshold": 0.5,
-                }
-                if query:
-                    data["query"] = query
-                if session_scope and session_scope in self._scoped_session_ids:
-                    data["session_id"] = self._scoped_session_ids[session_scope]
+        """Send a screenshot to the perception API from exactly one image source."""
+        provided_sources = sum(
+            source is not None
+            for source in (
+                image_path,
+                image_bytes,
+                image_file,
+            )
+        )
+        if provided_sources != 1:
+            raise ValueError("perceive() requires exactly one of image_path, image_bytes, or image_file")
 
-                try:
-                    response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)
-                    response.raise_for_status()
-                    payload = response.json()
-                    self.session_id = payload.get("session_id")
-                    if session_scope and self.session_id:
-                        self._scoped_session_ids[session_scope] = self.session_id
-                    return payload
-                except (httpx.ConnectError, httpx.TimeoutException) as e:
-                    self._logger.log_exception("client", e)
-                    raise PerceptionServiceError(
-                        f"Could not connect to the visual perception service (at {self.base_url}).",
-                        internal_detail=str(e),
-                    ) from e
-                except httpx.HTTPStatusError as e:
-                    self._logger.log_exception("client", e)
-                    raise PerceptionServiceError(
-                        "The visual perception service returned an error.",
-                        internal_detail=f"HTTP Status {e.response.status_code}: {e.response.text}",
-                    ) from e
-                except Exception as e:
-                    self._logger.log_exception("client", e)
-                    raise PerceptionServiceError(
-                        "An unexpected error occurred while communicating with the visual perception service.",
-                        internal_detail=str(e),
-                    ) from e
+        if image_path is not None:
+            with open(image_path, "rb") as file:
+                return await self._perceive_file(file, query=query, session_scope=session_scope)
+
+        if image_bytes is not None:
+            file_obj = BytesIO(image_bytes)
+            file_obj.name = "vizqa-screenshot.jpg"
+            return await self._perceive_file(file_obj, query=query, session_scope=session_scope)
+
+        return await self._perceive_file(image_file, query=query, session_scope=session_scope)
+
+    async def _perceive_file(
+        self, file_obj: Any, query: Optional[str] = None, session_scope: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Send a screenshot file-like object to the perception API."""
+        async with httpx.AsyncClient() as client:
+            files = {"file": file_obj}
+            data = {
+                "similarity_threshold": 0.5,
+            }
+            if query:
+                data["query"] = query
+            if session_scope and session_scope in self._scoped_session_ids:
+                data["session_id"] = self._scoped_session_ids[session_scope]
+
+            try:
+                response = await client.post(f"{self.base_url}/v1/perceive", files=files, data=data)
+                response.raise_for_status()
+                payload = response.json()
+                self.session_id = payload.get("session_id")
+                if session_scope and self.session_id:
+                    self._scoped_session_ids[session_scope] = self.session_id
+                return payload
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    f"Could not connect to the visual perception service (at {self.base_url}).",
+                    internal_detail=str(e),
+                ) from e
+            except httpx.HTTPStatusError as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    "The visual perception service returned an error.",
+                    internal_detail=f"HTTP Status {e.response.status_code}: {e.response.text}",
+                ) from e
+            except Exception as e:
+                self._logger.log_exception("client", e)
+                raise PerceptionServiceError(
+                    "An unexpected error occurred while communicating with the visual perception service.",
+                    internal_detail=str(e),
+                ) from e
 
     async def search(self, session_id: str, query: str) -> Dict[str, Any]:
         """Perform a contextual search on an existing session."""

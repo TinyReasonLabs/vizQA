@@ -115,9 +115,13 @@ class TestFailureReporting(unittest.IsolatedAsyncioTestCase):
         step = TestStep(id="find1", instruction="FIND: Sign in")
         perception = {"elements": [{"text": "Sign in"}]}
 
-        async def scoped_perceive(_path, query=None, session_scope=None):
+        async def scoped_perceive(
+            image_path=None, query=None, session_scope=None, *, image_bytes=None, image_file=None
+        ):
             self.assertEqual(query, "Sign in")
             self.assertEqual(session_scope, "test_sess|http://test.com|y=0")
+            self.assertIsNotNone(image_path)
+            self.assertIsNone(image_bytes)
             return perception
 
         self.automator.page = MagicMock()

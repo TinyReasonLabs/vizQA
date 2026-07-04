@@ -6,6 +6,7 @@ This mode is useful when you want to mix:
 
 - normal DOM-based Playwright actions
 - visual and semantic `vizQA` actions
+- low-level perception/search queries for tool building
 - step-scoped assertions that read like user intent
 
 The current library API is:
@@ -14,6 +15,7 @@ The current library API is:
 - Playwright-first
 - designed to attach to an existing `Page`
 - non-owning with respect to the caller's browser lifecycle
+- split into a high-level step API and a low-level search API
 
 `vizQA` uses the current page state you give it. It does not launch a new browser or close your page when attached through the library API.
 
@@ -76,6 +78,16 @@ async def login(page):
 
 ## Public API
 
+The recommended public import split is:
+
+```python
+from vizQA import attach, click, run_step, run_steps, type, verify
+from vizQA.search import ElementMatch, SearchResult, search
+```
+
+Use the root `vizQA` package for the high-level step API, and `vizQA.search`
+for low-level perception/search functionality and its typed result models.
+
 ### Attach a Session
 
 ```python
@@ -104,12 +116,14 @@ Available helpers:
 
 ```python
 from vizQA import click, run_step, run_steps, type, verify
+from vizQA.search import search
 ```
 
 Supported calls:
 
 ```python
 await click(page, "Continue button")
+await search(page, "primary sign in button")
 await type(page, "email field", "analyst.user@example.com")
 await verify(page, "Success banner")
 await run_step(page, "Click the 'Continue' button")
@@ -122,13 +136,48 @@ await run_steps(page, [
 
 These helpers create a short-lived attached session around the provided `page`.
 
+### Low-Level Search API
+
+Use the search layer when you want `vizQA` to perceive the current page and
+return structured UI metadata without executing an interaction.
+
+```python
+from vizQA import attach
+from vizQA.search import search
+
+session = attach(page)
+
+result = await session.search("sign in button")
+print(result.best_match.label)
+print(result.best_match.center)
+print(result.best_match.location)
+
+one_off = await search(page, "email field")
+print(one_off.matches[0].label)
+```
+
+This layer is especially useful for:
+
+- tool builders that need coordinates or ranked candidates
+- hybrid Playwright helpers that decide what to do after inspection
+- callers that want typed perception data without committing to a step action
+
+Namespace notes:
+
+- `vizQA.search.search(page, query, ...)` is the top-level convenience helper
+- `session.search(query, ...)` is the reusable session-first form
+- `vizQA.search.ElementMatch` and `vizQA.search.SearchResult` are the public search result types
+- `vizQA.library` is now a package internally, but the recommended public imports remain the root `vizQA` helpers plus `vizQA.search`
+
 ### Session Methods
 
-The attached session mirrors the same operations:
+The attached session mirrors the same high-level operations and also exposes the
+low-level search method:
 
 ```python
 session = attach(page)
 
+await session.search("Continue button")
 await session.click("Continue button")
 await session.type("email field", "analyst.user@example.com")
 await session.verify("Success banner")
@@ -137,6 +186,51 @@ await session.run_steps([
     "Click the 'Sign In' button",
     "Type 'analyst.user' into the username field",
 ])
+```
+
+## Search Results
+
+Search calls return a `SearchResult` object with normalized perception data.
+
+Core fields:
+
+- `query`: the search string that was executed
+- `viewport`: backend viewport metadata for the screenshot
+- `session_id`: the backend perception session id
+- `best_match`: the primary `ElementMatch`, when one is available
+- `matches`: ranked `ElementMatch` values
+- `artifacts`: persistent screenshot paths when `debug_dir` is enabled
+- `metadata`: flexible extra search-level fields from the backend payload
+- `raw`: the original backend response for debugging or advanced consumers
+
+Each `ElementMatch` includes strict core attributes:
+
+- `id`
+- `type`
+- `label`
+- `location`
+- `center`
+- `rank`
+- `confidence`
+- `salience`
+- `similarity`
+
+And extension fields:
+
+- `attributes`: non-core element metadata such as backend-specific annotations
+- `raw`: the original element payload
+
+Example:
+
+```python
+from vizQA.search import SearchResult
+
+result = await session.search("sign in button")
+
+if result.best_match:
+    print(result.best_match.center)
+    print(result.best_match.attributes)
+    print(result.raw["session_id"])
 ```
 
 ## Step Results
@@ -178,6 +272,7 @@ assert result, result.raw["failure_reason"]
 When used as a library:
 
 - `vizQA` acts on the current page state
+- `session.search(...)` performs a fresh perception pass against the current page
 - it does not automatically reset navigation
 - it does not own browser startup
 - it does not close your page when you call `session.close()`
