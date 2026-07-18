@@ -6,6 +6,9 @@ actions:
     synonyms: ["click", "tap", "hit", "press"]
     anchors:
       ["click the button", "click on the link", "tap the icon", "press the button", "hit submit", "click navigation item", "click sidebar link", "navigate to page", "go to section", "click on the menu item"]
+  press-key:
+    synonyms: ["press key", "press keys"]
+    anchors: ["press key enter", "press keys control c", "press key arrow left", "press keyboard shortcut"]
   right-click:
     synonyms: ["right-click", "context-click", "right click", "perform right-click", "context click"]
     anchors:
@@ -44,6 +47,192 @@ actions:
 verify_verbs: ["verify", "ensure", "assert", "check that", "make sure"]
 verify_boilerplate: ["should", "must", "appear", "visible", "shows", "exists", "present", "displayed", "open", "pause until"]
 
+verify:
+  prefixes:
+    [
+      "pause until the",
+      "pause until",
+      "make sure that",
+      "make sure the",
+      "make sure an",
+      "make sure a",
+      "check that",
+      "ensure that",
+      "ensure the",
+      "ensure an",
+      "ensure a",
+      "assert that",
+      "assert the",
+      "assert an",
+      "assert a",
+      "verify that",
+      "verify the",
+      "verify an",
+      "verify a",
+      "verify",
+      "assert",
+      "ensure",
+      "make sure"
+    ]
+  trigger_terms: ["should"]
+  subject_noise:
+    [
+      "should appear",
+      "should close",
+      "should occur",
+      "center of",
+      "at the",
+      "in the",
+      "on the",
+      "of the",
+      "off the",
+      "should be",
+      "appears",
+      "appear",
+      "visible",
+      "shows",
+      "show",
+      "exists",
+      "exist",
+      "present",
+      "displayed",
+      "opened",
+      "opened",
+      "located",
+      "aligned",
+      "screen",
+      "should",
+      "is",
+      "be",
+      "been",
+      "was",
+      "were",
+      "has",
+      "have",
+      "had",
+      "the",
+      "an",
+      "a",
+      "of",
+      "on"
+    ]
+  query_prefixes: ["for the", "for an", "for a", "for", "to the", "to an", "to a", "to"]
+
+keypress:
+  prefixes: ["press key", "press keys"]
+  aliases:
+    ctrl: "Control"
+    control: "Control"
+    cmd: "Meta"
+    command: "Meta"
+    option: "Alt"
+    alt: "Alt"
+    esc: "Escape"
+    escape: "Escape"
+    return: "Enter"
+    enter: "Enter"
+    del: "Delete"
+    delete: "Delete"
+    pgup: "PageUp"
+    pageup: "PageUp"
+    pgdn: "PageDown"
+    pagedown: "PageDown"
+    left: "ArrowLeft"
+    right: "ArrowRight"
+    up: "ArrowUp"
+    down: "ArrowDown"
+    arrowleft: "ArrowLeft"
+    arrowright: "ArrowRight"
+    arrowup: "ArrowUp"
+    arrowdown: "ArrowDown"
+    controlormeta: "ControlOrMeta"
+    shift: "Shift"
+    meta: "Meta"
+    tab: "Tab"
+    backspace: "Backspace"
+    space: "Space"
+    spacebar: "Space"
+
+grammar:
+  articles: ["the", "a", "an"]
+  pronouns: ["it", "them"]
+  leading_prepositions: ["into", "onto", "over", "from", "of", "at", "on", "in", "to"]
+
+parser:
+  lead_in_noise_phrases: ["right then", "please navigate ahead", "i want you to"]
+  lead_in_noise_replacements:
+    right then: "then"
+    please navigate ahead: ""
+    i want you to: ""
+  target_cleanup_phrases:
+    ["please navigate ahead and", "please navigate ahead", "i want you to", "click on", "click", "type", "enter", "into"]
+  clause_splitters: ["then", "after", "while", "also"]
+  coordination_terms: ["and"]
+  coordination_punctuation: [","]
+  rhs_noise_words: ["please", "over"]
+  sequence_split_followers:
+    [
+      "'",
+      "\"",
+      "the",
+      "a",
+      "an",
+      "click",
+      "tap",
+      "type",
+      "enter",
+      "input",
+      "fill",
+      "select",
+      "press",
+      "hover",
+      "into",
+      "onto",
+      "last",
+      "first",
+      "clear",
+      "scroll",
+      "right",
+      "left",
+      "context",
+      "submit",
+      "cancel",
+      "delete",
+      "save",
+      "sign",
+      "log",
+      "password",
+      "username",
+      "email"
+    ]
+  distributive_plural_nouns: ["buttons", "fields", "icons", "inputs", "links", "checkboxes", "labels"]
+  wait_verbs: ["pause", "wait", "sleep"]
+  wait_condition_terms: ["until"]
+  verify_conjunction_terms: ["and"]
+  verify_conjunction_predicates:
+    ["it", "is", "are", "was", "were", "should", "must", "be", "appear", "appears", "visible", "hidden", "displayed", "present", "aligned", "center", "centered", "top", "bottom", "left", "right"]
+  hold_action_verbs: ["press", "select", "click", "tap"]
+  hold_modifier_terms: ["hold"]
+  bare_click_targets: ["submit"]
+  noun_action_guards:
+    input: ["the input"]
+  drag_target_connectors: ["onto", "to"]
+  select_source_connectors: ["from"]
+  type_target_connectors: ["into", "in"]
+
+wait:
+  duration_units:
+    ms: 0.001
+    s: 1
+    sec: 1
+    second: 1
+    seconds: 1
+    m: 60
+    min: 60
+    mins: 60
+    minute: 60
+    minutes: 60
+
 colors: ["red", "blue", "green", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
 states: ["disabled", "enabled", "checked", "unchecked", "visible", "invisible", "hidden", "displayed", "active"]
 positions: ["top left", "top right", "bottom left", "bottom right", "top", "bottom", "left", "right", "center", "middle"]
@@ -51,6 +240,8 @@ positions: ["top left", "top right", "bottom left", "bottom right", "top", "bott
 negation:
   regex_terms:
     ["not", "no longer", "should not", "shouldn't", "should not be", "disappear", "disappears", "disappeared", "gone", "invisible", "absent", "done", "finished", "closed", "close", "removed", "vanish", "vanishes", "vanished", "collapse", "collapsed", "dismissed", "dismisses", "hidden", "out of view", "not in view", "not showing anymore"]
+  positive_regex_terms:
+    ["appear", "appears", "appeared", "visible", "displayed", "present", "exists", "exist", "shown", "showing", "open", "opened", "in view"]
   anchors:
     ["element is not present", "element is no longer visible", "element has disappeared", "element was removed", "element is absent", "element is hidden from view", "element is no longer displayed", "element has vanished", "element is gone from the page", "element is not showing anymore", "element should be done", "element disappears", "element vanishes", "element gets removed", "element closes", "element is done", "element is out of view", "element is not in view", "element is invisible", "element is not visible"]
   positive_anchors:
@@ -63,5 +254,19 @@ salience:
   subtle_terms: ["subtle", "small", "secondary", "background"]
 
 semantic:
+  boolean_query_or_terms: ["or"]
+  boolean_query_and_terms: ["and"]
   target_anchors: ["button", "field", "input", "link", "icon", "text", "element", "box", "modal", "toast", "alert", "menu"]
   conjunction_anchors: ["and", "then", "after", "next", ",", "also"]
+  position_aliases:
+    centered: center
+  position_terms:
+    top: ["top"]
+    bottom: ["bottom"]
+    left: ["left"]
+    right: ["right"]
+    top-left: ["top left"]
+    top-right: ["top right"]
+    bottom-left: ["bottom left"]
+    bottom-right: ["bottom right"]
+    center: ["center", "middle", "centered"]

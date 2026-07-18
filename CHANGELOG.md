@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scroll` commands now distinguish target-seeking scrolls from simple directional/page-boundary scrolls without breaking old timed `wait` behavior or `VERIFY` polling.
 - Semantic parsing, ranking, verification, wait-for polling, scroll intent classification, and historical target resolution now use the canonical `Intent` object end to end instead of the older dict-shaped intent flow.
 - MiniLM is now treated as a semantic provider implementation rather than the owner of product vocabulary; its action/state/color/position/negation anchors are sourced from the language pack instead of being hardcoded in the model adapter.
+- Remaining English-specific reasoning vocabulary was moved into the language pack, including boolean query operators, verify-clause conjunctions, position aliases, and the MiniLM wait-condition split, while preserving current parser and ranking outputs.
 - Parser and planner/provider wiring now consistently use the semantic-provider boundary, removing leftover `parser.minilm` coupling and other legacy intent/model compatibility paths.
 - Definition and planning failures are now reported as blocked test sessions instead of lane-level errors, so the failure stays attached to the relevant test case and the run continues.
 - Clean logger.py, making similar code shared across loggers.

@@ -33,6 +33,8 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
 
         if minilm:
             self.minilm = minilm
+            if self.minilm.language_pack != self.parser.language_pack:
+                raise ValueError("Injected MiniLM and SemanticParser must use the same language pack.")
             self.parser.semantic_provider = minilm
         else:
             # Load MiniLM if possible
@@ -40,7 +42,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
             if model_name == "minilm":
                 model_dir = Path(__file__).resolve().parents[1] / "weights" / "minilm"
                 try:
-                    self.minilm = MiniLM(str(model_dir), logger=self._logger)
+                    self.minilm = MiniLM(str(model_dir), logger=self._logger, language_pack=self.parser.language_pack)
                     # Synergize with parser
                     self.parser.semantic_provider = self.minilm
                 except (FileNotFoundError, RuntimeError, ImportError) as e:
@@ -86,7 +88,10 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     def _decompose_instruction(self, instruction: str, parent_idx: int) -> List[TestStep]:
         """Uses SemanticParser or MiniLM to break down a high-level instruction."""
         try:
-            if self.model_name == "minilm" and self.minilm:
+            direct_nodes = self.parser.parse_direct_action(instruction)
+            if direct_nodes is not None:
+                dict_steps = [{"type": n.type, "value": n.value} for n in direct_nodes]
+            elif self.model_name == "minilm" and self.minilm:
                 dict_steps = self.minilm.predict(instruction)
             else:
                 nodes = self.parser.parse(instruction)
@@ -101,9 +106,7 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
     def _decompose_expectation(self, expectation: str, parent_idx: int, start_idx: int) -> List[TestStep]:
         """Uses SemanticParser to break down an expectation into VERIFY atoms."""
         try:
-            # Force verifications to be treated as such by prefixing slightly or just parsing
-            # The parser has a specific _parse_verify we could call, or we just prefix "Verify "
-            nodes = self.parser.parse(f"Verify {expectation}")
+            nodes = self.parser.parse_verification(expectation)
             dict_steps = [{"type": n.type, "value": n.value} for n in nodes]
             return self._to_test_steps(dict_steps, parent_idx, "expect", start_idx)
         except Exception as e:

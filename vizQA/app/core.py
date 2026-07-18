@@ -26,8 +26,10 @@ from vizQA.app.exceptions import (
 )
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.app.project_config import load_project_language
 from vizQA.app.support.weights import get_model_dir
 from vizQA.reasoning import Intent, MiniLM, SemanticParser
+from vizQA.reasoning.language import load_language_pack
 
 if TYPE_CHECKING:
     from vizQA.app.logger import SessionLogger
@@ -73,15 +75,21 @@ class Automator:
         if self.artifact_dir:
             os.makedirs(self.artifact_dir, exist_ok=True)
 
+        language = load_project_language()
+        try:
+            language_pack = load_language_pack(language)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unable to load configured vizQA language pack '{language}'.") from exc
+
         model_dir = os.fspath(get_model_dir())
         try:
-            self.minilm: Optional[MiniLM] = MiniLM(model_dir, logger=self.logger)
+            self.minilm: Optional[MiniLM] = MiniLM(model_dir, logger=self.logger, language_pack=language_pack)
         except (FileNotFoundError, RuntimeError):
             self.minilm = None
             self.logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        self.parser = SemanticParser(semantic_provider=self.minilm, logger=self.logger)
+        self.parser = SemanticParser(language_pack=language_pack, semantic_provider=self.minilm, logger=self.logger)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -429,6 +437,7 @@ class Automator:
         step.failure_reason = self._failure_details("FIND", query, perception, "Element not found")
         return False
 
+    # pylint: disable=too-many-return-statements
     async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
         """Handles a DO: sub-step — resolves coords and fires the interaction.
 
@@ -445,6 +454,8 @@ class Automator:
             return await self._handle_wait_action(session, step, payload)
         if action == "scroll":
             return await self._handle_scroll_action(session, step, payload)
+        if action == "press-key":
+            return await self._handle_keypress_action(step, payload)
 
         target = session.metadata.get("target")
         if not target:
@@ -606,24 +617,73 @@ class Automator:
         step.status = StepStatus.PASSED
         return True
 
+    async def _handle_keypress_action(self, step: TestStep, payload: str) -> bool:
+        """Handles explicit targetless keyboard commands."""
+        if not self.page:
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.ACTION_ERROR
+            step.failure_reason = "Cannot press a key because the browser page is not initialized."
+            return False
+
+        key = self._normalize_keypress_payload(payload)
+        if not key:
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.ACTION_ERROR
+            step.failure_reason = "Keypress command requires a key name, such as 'Press key Enter'."
+            return False
+
+        if self.verbosity >= 1:
+            print(f"  [DO] press-key {key!r}")
+
+        await self.page.keyboard.press(key)
+        await asyncio.sleep(self.parser.config.step_delay_seconds)
+        step.status = StepStatus.PASSED
+        return True
+
+    def _normalize_keypress_payload(self, payload: str) -> str:
+        """Normalize friendly key aliases into Playwright keyboard.press syntax."""
+        raw = payload.strip()
+        if not raw:
+            return ""
+
+        quoted = re.fullmatch(r"(['\"])(.*)\1", raw)
+        if quoted:
+            return quoted.group(2)
+
+        if raw.endswith("++"):
+            parts = [part.strip() for part in raw[:-2].split("+") if part.strip()]
+            parts.append("+")
+        else:
+            parts = [part.strip() for part in raw.split("+")]
+
+        if not parts or any(part == "" for part in parts):
+            return raw
+
+        return "+".join(self._normalize_key_name(part, self.parser.language_pack.key_aliases) for part in parts)
+
+    @staticmethod
+    def _normalize_key_name(key: str, aliases: Dict[str, str]) -> str:
+        """Normalize one key or modifier alias without validating Playwright's full key set."""
+        lowered = key.lower()
+        if lowered in aliases:
+            return aliases[lowered]
+        if re.fullmatch(r"f\d{1,2}", lowered):
+            return lowered.upper()
+        if re.fullmatch(r"key[a-z]", lowered):
+            return f"Key{lowered[-1].upper()}"
+        if re.fullmatch(r"digit\d", lowered):
+            return f"Digit{lowered[-1]}"
+        return key
+
     def _parse_wait_duration(self, payload: str) -> Optional[float]:
         """Parses a duration payload into seconds when the wait is time-based."""
-        wait_time = 0.5
         msg = payload.lower()
-
-        match = re.search(r"([\d\.]+)\s*(s|sec|seconds?|ms|m|mins?|minutes?)", msg)
+        units = self.parser.language_pack.wait_duration_units
+        unit_pattern = "|".join(re.escape(unit) for unit in sorted(units, key=len, reverse=True))
+        match = re.search(rf"([\d\.]+)\s*({unit_pattern})\b", msg)
         if not match:
             return None
-
-        val = float(match.group(1))
-        unit = match.group(2)
-        if unit.startswith("m") and unit != "ms":
-            wait_time = val * 60
-        elif unit == "ms":
-            wait_time = val / 1000.0
-        else:
-            wait_time = val
-        return wait_time
+        return float(match.group(1)) * units[match.group(2)]
 
     def _is_scroll_target_query(self, payload: str) -> bool:
         """Returns whether a scroll payload looks like a target-seeking command."""
@@ -644,7 +704,7 @@ class Automator:
 
         intent = self.parser.parse_verify_intent(query)
         subject = intent.query_text.strip().lower()
-        generic_scope_values = {"", "page", "screen", "view", "viewport", "document"}
+        generic_scope_values = {"", *(term.lower() for term in self.parser.language_pack.generic_scope_terms)}
 
         if intent.position == "top" and subject in generic_scope_values:
             return "absolute_top"

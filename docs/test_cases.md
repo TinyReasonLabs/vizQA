@@ -204,6 +204,16 @@ Clicking:
 - action: "Click on 'Orders' in the navigation menu"
 ```
 
+Keyboard:
+
+```yaml
+- action: "Press key Enter"
+- action: "Press keys Ctrl+C"
+- action: "Press key '+'"
+```
+
+Use `Press key ...` or `Press keys ...` for keyboard input. Bare phrases such as `Press the 'Submit' button` remain semantic UI-control actions and are resolved visually.
+
 Scrolling:
 
 ```yaml
@@ -291,12 +301,13 @@ Split broad scenarios into pre-requisites when state handoff matters.
 
 If an expectation becomes long, break the flow into more steps instead of packing multiple assertions into one sentence.
 
-### Use semantic scroll and wait commands
+### Use direct scroll, wait, and keyboard commands
 
-`vizQA` understands two common semantic commands directly in test actions:
+`vizQA` understands common direct commands in test actions:
 
 - `Scroll to ...` for target-seeking scrolling, including section names and page-scope phrases like `top` and `bottom`
 - `Wait for ...` for both time-based pauses and semantic UI conditions such as a toast, table, modal, or loader state
+- `Press key ...` for targetless keyboard input using Playwright-compatible key names such as `Enter`, `ArrowLeft`, `KeyA`, `Digit1`, or shortcuts like `Ctrl+C`
 
 Prefer these forms when the action is really about reaching a visible target or waiting for a visible state, rather than describing lower-level mechanics.
 
