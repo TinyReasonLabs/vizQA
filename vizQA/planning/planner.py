@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from vizQA.app.exceptions import TestDefinitionError
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import StepStatus, TestStep
+from vizQA.planning.structured import parse_structured_steps
 from vizQA.reasoning import MiniLM, SemanticParser
 
 
@@ -50,13 +51,24 @@ class StepPlanner:  # pylint: disable=too-few-public-methods
                         0, f"MiniLM model could not be loaded: {e}. Falling back to rule-based parser."
                     )
 
-    def decompose(self, raw_steps: List[Dict[str, Any]]) -> List[TestStep]:
+    def decompose(self, raw_steps: List[Dict[str, Any]], schema_version: Optional[int] = None) -> List[TestStep]:
         """
         Decomposes raw YAML steps into TestStep objects with sub-steps.
         Uses MiniLM ONNX for semantic breakdown.
         """
+        if schema_version not in (None, 1, 2):
+            raise TestDefinitionError(f"Unsupported test schema version: {schema_version!r}.")
+
         refined_steps = []
         for i, step in enumerate(raw_steps):
+            if schema_version == 2 and "action" not in step:
+                structured_step = parse_structured_steps([step])[0]
+                structured_step.id = f"step_{i:02d}"
+                for sub_index, sub_step in enumerate(structured_step.sub_steps, start=1):
+                    sub_step.id = f"{structured_step.id}.{sub_index:02d}"
+                refined_steps.append(structured_step)
+                continue
+
             instruction = step.get("action", "")
             expectation = step.get("expect")
             line_num = step.get("__line__", "unknown")

@@ -29,6 +29,7 @@ class ParserConfig:
     scroll_center_band_min: float
     scroll_center_band_max: float
     step_delay_seconds: float
+    perception_match_threshold: float
 
 
 PERCEPTION_BACKEND = _normalize_base_url(os.environ.get("PERCEPTION_BACKEND", "localhost:8228"))
@@ -43,6 +44,7 @@ wait_for_poll_interval = float(os.environ.get("VIZQA_WAIT_FOR_POLL_INTERVAL", "1
 scroll_center_band_min = float(os.environ.get("VIZQA_SCROLL_CENTER_BAND_MIN", "0.35"))
 scroll_center_band_max = float(os.environ.get("VIZQA_SCROLL_CENTER_BAND_MAX", "0.65"))
 step_delay = float(os.environ.get("VIZQA_STEP_DELAY_SECONDS", "0.5"))
+perception_match_threshold = float(os.environ.get("VIZQA_PERCEPTION_MATCH_THRESHOLD", "0.5"))
 
 CONFIG = ParserConfig(
     use_advanced_ranking=use_adv,
@@ -55,4 +57,5 @@ CONFIG = ParserConfig(
     scroll_center_band_min=scroll_center_band_min,
     scroll_center_band_max=scroll_center_band_max,
     step_delay_seconds=step_delay,
+    perception_match_threshold=perception_match_threshold,
 )

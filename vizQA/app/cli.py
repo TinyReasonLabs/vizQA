@@ -736,7 +736,7 @@ async def run_single_test(
                 model_name="minilm", parser=automator.parser, minilm=automator.minilm, logger=automator.logger
             )
             try:
-                steps = planner.decompose(test_data.get("steps", []))
+                steps = planner.decompose(test_data.get("steps", []), test_data.get("schema"))
             except TestDefinitionError as err:
                 _emit_test_definition_failure(
                     reporter,
@@ -786,7 +786,7 @@ async def run_single_test(
     )
 
     try:
-        steps = planner.decompose(test_data.get("steps", []))
+        steps = planner.decompose(test_data.get("steps", []), test_data.get("schema"))
     except TestDefinitionError as err:
         _emit_test_definition_failure(
             reporter,
