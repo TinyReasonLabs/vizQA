@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Spospider/vizQA/main/schemas/vizqa-test.schema.json",
+  "title": "vizQA test file",
+  "description": "Schema for vision-driven vizQA YAML tests. V2 operations target visible UI only through UI Perception queries.",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 2, "description": "Use 2 for deterministic operation-block steps." },
+    "name": { "type": "string" },
+    "url": { "type": "string" },
+    "description": { "type": "string" },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+    "artifacts": { "type": "object", "additionalProperties": {} },
+    "requires": { "type": "array", "items": { "type": "string" } },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+  },
+  "required": ["name", "url", "steps"],
+  "additionalProperties": false,
+  "$defs": {
+    "target": { "type": "string", "minLength": 1, "description": "Visible UI query resolved by UI Perception." },
+    "timeout": { "type": "number", "exclusiveMinimum": 0 },
+    "targetOperation": {
+      "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "timeout": { "$ref": "#/$defs/timeout" } },
+      "required": ["target"], "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        { "type": "object", "properties": { "action": { "type": "string" }, "expect": { "type": "string" } }, "required": ["action"], "additionalProperties": false, "description": "Legacy natural-language step." },
+        { "type": "object", "properties": { "click": { "$ref": "#/$defs/targetOperation" } }, "required": ["click"], "additionalProperties": false },
+        { "type": "object", "properties": { "right_click": { "$ref": "#/$defs/targetOperation" } }, "required": ["right_click"], "additionalProperties": false },
+        { "type": "object", "properties": { "hover": { "$ref": "#/$defs/targetOperation" } }, "required": ["hover"], "additionalProperties": false },
+        { "type": "object", "properties": { "clear": { "$ref": "#/$defs/targetOperation" } }, "required": ["clear"], "additionalProperties": false },
+        { "type": "object", "properties": { "check": { "$ref": "#/$defs/targetOperation" } }, "required": ["check"], "additionalProperties": false },
+        { "type": "object", "properties": { "uncheck": { "$ref": "#/$defs/targetOperation" } }, "required": ["uncheck"], "additionalProperties": false },
+        { "type": "object", "properties": { "assert_visible": { "$ref": "#/$defs/targetOperation" } }, "required": ["assert_visible"], "additionalProperties": false },
+        { "type": "object", "properties": { "assert_not_visible": { "$ref": "#/$defs/targetOperation" } }, "required": ["assert_not_visible"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "text": { "type": "string" }, "timeout": { "$ref": "#/$defs/timeout" } }, "required": ["target", "text"], "additionalProperties": false } }, "required": ["type"], "additionalProperties": false },
+        { "type": "object", "properties": { "press_key": { "type": "object", "properties": { "key": { "type": "string", "minLength": 1 } }, "required": ["key"], "additionalProperties": false } }, "required": ["press_key"], "additionalProperties": false },
+        { "type": "object", "properties": { "select": { "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "option": { "$ref": "#/$defs/target" }, "timeout": { "$ref": "#/$defs/timeout" } }, "required": ["target", "option"], "additionalProperties": false } }, "required": ["select"], "additionalProperties": false },
+        { "type": "object", "properties": { "drag": { "type": "object", "properties": { "source": { "$ref": "#/$defs/target" }, "target": { "$ref": "#/$defs/target" } }, "required": ["source", "target"], "additionalProperties": false } }, "required": ["drag"], "additionalProperties": false },
+        { "type": "object", "properties": { "upload": { "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "file": { "type": "string", "minLength": 1 } }, "required": ["target", "file"], "additionalProperties": false } }, "required": ["upload"], "additionalProperties": false },
+        { "type": "object", "properties": { "scroll": { "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "position": { "enum": ["top", "bottom"] } }, "oneOf": [{ "required": ["target"] }, { "required": ["position"] }], "additionalProperties": false } }, "required": ["scroll"], "additionalProperties": false },
+        { "type": "object", "properties": { "wait": { "type": "object", "properties": { "target": { "$ref": "#/$defs/target" }, "seconds": { "type": "number", "minimum": 0 }, "timeout": { "$ref": "#/$defs/timeout" } }, "oneOf": [{ "required": ["target"] }, { "required": ["seconds"] }], "additionalProperties": false } }, "required": ["wait"], "additionalProperties": false }
+      ]
+    }
+  }
+}

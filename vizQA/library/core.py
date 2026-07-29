@@ -282,7 +282,7 @@ class VizQASession:
         :param options: Optional keyword arguments for runtime configuration.
         :return: The resulting :class:`StepResult`.
         """
-        return await self.run_step(f"Click {target}", **options)
+        return await self.run_step(_click_instruction(target, self._automator.parser.language_pack), **options)
 
     async def type(self, target: str, text: str, **options: Any) -> StepResult:
         """Type text into a described input target.
@@ -292,7 +292,17 @@ class VizQASession:
         :param options: Optional keyword arguments for runtime configuration.
         :return: The resulting :class:`StepResult`.
         """
-        return await self.run_step(f"Type '{text}' into {target}", **options)
+        return await self.run_step(_type_instruction(target, text, self._automator.parser.language_pack), **options)
+
+    async def key_input(self, key: str, **options: Any) -> StepResult:
+        """Send keyboard input against the current page focus.
+
+        :param key: Playwright-compatible key name or shortcut, such as
+            ``"Enter"`` or ``"Ctrl+C"``.
+        :param options: Optional keyword arguments for runtime configuration.
+        :return: The resulting :class:`StepResult`.
+        """
+        return await self.run_step(_keypress_instruction(key, self._automator.parser.language_pack), **options)
 
     # pylint: disable=W0613,W9015
     async def verify(self, assertion: str, **options: Any) -> StepResult:
@@ -407,6 +417,38 @@ async def click(page: Page, target: str, **options: Any) -> StepResult:
     :return: The resulting :class:`StepResult`.
     """
     return await attach(page, **_attachoptions(options)).click(target, **options)
+
+
+async def key_input(page: Page, key: str, **options: Any) -> StepResult:
+    """Send keyboard input using a short-lived attached session.
+
+    :param page: The Playwright page to act on.
+    :param key: Playwright-compatible key name or shortcut.
+    :param options: Optional attach-time configuration.
+    :return: The resulting :class:`StepResult`.
+    """
+    return await attach(page, **_attachoptions(options)).key_input(key, **options)
+
+
+def _capitalize_instruction(instruction: str) -> str:
+    return f"{instruction[:1].upper()}{instruction[1:]}"
+
+
+def _click_instruction(target: str, language_pack) -> str:
+    """Build a click instruction from the active language pack."""
+    return _capitalize_instruction(f"{language_pack.actions['click'].synonyms[0]} {target}")
+
+
+def _type_instruction(target: str, text: str, language_pack) -> str:
+    """Build a type instruction from the active language pack."""
+    return _capitalize_instruction(
+        f"{language_pack.actions['type'].synonyms[0]} '{text}' {language_pack.type_target_connectors[0]} {target}"
+    )
+
+
+def _keypress_instruction(key: str, language_pack) -> str:
+    """Build the canonical natural-language keypress instruction from the language pack."""
+    return _capitalize_instruction(f"{language_pack.keypress_prefixes[0]} {key}")
 
 
 async def search(page: Page, query: str, **options: Any) -> SearchResult:

@@ -15,8 +15,13 @@ class ParserVocabulary:
 
     VERIFY_VERBS = _DEFAULT_LANGUAGE_PACK.verify_verbs
     VERIFY_BOILERPLATE = _DEFAULT_LANGUAGE_PACK.verify_boilerplate
+    BOOLEAN_QUERY_OR_TERMS = _DEFAULT_LANGUAGE_PACK.boolean_query_or_terms
+    BOOLEAN_QUERY_AND_TERMS = _DEFAULT_LANGUAGE_PACK.boolean_query_and_terms
+    VERIFY_CONJUNCTION_TERMS = _DEFAULT_LANGUAGE_PACK.verify_conjunction_terms
+    VERIFY_CONJUNCTION_PREDICATES = _DEFAULT_LANGUAGE_PACK.verify_conjunction_predicates
 
     COLORS = _DEFAULT_LANGUAGE_PACK.colors
     STATES = _DEFAULT_LANGUAGE_PACK.states
     POSITIONS = _DEFAULT_LANGUAGE_PACK.positions
+    POSITION_ALIASES = _DEFAULT_LANGUAGE_PACK.position_aliases
     NEGATION_RE = re.compile(_DEFAULT_LANGUAGE_PACK.negation_regex.pattern, re.IGNORECASE)

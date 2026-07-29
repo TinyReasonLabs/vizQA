@@ -5,7 +5,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![Code Coverage](https://img.shields.io/badge/coverage-79%25-yellowgreen.svg)]()
 
-**vizQA** is a lightweight, next-generation UI testing framework that "sees" and interacts with your application like a human does. By combining Playwright's robust automation with advanced visual perception and semantic search, vizQA lets you write tests in natural language without brittle CSS selectors or XPath. It is not an LLM-based test runner: execution is rule-driven, CPU-friendly, and designed for repeatable, idempotent regression.
+**vizQA** is a UI testing framework that finds and interacts with visible elements through visual perception instead of CSS selectors or XPath. Tests are executed by deterministic, Playwright-based rules for repeatable regression—even when an LLM generates the test plan.
 
 > [!NOTE]
 > vizQA is currently in early alpha and still evolving as we work toward a more unified API. Expect some changes along the way, and feel free to share feedback as it develops.
@@ -33,15 +33,11 @@ Modern UI automation has moved beyond brittle selectors and test-only frontend i
 
 ## Key Features
 
-- **Natural Language Steps**: Define your test flow in simple YAML instructions.
-- **Not LLM-Based**: Uses deterministic parsing, semantic matching, and ranking rather than live LLM calls during test execution.
-- **Advanced Interactions**: Supports `click`, `hover`, `type`, `scroll`, and even `drag and drop`.
-- **Visual Assertions**: Verify UI state and visibility.
-- **Multi-Viewport Runs**: Test multiple window sizes in parallel to catch responsive issues faster.
-- **Artifact Variables**: Load strings, file contents, or paths as variables (e.g., `{user_name}`) for dynamic test data.
-- **Test Pre-requisites**: Chain setup flows with `requires` and reuse artifacts/browser state across related tests.
-- **Repeatable Test Runs**: Optimized for stable, idempotent YAML test cases that can be run consistently in CI and local workflows.
-- **Lightweight & Fast**: CPU-only execution with a minimal **~250 MB** memory footprint and sub-second latency.
+- **Deterministic YAML v2**: Typed, schema-validated operations for stable CI and LLM-generated plans.
+- **Natural-language YAML v1**: A supported format for existing suites and concise human-authored flows.
+- **Perception-backed targets**: Refer to visible UI descriptions, not selectors or required `data-testid` attributes.
+- **Interactions and assertions**: Click, type, scroll, drag, upload, wait, and verify visible state.
+- **CI-ready**: Repeatable runs, multiple viewports, prerequisites, artifacts, and failure screenshots.
 ---
 
 ## 🚀 Getting Started
@@ -81,23 +77,31 @@ vizqa --version
 
 ## 📝 Usage
 
+For new tests, use deterministic YAML v2 (`schema: 2`). Each step is a typed,
+schema-validated operation, so malformed LLM output fails before browser
+execution. v2 uses the same perception-backed target resolution as the legacy
+natural-language format, but does not use semantic parsing or a live LLM at
+runtime. Existing v1 tests remain supported.
+
 ### Define a Test (`login_test.yaml`)
 
 ```yaml
+schema: 2
 name: "User Login Flow"
 url: "https://example.com/login"
 
 steps:
-  - action: "Type 'admin' into the username field"
-    expect: "Username field contains 'admin'"
-  - action: "Type 'password123' into the password field"
-  - action: "Click the 'Login' button"
-    expect: "dashboard"
+  - type: {target: "username field", text: "admin"}
+  - type: {target: "password field", text: "password123"}
+  - click: {target: "Login button"}
+  - assert_visible: {target: "dashboard"}
 ```
 
 YAML string values support environment-variable interpolation with `${VAR}`. If a referenced variable is not set, vizQA raises a test-definition error when loading the file.
 
-For the full YAML format and authoring guide, see [docs/test_cases.md](docs/test_cases.md).
+For the full YAML format, legacy compatibility, and editor autocomplete, see
+[docs/test_cases.md](docs/test_cases.md) and
+[schemas/vizqa-test.schema.json](schemas/vizqa-test.schema.json).
 
 ### Run the Test
 
@@ -239,11 +243,13 @@ steps:
 
 ## Methodology
 
-vizQA follows a three-stage execution cycle for every step:
+vizQA shares perception and browser execution across both formats:
 
-1.  **Perception**: Takes a screenshot and sends it to the Perception API to identify all visual elements and their properties (bounds, text, color, state).
-2.  **Planning**: Uses semantic matching to understand intent and internally breaks down high-level instructions into atomic `find`, `do`, and `verify` commands to handle complex interactions, including semantic actions like `scroll to` and `wait for`.
-3.  **Execution**: Performs the interaction via Playwright using precise pixel coordinates, ensuring we interact exactly with what was "seen."
+1. **Perception** identifies visible elements and their properties.
+2. **Planning** validates v2 operations or parses v1 natural-language steps.
+3. **Execution** performs the action with Playwright and records evidence.
+
+An LLM can provide the intent or generate v2 YAML; vizQA owns validation and browser execution.
 
 ---
 

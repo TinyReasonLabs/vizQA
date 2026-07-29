@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deterministic YAML v2 test steps (`schema: 2`) with explicit operation blocks that bypass local semantic parsing and MiniLM while retaining UI Perception for visible target resolution.
+- A versioned JSON Schema for vizQA YAML autocomplete and yaml-language-server validation, including editor setup guidance.
+- Typed, perception-backed operations for clicks, typing, keyboard input, state controls, selection, drag/upload, scrolling, waits, and visible/absent assertions.
 - New semantic `scroll to {elem}` support with full-range sweep handling, target centering, and edge-aware success when the page boundary prevents perfect centering.
 - New semantic `wait for {elem}` support with 1s polling and configurable timeout/poll cadence.
 - Runtime configuration knobs for wait-for timeout, wait-for poll interval, and scroll centering band.
@@ -22,9 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Deterministic v2 operations now compile into the existing internal `FIND`/`DO`/`VERIFY` runtime flow through typed execution flags, eliminating the parallel v2 executor while preserving parser-free target resolution.
+- Legacy natural-language `action`/`expect` test YAML remains permanently supported alongside deterministic v2 files, including mixed step flows within a `schema: 2` test.
 - `scroll` commands now distinguish target-seeking scrolls from simple directional/page-boundary scrolls without breaking old timed `wait` behavior or `VERIFY` polling.
 - Semantic parsing, ranking, verification, wait-for polling, scroll intent classification, and historical target resolution now use the canonical `Intent` object end to end instead of the older dict-shaped intent flow.
 - MiniLM is now treated as a semantic provider implementation rather than the owner of product vocabulary; its action/state/color/position/negation anchors are sourced from the language pack instead of being hardcoded in the model adapter.
+- Remaining English-specific reasoning vocabulary was moved into the language pack, including boolean query operators, verify-clause conjunctions, position aliases, and the MiniLM wait-condition split, while preserving current parser and ranking outputs.
 - Parser and planner/provider wiring now consistently use the semantic-provider boundary, removing leftover `parser.minilm` coupling and other legacy intent/model compatibility paths.
 - Definition and planning failures are now reported as blocked test sessions instead of lane-level errors, so the failure stays attached to the relevant test case and the run continues.
 - Clean logger.py, making similar code shared across loggers.

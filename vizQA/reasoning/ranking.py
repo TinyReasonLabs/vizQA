@@ -168,7 +168,7 @@ class RankingEngine:
         if not self.minilm or not label:
             return 0.0
 
-        query_groups = split_boolean_query(query)
+        query_groups = split_boolean_query(query, self.language_pack)
         boolean_query = is_boolean_query(query_groups)
         label_vec = self.minilm.encode(label)
         best_score = 0.0
@@ -196,7 +196,7 @@ class RankingEngine:
         if not self.minilm or not metadata_str:
             return 0.0
 
-        query_groups = split_boolean_query(query)
+        query_groups = split_boolean_query(query, self.language_pack)
         boolean_query = is_boolean_query(query_groups)
         meta_vec = self.minilm.encode(metadata_str)
         best_score = 0.0
@@ -222,7 +222,7 @@ class RankingEngine:
 
     def _best_boolean_sparse_score(self, query: str, label: str) -> float:
         """Score lexical boolean matches, preserving non-boolean bag-of-words behavior."""
-        query_groups = split_boolean_query(query)
+        query_groups = split_boolean_query(query, self.language_pack)
         if not is_boolean_query(query_groups):
             scores = SparseRanker.score(query, [label])
             return scores[0] if scores else 0.0

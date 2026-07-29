@@ -1,3 +1,5 @@
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5,7 +7,8 @@ import pytest
 from vizQA.app.exceptions import TestDefinitionError
 from vizQA.app.memory import StepStatus
 from vizQA.planning import StepPlanner
-from vizQA.reasoning import MiniLM
+from vizQA.reasoning import MiniLM, SemanticParser
+from vizQA.reasoning.language import load_language_pack
 
 
 @pytest.fixture
@@ -70,6 +73,21 @@ def test_planner_decomposition_with_minilm_generative(mock_minilm):
     assert steps[0].sub_steps[0].instruction == "FIND: button"
 
 
+def test_explicit_press_key_bypasses_minilm_prediction(mock_minilm):
+    """Explicit direct key commands should not be reinterpreted by MiniLM."""
+    mock_tokenizer, mock_session = mock_minilm
+
+    import numpy as np
+
+    mock_session.run.return_value = [np.array([[1, 2, 3]])]
+    mock_tokenizer.decode.return_value = '[{"type": "FIND", "value": "button"}]'
+
+    planner = StepPlanner(model_name="minilm", logger=MagicMock())
+    steps = planner.decompose([{"action": "Press keys Ctrl+C"}])
+
+    assert [sub.instruction for sub in steps[0].sub_steps] == ["DO: press-key Ctrl+C"]
+
+
 def test_minilm_deserialization_error(mock_minilm):
     mock_tokenizer, mock_session = mock_minilm
 
@@ -98,3 +116,57 @@ def test_minilm_malformed_step_error(mock_minilm):
     with pytest.raises(TestDefinitionError) as exc:
         planner.decompose([{"action": "test"}])
     assert "malformed or missing keys" in str(exc.value.internal_detail)
+
+
+def test_minilm_semantic_dissection_uses_language_pack_coordination_terms(mock_minilm):
+    """MiniLM semantic dissection should honor configured coordination vocabulary."""
+    del mock_minilm
+    base_pack = load_language_pack("en")
+    custom_pack = replace(
+        base_pack,
+        coordination_terms=["plus"],
+        hold_modifier_terms=["hold"],
+    )
+    model_dir = Path(__file__).resolve().parents[1] / "weights" / "minilm"
+
+    with patch("vizQA.reasoning.minilm.default_language_pack", return_value=custom_pack):
+        minilm = MiniLM(str(model_dir), logger=MagicMock())
+
+    steps = minilm._semantic_dissection("Click submit plus cancel buttons")
+    assert steps == [
+        {"type": "FIND", "value": "submit buttons"},
+        {"type": "DO", "value": "click"},
+        {"type": "FIND", "value": "cancel buttons"},
+        {"type": "DO", "value": "click"},
+    ]
+
+    hold_steps = minilm._semantic_dissection("press plus hold the button")
+    assert hold_steps == [
+        {"type": "FIND", "value": "button"},
+        {"type": "DO", "value": "press-and-hold"},
+    ]
+
+
+def test_minilm_semantic_dissection_uses_language_pack_wait_condition_terms(mock_minilm):
+    """MiniLM semantic dissection should honor configured wait-condition vocabulary."""
+    del mock_minilm
+    base_pack = load_language_pack("en")
+    custom_pack = replace(base_pack, wait_condition_terms=["pending"])
+    model_dir = Path(__file__).resolve().parents[1] / "weights" / "minilm"
+
+    with patch("vizQA.reasoning.minilm.default_language_pack", return_value=custom_pack):
+        minilm = MiniLM(str(model_dir), logger=MagicMock())
+
+    steps = minilm._semantic_dissection("Wait pending the loader disappears")
+
+    assert steps == [{"type": "VERIFY", "value": "loader disappears"}]
+
+
+def test_planner_expectations_do_not_inject_english_verify_prefix():
+    base_pack = load_language_pack("en")
+    parser = SemanticParser(language_pack=replace(base_pack, verify_prefixes=["confirma"], verify_verbs=["confirma"]))
+    planner = StepPlanner(model_name="rule", parser=parser)
+
+    steps = planner.decompose([{"action": "Click save", "expect": "dialog visible"}])
+
+    assert [step.instruction for step in steps[0].sub_steps][-1] == "VERIFY: dialog visible"

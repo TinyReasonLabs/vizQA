@@ -9,7 +9,7 @@ from playwright._impl._errors import TargetClosedError
 from playwright.async_api import async_playwright
 
 import vizQA
-from vizQA import StepResult, VizQASession, attach, click, run_step, run_steps
+from vizQA import StepResult, VizQASession, attach, click, key_input, run_step, run_steps
 from vizQA import type as type_text
 from vizQA import verify
 from vizQA.app.client import PerceptionClient
@@ -216,6 +216,7 @@ def test_root_package_exports_only_documented_high_level_library_api():
         "VizQASession",
         "attach",
         "click",
+        "key_input",
         "run_step",
         "run_steps",
         "type",
@@ -601,6 +602,30 @@ def test_top_level_helpers_return_step_results_and_preserve_page_state(monkeypat
         assert role_result.matched_element["text"] in {"Analyst", "Role: Analyst"}
 
     asyncio.run(_with_page(run_test))
+
+
+def test_key_input_helpers_route_through_explicit_key_command(monkeypatch):
+    captured = []
+
+    async def fake_run_step(self, instruction, **options):
+        del self, options
+        captured.append(instruction)
+        return StepResult(
+            success=True,
+            instruction=instruction,
+            matched_element=None,
+            artifacts={},
+            duration=0.01,
+        )
+
+    monkeypatch.setattr(VizQASession, "run_step", fake_run_step)
+
+    session_result = asyncio.run(attach(object()).key_input("Ctrl+C"))
+    top_level_result = asyncio.run(key_input(object(), "Enter"))
+
+    assert captured == ["Press key Ctrl+C", "Press key Enter"]
+    assert session_result.success is True
+    assert top_level_result.success is True
 
 
 def test_failed_step_result_marks_failure_without_exposing_raw_payload(monkeypatch):

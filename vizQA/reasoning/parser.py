@@ -13,7 +13,7 @@ from vizQA.app.config import CONFIG
 from vizQA.app.logger import get_logger
 from vizQA.reasoning.clause_splitting import split_verify_conjunctions
 from vizQA.reasoning.intent import Intent, IntentAttributes
-from vizQA.reasoning.language import LanguagePack, default_language_pack
+from vizQA.reasoning.language import LanguagePack, alternation_pattern, default_language_pack, match_prefixed_payload
 from vizQA.reasoning.model_protocols import SemanticModel
 from vizQA.reasoning.query_semantics import lexical_term_score
 from vizQA.reasoning.ranking import RankingEngine
@@ -48,6 +48,44 @@ class SemanticParser:
         )
         self._logger = logger or get_logger()
         self._negation_re = self.language_pack.negation_regex
+        self._verify_subject_noise_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.verify_subject_noise)})\b",
+            re.IGNORECASE,
+        )
+        self._verify_trigger_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.verify_trigger_terms)})\b",
+            re.IGNORECASE,
+        )
+        self._verify_query_prefix_re = self._prefix_pattern(self.language_pack.verify_query_prefixes)
+        self._verify_prefix_re = self._prefix_pattern(self.language_pack.verify_prefixes)
+        self._article_prefix_re = self._prefix_pattern(self.language_pack.articles)
+        self._leading_preposition_prefix_re = self._prefix_pattern(self.language_pack.leading_prepositions)
+        self._target_cleanup_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.target_cleanup_phrases)})\b",
+            re.IGNORECASE,
+        )
+        coordination_pattern = alternation_pattern(self.language_pack.coordination_terms)
+        hold_modifier_pattern = alternation_pattern(self.language_pack.hold_modifier_terms)
+        self._hold_phrase_re = re.compile(
+            rf"\b({alternation_pattern(self.language_pack.hold_action_verbs)})\s+"
+            rf"(?:{coordination_pattern})\s+(?:{hold_modifier_pattern})\b",
+            re.IGNORECASE,
+        )
+        followers_pattern = alternation_pattern(self.language_pack.sequence_split_followers)
+        self._coordination_split_re = re.compile(
+            rf"\b(?:{coordination_pattern})\b\s+(?='|\"|{followers_pattern})",
+            re.IGNORECASE,
+        )
+        self._wait_condition_prefix_re = re.compile(
+            rf"^(?:{alternation_pattern(self.language_pack.wait_verbs)})\s+"
+            rf"(?:{alternation_pattern(self.language_pack.wait_condition_terms)})\s+",
+            re.IGNORECASE,
+        )
+        self._position_patterns = self._build_position_patterns()
+        self._noun_action_guard_patterns = {
+            synonym: [re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE) for phrase in phrases]
+            for synonym, phrases in self.language_pack.noun_action_guards.items()
+        }
         self._action_anchor_groups = {
             action_name: spec.anchors for action_name, spec in self.language_pack.actions.items() if spec.anchors
         }
@@ -59,12 +97,43 @@ class SemanticParser:
                 self._action_synonyms_ordered.append((syn, ax_type))
         self._action_synonyms_ordered.sort(key=lambda x: len(x[0]), reverse=True)
 
+    @staticmethod
+    def _prefix_pattern(prefixes: List[str]) -> re.Pattern[str]:
+        return re.compile(rf"^(?:{alternation_pattern(prefixes)})\b\s*", re.IGNORECASE)
+
+    def _build_position_patterns(self) -> List[Tuple[re.Pattern[str], str]]:
+        """Build regex patterns for canonical positions and aliases."""
+        patterns: List[Tuple[re.Pattern[str], str]] = []
+        seen: set[str] = set()
+
+        def _canonicalize(value: str) -> str:
+            return value.strip().lower().replace(" ", "-")
+
+        def _pattern_for(term: str) -> re.Pattern[str]:
+            escaped = re.escape(term.strip()).replace(r"\ ", r"[-\s]+")
+            return re.compile(rf"\b{escaped}\b", re.IGNORECASE)
+
+        position_mappings = list(self.language_pack.position_terms.items())
+        position_mappings.extend((canonical, [term]) for term, canonical in self.language_pack.position_aliases.items())
+        localized_positions = [(canonical, term) for canonical, terms in position_mappings for term in terms]
+        for canonical, term in sorted(localized_positions, key=lambda item: len(item[1]), reverse=True):
+            normalized = term.strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            patterns.append((_pattern_for(normalized), _canonicalize(canonical)))
+        return patterns
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def parse(self, instruction: str) -> List[SemanticNode]:
         """Parses a full natural language instruction into a list of atomic SemanticNodes."""
+        direct_nodes = self.parse_direct_action(instruction)
+        if direct_nodes is not None:
+            return direct_nodes
+
         nodes: List[SemanticNode] = []
 
         # Broad splits on explicit flow arrows which almost always mean VERIFY comes next
@@ -75,6 +144,17 @@ class SemanticParser:
             nodes.extend(self._parse_verify(verification_part))
 
         return nodes
+
+    def parse_direct_action(self, instruction: str) -> Optional[List[SemanticNode]]:
+        """Parse explicit direct commands that do not require visual target grounding."""
+        payload = match_prefixed_payload(instruction, self.language_pack.keypress_prefixes)
+        if payload is not None:
+            return [SemanticNode("DO", f"press-key {payload}".strip())]
+        return None
+
+    def parse_verification(self, assertion: str) -> List[SemanticNode]:
+        """Parse an expectation as verification without injecting language text."""
+        return self._parse_verify(assertion)
 
     def parse_verify_intent(self, query: str) -> Intent:
         """
@@ -111,16 +191,7 @@ class SemanticParser:
         state, subject = self._extract_state(query, subject)
 
         # 3. Clean up final subject
-        subject = re.sub(r"\b(appears?|visible|shows?|exists?|present|displayed|opened?)\b", "", subject, flags=re.I)
-        subject = re.sub(
-            (
-                r"\b(should appear|should close|should occur|is|at the|in the|on the|of the|off the|the|a|an|located|"
-                r"aligned|should be|should|of|on|center of|screen|be|been|was|were|has|have|had)\b"
-            ),
-            "",
-            subject,
-            flags=re.IGNORECASE,
-        )
+        subject = self._verify_subject_noise_re.sub("", subject)
         return Intent(
             keyword=intent.keyword,
             subject=re.sub(r"\s+", " ", subject).strip(),
@@ -150,8 +221,7 @@ class SemanticParser:
     def normalize_verify_query(self, query: str) -> str:
         """Strips generic wait/scroll prefixes before intent parsing."""
         normalized = query.strip()
-        normalized = re.sub(r"^(for\s+the|for\s+an|for\s+a|for)\s+", "", normalized, flags=re.I)
-        normalized = re.sub(r"^(to\s+the|to\s+an|to\s+a|to)\s+", "", normalized, flags=re.I)
+        normalized = self._verify_query_prefix_re.sub("", normalized)
         return normalized.strip()
 
     def _extract_negation(self, query: str, subject: str) -> Tuple[bool, str]:
@@ -180,11 +250,9 @@ class SemanticParser:
 
     def _extract_position(self, query: str, subject: str) -> Tuple[Optional[str], str]:
         """Extracts position intent."""
-        pos_regex = r"\b(top left|top right|bottom left|bottom right|top|bottom|left|right|center|centered|middle)\b"
-        pos_match = re.search(pos_regex, query.lower())
-        if pos_match:
-            val = pos_match.group(1).lower().replace("centered", "center").replace(" ", "-")
-            return val, re.sub(pos_regex, "", subject, flags=re.I)
+        for pattern, canonical in self._position_patterns:
+            if pattern.search(query):
+                return canonical, pattern.sub("", subject, count=1).strip()
         return None, subject
 
     def _extract_state(self, query: str, subject: str) -> Tuple[Optional[str], str]:
@@ -521,12 +589,8 @@ class SemanticParser:
         if not clause:
             return []
 
-        boilerplate = (
-            r"^(verify( that)?|assert( that)?|ensure( that)?|make sure( that)?|check that|pause until( the)?)\b"
-        )
-        cleaned = re.sub(boilerplate, "", clause, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"^(the|a|an)\b", "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"^(loader disappears)\b", r"\1", cleaned, flags=re.IGNORECASE).strip()  # Specific cleanup
+        cleaned = self._verify_prefix_re.sub("", clause).strip()
+        cleaned = self._article_prefix_re.sub("", cleaned).strip()
 
         quotes: List[str] = []
 
@@ -535,14 +599,15 @@ class SemanticParser:
             return f"__QUOTE_{len(quotes)-1}__"
 
         protected = re.sub(r"(['\"])(.*?)\1", _protect_quote, cleaned)
-        parts = split_verify_conjunctions(protected)
+        parts = split_verify_conjunctions(protected, self.language_pack)
         if len(parts) > 1:
             restored_parts = []
             for part in parts:
                 restored = part
                 for i, quote in enumerate(quotes):
                     restored = restored.replace(f"__QUOTE_{i}__", quote)
-                restored_parts.append(SemanticNode(type="VERIFY", value=restored.strip()))
+                restored = self._article_prefix_re.sub("", restored).strip()
+                restored_parts.append(SemanticNode(type="VERIFY", value=restored))
             return restored_parts
 
         return [SemanticNode(type="VERIFY", value=cleaned)]
@@ -586,6 +651,7 @@ class SemanticParser:
         is_verify = (
             any(lower_chunk.startswith(v) for v in self.language_pack.verify_verbs)
             or any(v in lower_chunk for v in self.language_pack.verify_boilerplate)
+            or bool(self._verify_trigger_re.search(lower_chunk))
             or (
                 idx > 0
                 and nodes
@@ -607,7 +673,7 @@ class SemanticParser:
             words_next = next_chunk.split()
             if words_next:
                 suffix = words_next[-1]
-                plural_nouns = ["buttons", "fields", "icons", "inputs", "links", "checkboxes", "labels"]
+                plural_nouns = self.language_pack.distributive_plural_nouns
                 if suffix in plural_nouns:
                     singular = suffix[:-1]
                     for j, node in enumerate(chunk_nodes):
@@ -618,11 +684,22 @@ class SemanticParser:
 
     def _split_complex_sequence(self, text: str) -> List[str]:
         """Splits a sequence while protecting atomic phrases."""
-        # 0. Protect "press and hold" and similar phrases
-        protected_text = re.sub(r"\b(press|select|click|tap)\s+and\s+hold\b", r"\1_AND_HOLD", text, flags=re.I)
+        # 0. Protect hold gestures and similar atomic phrases
+        protected_hold_suffixes: List[str] = []
+
+        def _protect_hold(match: re.Match[str]) -> str:
+            protected_hold_suffixes.append(match.group(0)[len(match.group(1)) :])
+            return f"{match.group(1)}__HOLD_{len(protected_hold_suffixes) - 1}__"
+
+        protected_text = self._hold_phrase_re.sub(_protect_hold, text)
 
         # 1. Broad split on major conjunctions/punctuation
-        splits = re.split(r"\bthen\b|\bafter\b|\bwhile\b|,|->", protected_text, flags=re.I)
+        clause_splitters = alternation_pattern(self.language_pack.clause_splitters)
+        punctuation = "|".join(re.escape(term) for term in self.language_pack.coordination_punctuation if term)
+        splitter_pattern = rf"\b(?:{clause_splitters})\b|->|=>"
+        if punctuation:
+            splitter_pattern = f"{splitter_pattern}|{punctuation}"
+        splits = re.split(splitter_pattern, protected_text, flags=re.I)
 
         final_chunks = []
         for s in splits:
@@ -634,14 +711,12 @@ class SemanticParser:
             # Prioritize splitting when different objects or subjects are being described.
             # We use a narrower list to avoid splitting compound attributes (like red and aligned)
             # pylint: disable=line-too-long
-            sub_splits = re.split(
-                r"\band\b\s+(?='|\"|the|a|an|click|tap|type|enter|input|fill|select|press|hover|into|onto|last|first|clear|scroll|right|left|context|submit|cancel|delete|save|sign|log|password|username|email)",
-                s_clean,
-                flags=re.I,
-            )
+            sub_splits = self._coordination_split_re.split(s_clean)
 
             for sub in sub_splits:
-                res = sub.strip().replace("_AND_HOLD", " and hold")
+                res = sub.strip()
+                for index, suffix in enumerate(protected_hold_suffixes):
+                    res = res.replace(f"__HOLD_{index}__", suffix)
                 if res:
                     final_chunks.append(res)
 
@@ -682,7 +757,7 @@ class SemanticParser:
         """Determines action verb and type."""
         lower = protected.lower()
         first = lower.split()[0] if lower.split() else ""
-        if first in ["clear", "empty"]:
+        if first in self.language_pack.actions.get("clear").synonyms:
             return first, "clear"
 
         if self.semantic_provider:
@@ -692,29 +767,32 @@ class SemanticParser:
             if dtype:
                 synonym_values = self.language_pack.actions[dtype].synonyms
                 for syn in sorted(synonym_values, key=len, reverse=True):
-                    # Avoid matching "input" as verb if it's "the input"
                     pattern = rf"\b{re.escape(syn)}\b"
-                    if syn == "input":
-                        pattern = r"(?<!the\s)\binput\b"
-                    if re.search(pattern, lower):
+                    if re.search(pattern, lower) and not self._matches_noun_action_guard(syn, lower):
                         return syn, dtype
                 first_word = re.findall(r"[a-zA-Z-]+", lower)
                 return (first_word[0] if first_word else synonym_values[0]), dtype
 
         for syn, atype in self._action_synonyms_ordered:
             pattern = rf"\b{re.escape(syn)}\b"
-            if syn == "input":
-                pattern = r"(?<!the\s)\binput\b"
-            if re.search(pattern, lower):
-                if syn == "type" and "clear" in lower and lower.index("clear") < lower.index("type"):
+            if re.search(pattern, lower) and not self._matches_noun_action_guard(syn, lower):
+                clear_synonyms = self.language_pack.actions.get("clear").synonyms
+                if atype == "type" and any(
+                    clear in lower and lower.index(clear) < lower.index(syn) for clear in clear_synonyms
+                ):
                     continue
                 return syn, atype
         return None, None
 
+    def _matches_noun_action_guard(self, synonym: str, text: str) -> bool:
+        """Return whether a synonym appears in a configured noun-only phrase."""
+        guard_patterns = self._noun_action_guard_patterns.get(synonym.lower(), [])
+        return any(pattern.search(text) for pattern in guard_patterns)
+
     def _inherit_action(self, protected: str, implicit: str) -> Tuple[Optional[str], Optional[str]]:
         """Attempts to inherit action from previous context."""
         words = protected.lower().split()
-        if len(words) <= 3 or any(w in ["into", "to", "on", "in"] for w in words):
+        if len(words) <= 3 or any(w in self.language_pack.leading_prepositions for w in words):
             atype = next((at for at, spec in self.language_pack.actions.items() if implicit in spec.synonyms), None)
             return implicit, atype
         return None, None
@@ -722,11 +800,15 @@ class SemanticParser:
     def _handle_no_verb(self, protected: str, quotes: List[str]) -> tuple:
         """Handles cases where no action verb is found."""
         low = protected.lower().strip()
-        if low == "submit":
-            return [SemanticNode("FIND", "element"), SemanticNode("DO", "click Submit")], "element", "click"
-        if "submit" in low:
+        if low in self.language_pack.bare_click_targets:
             return (
-                [SemanticNode("FIND", protected.strip()), SemanticNode("DO", "click Submit")],
+                [SemanticNode("FIND", "element"), SemanticNode("DO", f"click {protected.strip()}")],
+                "element",
+                "click",
+            )
+        if any(target in low for target in self.language_pack.bare_click_targets):
+            return (
+                [SemanticNode("FIND", protected.strip()), SemanticNode("DO", f"click {protected.strip()}")],
                 protected.strip(),
                 "click",
             )
@@ -754,18 +836,14 @@ class SemanticParser:
             if p_m:
                 payload = p_m.group(p_m.lastindex)
                 return payload, re.sub(re.escape(payload), "", protected, count=1, flags=re.I)
-        elif atype == "click":
-            m = re.search(r"\b(enter|escape|esc|return|tab|space)\b", lower)
-            if m:
-                payload = m.group(1).capitalize() + (" key" if "key" in lower else "")
-                pattern = rf"\b{re.escape(m.group(1))}\b" + (r"\s+key" if "key" in lower else "")
-                return payload, re.sub(pattern, "", protected, flags=re.I)
         return "", protected
 
     def _handle_relational_actions(self, target: str, atype: str, quotes: List[str]) -> Optional[tuple]:
         """Handles complex actions like drag-onto or select-from."""
-        if atype == "drag" and any(x in target.lower() for x in [" onto ", " to "]):
-            parts = re.split(r"\b(?:onto|to)\b", target, flags=re.I, maxsplit=1)
+        drag_connectors = alternation_pattern(self.language_pack.drag_target_connectors)
+        select_connectors = alternation_pattern(self.language_pack.select_source_connectors)
+        if atype == "drag" and re.search(rf"\b(?:{drag_connectors})\b", target, flags=re.I):
+            parts = re.split(rf"\b(?:{drag_connectors})\b", target, flags=re.I, maxsplit=1)
             if len(parts) == 2:
                 src, dst = self._clean_noise(parts[0], quotes), self._clean_noise(parts[1], quotes)
                 return (
@@ -778,8 +856,8 @@ class SemanticParser:
                     dst,
                     "drag",
                 )
-        if atype == "select" and " from " in target.lower():
-            parts = re.split(r"\bfrom\b", target, flags=re.I, maxsplit=1)
+        if atype == "select" and re.search(rf"\b(?:{select_connectors})\b", target, flags=re.I):
+            parts = re.split(rf"\b(?:{select_connectors})\b", target, flags=re.I, maxsplit=1)
             if len(parts) == 2:
                 opt, container = self._clean_noise(parts[0], quotes), self._clean_noise(parts[1], quotes)
                 return [SemanticNode("FIND", container), SemanticNode("DO", f"select {opt}")], container, "select"
@@ -787,7 +865,7 @@ class SemanticParser:
 
     def _clean_noise(self, s: str, quotes: List[str]) -> str:
         """Helper to clean articles and restore quotes."""
-        res = re.sub(r"^\b(the|a|an)\b", "", s.strip(), flags=re.I).strip()
+        res = self._article_prefix_re.sub("", s.strip()).strip()
         for i, q in enumerate(quotes):
             res = res.replace(f"__QUOTE_{i}__", q)
         return res
@@ -795,16 +873,14 @@ class SemanticParser:
     def _clean_target_string(self, s: str, verb: str, atype: Optional[str]) -> str:
         """Strips verbs and prepositions from target string."""
         s = re.sub(r"\b" + re.escape(verb) + r"\b", "", s, flags=re.I, count=1)
-        s = re.sub(r"\b(please navigate ahead and|i want you to|click on|click|type|enter|into)\b", "", s, flags=re.I)
-        s = re.sub(r"^\b(into|onto|to|on|over|in|at|from)\b", "", s.strip(), flags=re.I).strip()
-        s = re.sub(r"^(the|a|an)\b", "", s, flags=re.I).strip()
-        if atype == "scroll":
-            s = re.sub(r"\b(to the|of the)\b", "", s, flags=re.I)
+        s = self._target_cleanup_re.sub("", s)
+        s = self._leading_preposition_prefix_re.sub("", s.strip()).strip()
+        s = self._article_prefix_re.sub("", s).strip()
         return re.sub(r"^[,\.]|[,\.]$|\s+", " ", s).strip()
 
     def _resolve_final_target(self, target: str, implicit: str) -> str:
         """Resolves target, using implicit if needed."""
-        if target.lower() in ["it", "them", ""]:
+        if target.lower() in [*self.language_pack.pronouns, ""]:
             return implicit or "element"
         return target
 
@@ -815,8 +891,8 @@ class SemanticParser:
             val = chunk.lower().strip()
             for i, q in enumerate(quotes):
                 val = val.replace(f"__quote_{i}__", q.lower())
-            if "until" in val:
-                return self._parse_verify(re.sub(rf"^{verb}\s+until\s+", "", val)), "element", None
+            if self._wait_condition_prefix_re.search(val):
+                return self._parse_verify(self._wait_condition_prefix_re.sub("", val, count=1)), "element", None
             return [SemanticNode("DO", val)], "element", verb
         if atype == "scroll":
             scroll_target = self._clean_target_string(chunk, verb, atype)
@@ -829,9 +905,7 @@ class SemanticParser:
             self.language_pack.actions.get(atype).synonyms if atype in self.language_pack.actions else []
         )
         do_name = verb if verb in canonical_synonyms else (atype or verb or "interact")
-        do_val = (
-            f"press {payload}" if atype == "click" and payload else (f"{do_name} {payload}" if payload else do_name)
-        )
+        do_val = f"{do_name} {payload}" if payload else do_name
 
         if atype in ["type", "enter"] and not payload:
             return [SemanticNode("FIND", "element"), SemanticNode("DO", f"{do_val} {target}")], target, verb
