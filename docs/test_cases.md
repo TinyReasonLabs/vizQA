@@ -2,7 +2,73 @@
 
 This guide is the main reference for authoring `vizQA` test files.
 
+## Deterministic YAML v2
+
+New tests should use `schema: 2`. Each structured step is a single explicit
+operation; vizQA does not parse its wording or use MiniLM for that step.
+`target`, `source`, and
+`option` are visible UI queries sent unchanged to the UI Perception API—never
+CSS selectors, DOM IDs, or test IDs.
+
+```yaml
+schema: 2
+name: "Password Login"
+url: "https://example.com/login"
+
+steps:
+  - click:
+      target: "Sign In button"
+  - type:
+      target: "username field"
+      text: "{username}"
+  - press_key:
+      key: "Enter"
+  - assert_visible:
+      target: "Dashboard"
+      timeout: 5
+```
+
+Supported operations are `click`, `right_click`, `hover`, `type`, `clear`,
+`press_key`, `check`, `uncheck`, `select`, `drag`, `upload`, `scroll`, `wait`,
+`assert_visible`, and `assert_not_visible`. Actions that need a visible control
+use `target`; `drag` uses `source` and `target`; `select` uses `target` and
+`option`; `upload` uses an artifact `file`; `wait` uses exactly one of `seconds`
+or `target`; and `scroll` uses a `target` or `position: top|bottom`.
+
+The highest-ranked acceptable Perception result is used. If no result is
+returned, the step fails with the visible candidates recorded in the run
+artifacts. Legacy natural-language `action`/`expect` files remain supported.
+They may also be mixed with structured steps in a `schema: 2` test; only those
+legacy steps use the semantic parser.
+Set `VIZQA_PERCEPTION_MATCH_THRESHOLD` to tune the minimum accepted ranked
+similarity (default: `0.5`).
+
+### Editor autocomplete
+
+The versioned schema is at
+[`schemas/vizqa-test.schema.json`](../schemas/vizqa-test.schema.json). With the
+VS Code YAML extension, map it to your suite in workspace settings:
+
+```json
+{
+  "yaml.schemas": {
+    "./schemas/vizqa-test.schema.json": ["tests/**/*.yaml", "tests/**/*.yml"]
+  }
+}
+```
+
+Alternatively, add this first line to an individual file for yaml-language-server:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Spospider/vizQA/main/schemas/vizqa-test.schema.json
+```
+
 For pre-requisite-specific behavior, see [test_dependencies.md](test_dependencies.md).
+
+## Legacy YAML v1
+
+The remainder of this guide documents the supported legacy natural-language
+format. Use it for existing suites; prefer deterministic YAML v2 for new tests.
 
 ## Minimal Example
 
@@ -204,6 +270,16 @@ Clicking:
 - action: "Click on 'Orders' in the navigation menu"
 ```
 
+Keyboard:
+
+```yaml
+- action: "Press key Enter"
+- action: "Press keys Ctrl+C"
+- action: "Press key '+'"
+```
+
+Use `Press key ...` or `Press keys ...` for keyboard input. Bare phrases such as `Press the 'Submit' button` remain semantic UI-control actions and are resolved visually.
+
 Scrolling:
 
 ```yaml
@@ -291,12 +367,13 @@ Split broad scenarios into pre-requisites when state handoff matters.
 
 If an expectation becomes long, break the flow into more steps instead of packing multiple assertions into one sentence.
 
-### Use semantic scroll and wait commands
+### Use direct scroll, wait, and keyboard commands
 
-`vizQA` understands two common semantic commands directly in test actions:
+`vizQA` understands common direct commands in test actions:
 
 - `Scroll to ...` for target-seeking scrolling, including section names and page-scope phrases like `top` and `bottom`
 - `Wait for ...` for both time-based pauses and semantic UI conditions such as a toast, table, modal, or loader state
+- `Press key ...` for targetless keyboard input using Playwright-compatible key names such as `Enter`, `ArrowLeft`, `KeyA`, `Digit1`, or shortcuts like `Ctrl+C`
 
 Prefer these forms when the action is really about reaching a visible target or waiting for a visible state, rather than describing lower-level mechanics.
 

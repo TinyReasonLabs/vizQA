@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -231,6 +232,71 @@ def test_execute_interaction_uses_configured_step_delay():
 
     automator.page.mouse.click.assert_awaited_once_with(10, 20)
     mock_sleep.assert_called_once_with(0.2)
+
+
+def test_execute_do_press_key_does_not_require_target(session):
+    automator = Automator(perception_client=MagicMock())
+    automator.page = MagicMock()
+    automator.page.keyboard = MagicMock()
+    automator.page.keyboard.press = AsyncMock()
+    automator.parser.config.step_delay_seconds = 0.2
+    step = TestStep(id="key1", instruction="DO: press-key Enter")
+
+    with patch("vizQA.app.core.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        success = asyncio.run(automator._execute_do(session, step, "press-key Enter"))
+
+    assert success is True
+    assert step.status == StepStatus.PASSED
+    automator.page.keyboard.press.assert_awaited_once_with("Enter")
+    mock_sleep.assert_called_once_with(0.2)
+
+
+def test_execute_do_press_key_normalizes_ctrl_combo(session):
+    automator = Automator(perception_client=MagicMock())
+    automator.page = MagicMock()
+    automator.page.keyboard = MagicMock()
+    automator.page.keyboard.press = AsyncMock()
+    step = TestStep(id="key2", instruction="DO: press-key Ctrl+C")
+
+    success = asyncio.run(automator._execute_do(session, step, "press-key Ctrl+C"))
+
+    assert success is True
+    automator.page.keyboard.press.assert_awaited_once_with("Control+C")
+
+
+def test_execute_do_press_key_preserves_quoted_plus_literal(session):
+    automator = Automator(perception_client=MagicMock())
+    automator.page = MagicMock()
+    automator.page.keyboard = MagicMock()
+    automator.page.keyboard.press = AsyncMock()
+    step = TestStep(id="key3", instruction="DO: press-key '+'")
+
+    success = asyncio.run(automator._execute_do(session, step, "press-key '+'"))
+
+    assert success is True
+    automator.page.keyboard.press.assert_awaited_once_with("+")
+
+
+def test_execute_do_press_key_fails_empty_payload(session):
+    automator = Automator(perception_client=MagicMock())
+    automator.page = MagicMock()
+    automator.page.keyboard = MagicMock()
+    automator.page.keyboard.press = AsyncMock()
+    step = TestStep(id="key4", instruction="DO: press-key")
+
+    success = asyncio.run(automator._execute_do(session, step, "press-key"))
+
+    assert success is False
+    assert step.status == StepStatus.FAILED
+    assert step.failure_type == FailureType.ACTION_ERROR
+    automator.page.keyboard.press.assert_not_called()
+
+
+def test_wait_duration_uses_language_pack_units():
+    automator = Automator(perception_client=MagicMock())
+    automator.parser.language_pack = replace(automator.parser.language_pack, wait_duration_units={"ticks": 2.5})
+
+    assert automator._parse_wait_duration("3 ticks") == 7.5  # pylint: disable=protected-access
 
 
 def test_execute_action_uses_configured_step_delay_without_persistent_artifacts(session):

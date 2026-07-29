@@ -3,11 +3,20 @@ Deterministic parsing and lexical helpers for boolean-style UI queries.
 """
 
 import re
-from typing import List
+from typing import List, Optional
+
+from vizQA.reasoning.language import LanguagePack, alternation_pattern, default_language_pack
 
 
-def split_boolean_query(query: str) -> List[List[str]]:
+# pylint: disable=too-many-locals
+def split_boolean_query(query: str, language_pack: Optional[LanguagePack] = None) -> List[List[str]]:
     """Split a query into OR groups of AND clauses while preserving quoted text."""
+    language_pack = language_pack or default_language_pack()
+    or_terms = alternation_pattern(language_pack.boolean_query_or_terms)
+    and_terms = alternation_pattern(language_pack.boolean_query_and_terms)
+    if not or_terms or not and_terms:
+        return [[query]]
+
     local_quotes: List[str] = []
 
     def _replace(match: re.Match[str]) -> str:
@@ -15,11 +24,15 @@ def split_boolean_query(query: str) -> List[List[str]]:
         return f"__QUOTE_{len(local_quotes) - 1}__"
 
     protected = re.sub(r"(['\"])(.*?)\1", _replace, query)
-    or_parts = [part.strip() for part in re.split(r"\bor\b", protected, flags=re.IGNORECASE) if part.strip()]
+    or_parts = [
+        part.strip() for part in re.split(rf"\b(?:{or_terms})\b", protected, flags=re.IGNORECASE) if part.strip()
+    ]
 
     groups: List[List[str]] = []
     for or_part in or_parts:
-        and_parts = [part.strip() for part in re.split(r"\band\b", or_part, flags=re.IGNORECASE) if part.strip()]
+        and_parts = [
+            part.strip() for part in re.split(rf"\b(?:{and_terms})\b", or_part, flags=re.IGNORECASE) if part.strip()
+        ]
         restored_terms: List[str] = []
         for part in and_parts:
             restored = part

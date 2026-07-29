@@ -61,6 +61,12 @@ class TestStep(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     sub_steps: List["TestStep"] = []
+    ranked_only: bool = False
+    expect_absent: bool = False
+    timeout_seconds: Optional[float] = None
+    wait_seconds: Optional[float] = None
+    wait_for_target: bool = False
+    scroll_position: Optional[str] = None
 
     __test__ = False
 

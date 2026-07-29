@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from vizQA.app.exceptions import TestDefinitionError
 from vizQA.planning import StepPlanner
 
 # A comprehensive suite of 50 diverse UI testing instructions to test the AST parser's ability
@@ -27,10 +28,6 @@ TEST_CASES = [
     (
         "Click the submit and cancel buttons",
         [("FIND", "submit buttons"), ("DO", "click"), ("FIND", "cancel buttons"), ("DO", "click")],
-    ),
-    (
-        "Select the 'apple' and 'banana' options",
-        [("FIND", "element"), ("DO", "select 'apple'"), ("FIND", "element"), ("DO", "select 'banana' options")],
     ),
     # 14. Complex conjunctions (Multiple actions and targets)
     (
@@ -76,7 +73,6 @@ TEST_CASES = [
         "Submit",
         [("FIND", "Submit"), ("DO", "click Submit")],
     ),  # Wait, is submit an action? Generally click is the action on a submit button. Let's parse as click submit.
-    ("Click", [("FIND", "element"), ("DO", "click")]),
     # 28. Noise words and complex boilerplate
     (
         "Please navigate ahead and click on the bright blue confirm button located on the top right",
@@ -101,8 +97,9 @@ TEST_CASES = [
     ("Scroll down to the bottom of the page", [("DO", "scroll down to the bottom of the page")]),
     ("Scroll to the 'Reviews' section", [("DO", "scroll to the 'Reviews' section")]),
     # 35. Keyboard actions
-    ("Press Enter on the search box", [("FIND", "search box"), ("DO", "press Enter")]),
-    ("Hit the Escape key", [("FIND", "key"), ("DO", "press Escape")]),
+    ("Press key Enter", [("DO", "press-key Enter")]),
+    ("Press keys Ctrl+C", [("DO", "press-key Ctrl+C")]),
+    ("Hit the Escape key", [("FIND", "Escape key"), ("DO", "hit")]),
     # 37. Implicit context from previous clauses
     (
         "Clear the input and type 'new text'",
@@ -167,11 +164,6 @@ TEST_CASES = [
     ("right then, click the logout", [("FIND", "logout"), ("DO", "click")]),
     # 59. Complex DO with 'and'
     ("press and hold the button", [("FIND", "button"), ("DO", "press-and-hold")]),
-    # 60. Chained action and verification
-    (
-        "right click -> modal should close",
-        [("FIND", "element"), ("DO", "right click"), ("VERIFY", "modal should close")],
-    ),
     # Former testing_scripts/ reproducers (planner decomposition regression)
     (
         "Click the primary Login button header",
@@ -276,6 +268,21 @@ def test_semantic_parser(planner, instruction, expected_steps):
     ), f"expected: {expected_tuples}, actual: {actual_tuples}, instruction: {instruction}"
 
 
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "Select the 'apple' and 'banana' options",
+        "Click",
+        "right click -> modal should close",
+    ],
+)
+def test_semantic_parser_rejects_ambiguous_targets(planner, instruction):
+    with pytest.raises(TestDefinitionError) as excinfo:
+        planner.decompose([{"action": instruction}])
+
+    assert "No target element identified" in str(excinfo.value.internal_detail)
+
+
 def test_semantic_parser_preserves_quoted_and_in_action_and_expectation(planner):
     steps = planner.decompose(
         [
@@ -303,3 +310,37 @@ def test_semantic_parser_preserves_quoted_and_in_action_and_expectation(planner)
     ]
 
     assert actual_tuples == expected_tuples
+
+
+def test_semantic_parser_splits_negated_and_positive_quoted_expectations(planner):
+    steps = planner.decompose(
+        [
+            {
+                "action": "Click Login",
+                "expect": "The 'Sign in' modal should close and a 'Login Successful' alert or state change should occur",
+            }
+        ]
+    )
+
+    assert [sub.instruction for sub in steps[0].sub_steps] == [
+        "FIND: Login",
+        "DO: click",
+        "VERIFY: 'Sign in' modal should close",
+        "VERIFY: 'Login Successful' alert or state change should occur",
+    ]
+
+
+def test_semantic_parser_preserves_quoted_literal_key_payload(planner):
+    steps = planner.decompose([{"action": "Press key '+'"}])
+
+    instructions = [sub.instruction for sub in steps[0].sub_steps]
+
+    assert instructions == ["DO: press-key '+'"]
+
+
+def test_semantic_parser_keeps_press_button_on_semantic_click_path(planner):
+    steps = planner.decompose([{"action": "Press the Submit button"}])
+
+    instructions = [sub.instruction for sub in steps[0].sub_steps]
+
+    assert instructions == ["FIND: Submit button", "DO: press"]

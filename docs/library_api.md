@@ -43,7 +43,7 @@ Use the top-level helpers when you only need a few visual steps:
 
 ```python
 from playwright.async_api import async_playwright
-from vizQA import click, type, verify
+from vizQA import click, key_input, type, verify
 
 
 async def smoke_check():
@@ -55,6 +55,7 @@ async def smoke_check():
 
         await type(page, "email field", "analyst.user@example.com")
         await type(page, "password field", "AnalystPass!23")
+        await key_input(page, "Enter")
         await click(page, "Sign in button")
         await verify(page, "Overview dashboard")
 
@@ -72,6 +73,7 @@ async def login(page):
 
     await vizqa.type("email field", "analyst.user@example.com")
     await vizqa.type("password field", "AnalystPass!23")
+    await vizqa.key_input("Enter")
     await vizqa.click("Sign in button")
     await vizqa.verify("Overview dashboard")
 ```
@@ -81,7 +83,7 @@ async def login(page):
 The recommended public import split is:
 
 ```python
-from vizQA import attach, click, run_step, run_steps, type, verify
+from vizQA import attach, click, key_input, run_step, run_steps, type, verify
 from vizQA.search import ElementMatch, SearchResult, search
 ```
 
@@ -115,7 +117,7 @@ If `debug_dir` is omitted, library calls do not write persistent artifacts under
 Available helpers:
 
 ```python
-from vizQA import click, run_step, run_steps, type, verify
+from vizQA import click, key_input, run_step, run_steps, type, verify
 from vizQA.search import search
 ```
 
@@ -123,6 +125,7 @@ Supported calls:
 
 ```python
 await click(page, "Continue button")
+await key_input(page, "Ctrl+C")
 await search(page, "primary sign in button")
 await type(page, "email field", "analyst.user@example.com")
 await verify(page, "Success banner")
@@ -179,6 +182,7 @@ session = attach(page)
 
 await session.search("Continue button")
 await session.click("Continue button")
+await session.key_input("Ctrl+C")
 await session.type("email field", "analyst.user@example.com")
 await session.verify("Success banner")
 await session.run_step("Click the 'Continue' button")
@@ -187,6 +191,26 @@ await session.run_steps([
     "Type 'analyst.user' into the username field",
 ])
 ```
+
+### Keyboard Input
+
+Use `key_input` for targetless keyboard input against the current page focus:
+
+```python
+await key_input(page, "Enter")
+await key_input(page, "Ctrl+C")
+await session.key_input("ControlOrMeta+A")
+```
+
+Natural-language steps use the explicit `Press key ...` syntax:
+
+```python
+await run_step(page, "Press key Enter")
+await run_step(page, "Press keys Ctrl+C")
+await run_step(page, "Press key '+'")
+```
+
+Key names follow Playwright `keyboard.press()` syntax, which is aligned with W3C UI Events names. `vizQA` passes through names such as `Enter`, `Escape`, `ArrowLeft`, `KeyA`, `Digit1`, `F1`, and `ControlOrMeta+A`, and normalizes friendly aliases such as `Ctrl` to `Control`, `Cmd` or `Command` to `Meta`, `Option` to `Alt`, `Esc` to `Escape`, and `Left` to `ArrowLeft`. Quote a literal `+` as `"+"` in the helper or `Press key '+'` in natural-language steps.
 
 ## Search Results
 

@@ -15,7 +15,7 @@ from tokenizers import Tokenizer
 
 from vizQA.app.logger import get_logger
 from vizQA.reasoning.clause_splitting import split_verify_conjunctions
-from vizQA.reasoning.language import LanguagePack, default_language_pack
+from vizQA.reasoning.language import LanguagePack, alternation_pattern, default_language_pack, match_prefixed_payload
 from vizQA.reasoning.query_semantics import lexical_term_score, normalize_boolean_term, split_boolean_query
 
 
@@ -38,31 +38,9 @@ class MiniLM:
     Handles MiniLM ONNX inference for semantic similarity and intent classification.
     """
 
-    _NEGATION_REGEX = re.compile(
-        (
-            r"\b("
-            r"not|no longer|disappear(?:s|ed)?|gone|invisible|absent|done|finished|"
-            r"closed?|removed|vanish(?:es|ed)?|collapse(?:s|d)?|dismiss(?:ed|es)?|"
-            r"hidden|out of view|not in view|not showing anymore"
-            r")\b"
-        ),
-        re.IGNORECASE,
-    )
-    _POSITIVE_REGEX = re.compile(
-        (
-            r"\b("
-            r"appear(?:s|ed)?|visible|present|displayed|shown|shows up|opens?|"
-            r"rendered|stays?|becomes visible|comes into view|in view"
-            r")\b"
-        ),
-        re.IGNORECASE,
-    )
-
-    _KEY_NAMES = {"enter", "escape", "esc", "tab", "backspace", "space", "delete", "return", "shift", "ctrl", "alt"}
-
-    def __init__(self, model_dir: str, logger: Optional[Any] = None):
+    def __init__(self, model_dir: str, logger: Optional[Any] = None, language_pack: Optional[LanguagePack] = None):
         self._logger = logger or get_logger()
-        self.language_pack: LanguagePack = default_language_pack()
+        self.language_pack = language_pack or default_language_pack()
         self.provider_id = "minilm"
         self.revision = "unknown"
         self.model_path = os.path.join(model_dir, "model.onnx")
@@ -84,7 +62,12 @@ class MiniLM:
         self._intent_anchor_groups: Dict[str, np.ndarray] = {
             "color": self._compute_anchor_embeddings(self.language_pack.colors),
             "state": self._compute_anchor_embeddings(self.language_pack.states),
-            "position": self._compute_anchor_embeddings(self.language_pack.positions),
+            "position": self._compute_anchor_embeddings(
+                [
+                    *[term for terms in self.language_pack.position_terms.values() for term in terms],
+                    *self.language_pack.position_aliases.keys(),
+                ]
+            ),
             "negation": self._compute_anchor_embeddings(self.language_pack.negation_anchors),
             "positive": self._compute_anchor_embeddings(self.language_pack.positive_anchors),
         }
@@ -101,6 +84,57 @@ class MiniLM:
                 all_syns.append((s.lower(), ct))
         self._all_syns_sorted = sorted(all_syns, key=lambda x: len(x[0]), reverse=True)
         self._action_syn_set = set(s for s, _ in self._all_syns_sorted)
+        self._negation_fast_re = self.language_pack.negation_regex
+        self._positive_fast_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.positive_regex_terms)})\b",
+            re.IGNORECASE,
+        )
+        self._article_prefix_re = self._prefix_pattern(self.language_pack.articles)
+        self._clean_target_prefix_re = self._prefix_pattern(
+            [*self.language_pack.articles, *self.language_pack.leading_prepositions]
+        )
+        self._rhs_noise_prefix_re = self._prefix_pattern(
+            [*self.language_pack.articles, *self.language_pack.rhs_noise_words]
+        )
+        self._verify_prefix_re = self._prefix_pattern(self.language_pack.verify_prefixes)
+        self._verify_trigger_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.verify_trigger_terms)})\b",
+            re.IGNORECASE,
+        )
+        self._wait_condition_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.wait_condition_terms)})\b",
+            re.IGNORECASE,
+        )
+        self._coordination_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.coordination_terms)})\b",
+            re.IGNORECASE,
+        )
+        punctuation_terms = [re.escape(term) for term in self.language_pack.coordination_punctuation if term]
+        coordination_word_pattern = alternation_pattern(self.language_pack.coordination_terms)
+        separator_parts = [rf"\b(?:{coordination_word_pattern})\b", *punctuation_terms]
+        self._coordination_or_separator_re = re.compile(f"({'|'.join(separator_parts)})", re.IGNORECASE)
+        self._leading_coordination_re = re.compile(
+            rf"^\s*(?:(?:{coordination_word_pattern})\s+)?",
+            re.IGNORECASE,
+        )
+        self._clause_split_re = re.compile(
+            rf"\b(?:{alternation_pattern(self.language_pack.clause_splitters)})\b|->|=>",
+            re.IGNORECASE,
+        )
+        hold_terms = alternation_pattern(self.language_pack.hold_modifier_terms)
+        self._hold_action_re = re.compile(
+            rf"\b({alternation_pattern(self.language_pack.hold_action_verbs)})\s+"
+            rf"(?:{coordination_word_pattern})\s+(?:{hold_terms})\b",
+            re.IGNORECASE,
+        )
+        self._noun_action_guard_patterns = {
+            synonym: [re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE) for phrase in phrases]
+            for synonym, phrases in self.language_pack.noun_action_guards.items()
+        }
+
+    @staticmethod
+    def _prefix_pattern(prefixes: List[str]) -> re.Pattern[str]:
+        return re.compile(rf"^(?:{alternation_pattern(prefixes)})\b\s*", re.IGNORECASE)
 
     def _compute_anchor_embeddings(self, anchors: List[str]) -> np.ndarray:
         """Runs the anchor words through the model to get their 384D representations."""
@@ -137,7 +171,7 @@ class MiniLM:
 
     def split_boolean_query(self, query: str) -> List[List[str]]:
         """Splits a query into OR groups, each containing AND clauses, while preserving quoted text."""
-        return split_boolean_query(query)
+        return split_boolean_query(query, self.language_pack)
 
     def best_anchor_similarity(self, vec: np.ndarray, anchor_matrix: np.ndarray) -> float:
         """Returns the highest cosine similarity between vec and any row in anchor_matrix."""
@@ -214,36 +248,28 @@ class MiniLM:
         """
         unquoted = self._strip_quoted_content(text)
 
-        if self._NEGATION_REGEX.search(unquoted):
+        if self._negation_fast_re.search(unquoted):
             return True
-        if self._POSITIVE_REGEX.search(unquoted):
+        if self._positive_fast_re.search(unquoted):
             return False
 
         vec = self.encode(text)
         sim_neg = self.best_anchor_similarity(vec, self._intent_anchor_groups["negation"])
         sim_pos = self.best_anchor_similarity(vec, self._intent_anchor_groups["positive"])
         self._logger.log_debug("is_negation", f"text={text!r}, sim_neg={sim_neg:.3f}, sim_pos={sim_pos:.3f}")
-        # print(f"text={text!r}, sim_neg={sim_neg:.3f}, sim_pos={sim_pos:.3f}")
-        # print(f"threshold={threshold:.3f}")
         self._logger.log_debug("is_negation", f"threshold={threshold:.3f}")
 
         # logit-style
         score = sim_neg - sim_pos
         prob = 1 / (1 + math.exp(-score * 5))  # k ~ 5–10
-        # print(f"prob={prob:.3f}")
         if prob > logit_threshold and sim_neg >= 0.25:
             return True
-        # return prob > threshold
 
         # margin-based
         margin = sim_neg - sim_pos
-        # print(f"margin={margin:.3f}")
         if margin >= delta * 2.0 and sim_neg >= 0.25:
             return True
         return prob > logit_threshold and (sim_neg >= threshold or margin >= delta)
-
-        # absolute threshold
-        # return sim_neg >= threshold and sim_neg > sim_pos
 
     def semantic_match(self, query: str, candidates: List[str], threshold: float = 0.7) -> List[int]:
         """Returns indices of candidates whose similarity to query exceeds threshold."""
@@ -287,6 +313,10 @@ class MiniLM:
         Runs inference on the prompt and returns decomposed steps.
         Expected output format: [{"type": "FIND", "value": "..."}, ...]
         """
+        direct_keypress = self._parse_direct_keypress(prompt)
+        if direct_keypress is not None:
+            return direct_keypress
+
         encoding = self.tokenizer.encode(prompt)
         input_ids = encoding.ids
         attention_mask = encoding.attention_mask
@@ -349,6 +379,14 @@ class MiniLM:
                 raise
             raise RuntimeError(f"MiniLM Deserialization Error: {e}") from e
 
+    def _parse_direct_keypress(self, prompt: str) -> Optional[List[Dict[str, str]]]:
+        """Parse explicit targetless keypress commands before semantic decomposition."""
+        payload = match_prefixed_payload(prompt, self.language_pack.keypress_prefixes)
+        if payload is None:
+            return None
+        value = f"press-key {payload}".strip()
+        return [{"type": "DO", "value": value}]
+
     # ── Semantic Dissection Helpers ──────────────────────────────────────────
 
     def _sd_protect(self, prompt: str) -> Tuple[str, List[str]]:
@@ -361,26 +399,26 @@ class MiniLM:
 
         protected = re.sub(r"(['\"])(.*?)\1", _repl, prompt)
         # Upfront noise stripping
-        protected = re.sub(r"\bright\s+then\b", "then", protected, flags=re.I)
-        protected = re.sub(
-            r"^(?:\s*)(?:please\s*(?:navigate\s*ahead\s*)?|i\s*want\s*you\s*to\s*)(?:and\s*)?",
-            "",
-            protected,
-            flags=re.I,
-        )
-        # Protect "press and hold" from 'and' splitting
-        protected = re.sub(r"\bpress\s+and\s+hold\b", "press_and_hold", protected, flags=re.I)
+        for phrase in self.language_pack.lead_in_noise_phrases:
+            replacement = self.language_pack.lead_in_noise_replacements.get(phrase, "")
+            protected = re.sub(rf"\b{re.escape(phrase)}\b", replacement, protected, flags=re.I)
+        protected = self._leading_coordination_re.sub("", protected, count=1)
+        # Protect hold gestures from coordination splitting
+        protected = self._hold_action_re.sub(r"\1__HOLD_SEQUENCE__", protected)
         return protected, quotes
 
     def _sd_restore(self, text: str, quotes: List[str]) -> str:
         """Restores protected quote contents."""
         for i, q in enumerate(quotes):
             text = text.replace(f"__QUOTE_{i}__", q.strip())
-        text = text.replace("press_and_hold", "press and hold")
+        canonical_hold_phrase = (
+            f" {self.language_pack.coordination_terms[0]} {self.language_pack.hold_modifier_terms[0]}"
+        )
+        text = text.replace("__HOLD_SEQUENCE__", canonical_hold_phrase)
         return text
 
     def _sd_split_on_and_preserving_quotes(self, text: str) -> List[str]:
-        """Split on 'and' while keeping quoted phrases intact."""
+        """Split on configured coordination terms while keeping quoted phrases intact."""
         local_quotes: List[str] = []
 
         def _repl(match):
@@ -388,7 +426,7 @@ class MiniLM:
             return f"__LOCAL_QUOTE_{len(local_quotes)-1}__"
 
         protected = re.sub(r"(['\"])(.*?)\1", _repl, text)
-        parts = [part.strip() for part in re.split(r"\band\b", protected, flags=re.I)]
+        parts = [part.strip() for part in self._coordination_re.split(protected)]
 
         restored_parts = []
         for part in parts:
@@ -399,7 +437,7 @@ class MiniLM:
 
     def _sd_clean_target(self, text: str) -> str:
         """Removes leading articles and prepositions (the, a, an, over, at, on, in, into, from, of)."""
-        clean = re.sub(r"^(the|a|an|over|at|on|in|into|from|of)\s+", "", text, flags=re.I).strip()
+        clean = self._clean_target_prefix_re.sub("", text).strip()
         # Also strip trailing 'key' if after a recognized key name
         return clean
 
@@ -407,42 +445,40 @@ class MiniLM:
         """Returns (literal_syn, canonical_type) or (None, None)."""
         t = text.lower()
         for s, ct in self._all_syns_sorted:
-            if s == "input" and re.search(r"\bthe\s+input\b", t):
+            if self._matches_noun_action_guard(s, t):
                 continue
             if re.search(rf"\b{re.escape(s)}\b", t):
                 return s, ct
         return None, None
 
+    def _matches_noun_action_guard(self, synonym: str, text: str) -> bool:
+        """Return whether a synonym appears in a configured noun-only phrase."""
+        guard_patterns = self._noun_action_guard_patterns.get(synonym.lower(), [])
+        return any(pattern.search(text) for pattern in guard_patterns)
+
     def _sd_rhs_starts_with_verb(self, text: str) -> bool:
         """True if text starts with a recognized action verb."""
-        t = re.sub(r"^\s*(the|a|an|please|over)\s+", "", text.lower()).strip()
+        t = self._rhs_noise_prefix_re.sub("", text.lower()).strip()
         return any(re.match(rf"{re.escape(v)}\b", t) for v in self._action_syn_set)
 
     def _sd_get_clauses(self, protected: str) -> List[str]:
         """Splits the protected prompt into logical instruction clauses."""
-        # High-level split: 'until' handling for VERIFY
-        until_split = re.split(r"\buntil\b", protected, maxsplit=1, flags=re.I)
+        # High-level split: configured wait-condition handling for VERIFY
+        until_split = self._wait_condition_re.split(protected, maxsplit=1)
         if len(until_split) == 2:
             action_part = until_split[0].strip()
-            if re.fullmatch(r"(pause|wait|sleep)", action_part.lower()):
+            if re.fullmatch(rf"(?:{alternation_pattern(self.language_pack.wait_verbs)})", action_part.lower()):
                 temp_clauses = ["VERIFY_FLAG " + until_split[1].strip()]
             else:
-                temp_clauses = [
-                    c.strip()
-                    for c in re.split(r"\b(?:then|after|while|also)\b|->|=>", action_part, flags=re.I)
-                    if c.strip()
-                ]
+                temp_clauses = [c.strip() for c in self._clause_split_re.split(action_part) if c.strip()]
                 temp_clauses.append("VERIFY_FLAG " + until_split[1].strip())
         else:
-            temp_clauses = [
-                c.strip() for c in re.split(r"\b(?:then|after|while|also)\b|->|=>", protected, flags=re.I) if c.strip()
-            ]
+            temp_clauses = [c.strip() for c in self._clause_split_re.split(protected) if c.strip()]
 
-        # Smart 'and'/',' split — only when RHS STARTS with a recognized action verb
+        # Smart coordination split — only when RHS starts with a recognized action verb
         clauses = []
-        pattern_and = re.compile(r"(\band\b|,)", flags=re.I)
         for c in temp_clauses:
-            tokens = pattern_and.split(c)
+            tokens = self._coordination_or_separator_re.split(c)
             current = tokens[0]
             for i in range(1, len(tokens), 2):
                 rhs = tokens[i + 1]
@@ -463,19 +499,19 @@ class MiniLM:
         lower_clause = clause.lower()
         is_verify = (
             clause.startswith("VERIFY_FLAG ")
-            or re.search(r"\b(verify|ensure|assert|make sure)\b", lower_clause)
-            or re.search(r"\bshould\b", lower_clause)
+            or any(lower_clause.startswith(prefix.lower()) for prefix in self.language_pack.verify_prefixes)
+            or bool(self._verify_trigger_re.search(lower_clause))
         )
         if not is_verify:
             return False, None
 
         protected_val = re.sub(r"^(VERIFY_FLAG\s+)", "", clause)
-        protected_val = re.sub(
-            r"\b(verify|ensure|make sure|assert|that|the|a|an)\b", "", protected_val, flags=re.I
-        ).strip()
+        protected_val = self._verify_prefix_re.sub("", protected_val).strip()
+        protected_val = self._article_prefix_re.sub("", protected_val).strip()
         # Split only on real verification conjunctions, not quoted/noun phrases.
-        for vp in split_verify_conjunctions(protected_val):
+        for vp in split_verify_conjunctions(protected_val, self.language_pack):
             vp = self._sd_restore(vp, quotes)
+            vp = self._article_prefix_re.sub("", vp).strip()
             vp = re.sub(r"\s+", " ", vp).strip()
             if vp:
                 all_steps.append({"type": "VERIFY", "value": vp})
@@ -488,7 +524,7 @@ class MiniLM:
         # This is called if no verb was found by find_verb
         noun = self._sd_clean_target(real_clause.lower())
         noun = self._sd_restore(noun, quotes)
-        if not noun or noun.lower() in ["it", "them"]:
+        if not noun or noun.lower() in self.language_pack.pronouns:
             raise ValueError(f"Could not identify a target element in '{real_clause}'")
 
         all_steps.append({"type": "FIND", "value": noun})
@@ -497,10 +533,11 @@ class MiniLM:
 
     def _sd_handle_drag(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
         """Handles pattern 'drag [source] onto [dest]'. Returns (handled, next_prev_target)."""
-        if ctx.canonical_type != "drag" or not re.search(r"\bonto\b", ctx.target_area, re.I):
+        connectors = alternation_pattern(self.language_pack.drag_target_connectors)
+        if ctx.canonical_type != "drag" or not re.search(rf"\b(?:{connectors})\b", ctx.target_area, re.I):
             return False, None
 
-        onto_parts = re.split(r"\bonto\b", ctx.target_area, maxsplit=1, flags=re.I)
+        onto_parts = re.split(rf"\b(?:{connectors})\b", ctx.target_area, maxsplit=1, flags=re.I)
         drag_tgt = self._sd_clean_target(self._sd_restore(onto_parts[0].strip(), ctx.quotes))
         drop_tgt = self._sd_clean_target(self._sd_restore(onto_parts[1].strip(), ctx.quotes))
 
@@ -521,38 +558,7 @@ class MiniLM:
 
     def _sd_handle_key_input(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
         """Handles pattern 'press enter' or 'press [key]'. Returns (handled, next_prev_target)."""
-        detected_key = None
-        for k in self._KEY_NAMES:
-            if re.search(rf"\b{re.escape(k)}\b", ctx.real_clause.lower()):
-                detected_key = k
-                break
-
-        if not detected_key:
-            return False, None
-
-        # Robust key handling: "Enter" at start is an action, NOT a key press
-        is_explicit_press = re.match(r"^\s*(press|hit|on|hit\s+the|press\s+the)\b", ctx.real_clause, flags=re.I)
-        if not is_explicit_press and detected_key.lower() == "enter":
-            return False, None
-
-        if is_explicit_press:
-            # "press enter on the login button"
-            element = re.sub(r"\b(press|hit|on)\b", "", ctx.real_clause, flags=re.I)
-            element = re.sub(rf"\b{re.escape(detected_key)}\b", "", element, flags=re.I).strip()
-            element = self._sd_clean_target(element)
-            if element.lower().endswith(" key"):
-                element = element[:-4].strip()
-
-            if not element or element.lower() in ["it", "them"]:
-                element = ctx.prev_target
-
-            if not element:
-                raise ValueError(f"No target element identified for key press '{detected_key}' in '{ctx.real_clause}'")
-
-            ctx.all_steps.append({"type": "FIND", "value": element})
-            ctx.all_steps.append({"type": "DO", "value": f"press {detected_key}"})
-            return True, element
-
+        del ctx
         return False, None
 
     def _sd_handle_type_enter(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
@@ -564,10 +570,10 @@ class MiniLM:
 
         # ── Into/In/On split: distributive or multiple targets ──
         connector = None
-        if re.search(r"\binto\b", ctx.target_area, re.I):
-            connector = "into"
-        elif re.search(r"\bin\b", ctx.target_area, re.I):
-            connector = "in"
+        for candidate in self.language_pack.type_target_connectors:
+            if re.search(rf"\b{re.escape(candidate)}\b", ctx.target_area, re.I):
+                connector = candidate
+                break
 
         if connector:
             return self._sd_handle_connector_type(ctx, connector)
@@ -582,7 +588,7 @@ class MiniLM:
 
     def _sd_handle_connector_type(self, ctx: DissectionContext, connector: str) -> Tuple[bool, Optional[str]]:
         """Helper for type/enter actions using connectors like 'into' or 'in'."""
-        and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
+        and_parts = self._coordination_re.split(ctx.target_area)
         if len(and_parts) >= 2 and all(re.search(rf"\b{connector}\b", p, re.I) for p in and_parts):
             elem = None
             for part in and_parts:
@@ -601,7 +607,7 @@ class MiniLM:
         if len(part_split) == 2:
             pload = self._sd_restore(part_split[0].strip(), ctx.quotes)
             elem = self._sd_clean_target(self._sd_restore(part_split[1].strip(), ctx.quotes))
-            if not elem or elem.lower() in ["it", "them"]:
+            if not elem or elem.lower() in self.language_pack.pronouns:
                 elem = ctx.prev_target
             if not elem:
                 raise ValueError(f"No target identified for '{ctx.canonical_type}' in '{ctx.real_clause}'")
@@ -637,8 +643,9 @@ class MiniLM:
         if ctx.canonical_type != "select":
             return False, None
 
-        if re.search(r"\bfrom\b", ctx.target_area, re.I):
-            from_split = re.split(r"\bfrom\b", ctx.target_area, maxsplit=1, flags=re.I)
+        connectors = alternation_pattern(self.language_pack.select_source_connectors)
+        if re.search(rf"\b(?:{connectors})\b", ctx.target_area, re.I):
+            from_split = re.split(rf"\b(?:{connectors})\b", ctx.target_area, maxsplit=1, flags=re.I)
             pload = self._sd_restore(from_split[0].strip(), ctx.quotes)
             elem_val = self._sd_clean_target(self._sd_restore(from_split[1].strip(), ctx.quotes))
             if not elem_val:
@@ -647,17 +654,20 @@ class MiniLM:
             ctx.all_steps.append({"type": "DO", "value": f"select {pload}"})
             return True, elem_val
 
-        if re.search(r"\band\b", ctx.target_area, re.I):
+        if self._coordination_re.search(ctx.target_area):
             # Distributive: 'apple' and 'banana' options
-            and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
+            and_parts = self._coordination_re.split(ctx.target_area)
             last_elem = None
             for part in and_parts:
                 part_restored = self._sd_clean_target(self._sd_restore(part.strip(), ctx.quotes))
                 if not part_restored:
                     raise ValueError(f"Could not identify a clear option to select in '{ctx.real_clause}'")
 
-                # Note: this distributive logic currently assumes the target is prev_target
-                tgt = ctx.prev_target or "element"
+                if not ctx.prev_target:
+                    raise ValueError(f"No target element identified for 'select' action in '{ctx.real_clause}'")
+
+                # Use the inferred target from prior context; do not invent a placeholder.
+                tgt = ctx.prev_target
                 ctx.all_steps.append({"type": "FIND", "value": tgt})
                 ctx.all_steps.append({"type": "DO", "value": f"select {part_restored}"})
                 last_elem = tgt
@@ -666,11 +676,11 @@ class MiniLM:
         return False, None
 
     def _sd_handle_distributive_and(self, ctx: DissectionContext) -> Tuple[bool, Optional[str]]:
-        """Handles distributive 'and' (e.g., 'click submit and cancel buttons'). Returns (handled, next_prev_target)."""
-        if ctx.canonical_type in ["click", "right-click", "hover", "select", "check"] and re.search(
-            r"\band\b", ctx.target_area, re.I
+        """Handles distributive coordination (e.g., 'click submit and cancel buttons')."""
+        if ctx.canonical_type in ["click", "right-click", "hover", "select", "check"] and self._coordination_re.search(
+            ctx.target_area
         ):
-            and_parts = re.split(r"\band\b", ctx.target_area, flags=re.I)
+            and_parts = self._coordination_re.split(ctx.target_area)
             if not any(self._sd_rhs_starts_with_verb(p) for p in and_parts):
                 restored_parts = [self._sd_clean_target(self._sd_restore(p.strip(), ctx.quotes)) for p in and_parts]
                 last_words = restored_parts[-1].split()
@@ -679,7 +689,7 @@ class MiniLM:
                     tgt = part.strip()
                     if j < len(restored_parts) - 1 and shared_suffix:
                         tgt = f"{tgt} {shared_suffix}"
-                    if not tgt or tgt.lower() in ["it", "them"]:
+                    if not tgt or tgt.lower() in self.language_pack.pronouns:
                         raise ValueError(f"Could not identify a target element in '{ctx.real_clause}'")
 
                     ctx.all_steps.append({"type": "FIND", "value": tgt})
@@ -692,10 +702,11 @@ class MiniLM:
         self, lower_real: str, prev_target: Optional[str], all_steps: List[Dict[str, str]]
     ) -> Tuple[bool, Optional[str]]:
         """Handles pattern 'press and hold [target]'. Returns (handled, next_prev_target)."""
-        if "press and hold" in lower_real or "press_and_hold" in lower_real:
-            rest = re.sub(r"\b(press\s+and\s+hold|press_and_hold)\b", "", lower_real, flags=re.I).strip()
+        if self._hold_action_re.search(lower_real) or "__hold_sequence__" in lower_real:
+            rest = self._hold_action_re.sub("", lower_real)
+            rest = rest.replace("__hold_sequence__", "").strip()
             rest = self._sd_clean_target(rest)
-            if not rest or rest.lower() in ["it", "them"]:
+            if not rest or rest.lower() in self.language_pack.pronouns:
                 rest = prev_target
 
             if not rest:
@@ -781,17 +792,19 @@ class MiniLM:
                     part for part in [saved_literal or canonical_type, scroll_payload] if part
                 ).strip()
                 all_steps.append({"type": "DO", "value": scroll_value})
-                prev_target = self._sd_clean_target(scroll_payload) or prev_target or "element"
+                prev_target = self._sd_clean_target(scroll_payload) or prev_target
                 continue
 
             # 5. FINAL FALLBACK (standard verb + noun)
             target_val = self._sd_clean_target(self._sd_restore(target_area, quotes))
-            if not target_val or target_val.lower() in ["it", "them"]:
-                target_val = prev_target or "element"
+            if not target_val or target_val.lower() in self.language_pack.pronouns:
+                target_val = prev_target
 
             if not target_val:
                 if canonical_type == "wait":
-                    target_val = "page"
+                    target_val = (
+                        self.language_pack.generic_scope_terms[0] if self.language_pack.generic_scope_terms else "page"
+                    )
                 else:
                     raise ValueError(
                         f"No target element identified for {saved_literal or canonical_type} in '{real_clause}'"

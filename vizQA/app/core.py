@@ -26,8 +26,10 @@ from vizQA.app.exceptions import (
 )
 from vizQA.app.logger import get_logger
 from vizQA.app.memory import FailureType, StepStatus, TestSession, TestStep
+from vizQA.app.project_config import load_project_language
 from vizQA.app.support.weights import get_model_dir
 from vizQA.reasoning import Intent, MiniLM, SemanticParser
+from vizQA.reasoning.language import load_language_pack
 
 if TYPE_CHECKING:
     from vizQA.app.logger import SessionLogger
@@ -73,15 +75,21 @@ class Automator:
         if self.artifact_dir:
             os.makedirs(self.artifact_dir, exist_ok=True)
 
+        language = load_project_language()
+        try:
+            language_pack = load_language_pack(language)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unable to load configured vizQA language pack '{language}'.") from exc
+
         model_dir = os.fspath(get_model_dir())
         try:
-            self.minilm: Optional[MiniLM] = MiniLM(model_dir, logger=self.logger)
+            self.minilm: Optional[MiniLM] = MiniLM(model_dir, logger=self.logger, language_pack=language_pack)
         except (FileNotFoundError, RuntimeError):
             self.minilm = None
             self.logger.log_warning("init", "MiniLM model not found — semantic matching degraded to substring.")
 
         # Single shared parser instance wired to the model
-        self.parser = SemanticParser(semantic_provider=self.minilm, logger=self.logger)
+        self.parser = SemanticParser(language_pack=language_pack, semantic_provider=self.minilm, logger=self.logger)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -308,7 +316,9 @@ class Automator:
         """Executes a single atomic step (FIND, DO, VERIFY, or legacy)."""
         instr = step.instruction
         if instr.startswith("FIND:"):
-            return await self._execute_find(session, step, instr.replace("FIND:", "").strip())
+            return await self._execute_find(
+                session, step, instr.replace("FIND:", "").strip(), ranked_only=step.ranked_only
+            )
         if instr.startswith("DO:"):
             return await self._execute_do(session, step, instr.replace("DO:", "").strip())
         if instr.startswith("VERIFY:"):
@@ -370,7 +380,7 @@ class Automator:
     # Atomic step executors
     # ------------------------------------------------------------------
 
-    async def _execute_find(self, session: TestSession, step: TestStep, query: str) -> bool:
+    async def _execute_find(self, session: TestSession, step: TestStep, query: str, ranked_only: bool = False) -> bool:
         """Handles a FIND: sub-step — perceives the page and stores the target.
 
         :param session: The test session.
@@ -378,8 +388,7 @@ class Automator:
         :param query: The query to execute.
         :return: True if the step was executed successfully, False otherwise.
         """
-        test_slug = _test_slug(session)
-        image_input, persistent = await self._capture_perception_input(test_slug, f"{step.id}_before")
+        image_input, persistent = await self._capture_perception_input(_test_slug(session), f"{step.id}_before")
         if persistent:
             step.screenshot_before = image_input["image_path"]
 
@@ -402,8 +411,11 @@ class Automator:
         target = None
         if perception.get("top_matches"):
             target = perception["top_matches"][0]
-        elif perception.get("elements"):
+        elif not ranked_only and perception.get("elements"):
             target = perception["elements"][0]
+
+        if ranked_only:
+            target = self._ranked_target(perception)
 
         self._log_perception_summary(step.id, query, perception, selected=target)
 
@@ -411,15 +423,16 @@ class Automator:
             session.metadata["target"] = target
             session.metadata["last_perception"] = perception
 
-            # Decoupled history update: just store raw data under normalized subject
-            norm_subj = self.parser.normalize_subject(query)
-            history = session.metadata.setdefault("history", {})
-            if norm_subj not in history:
-                history[norm_subj] = {
-                    "target": copy.deepcopy(target),
-                    "elements": copy.deepcopy(perception.get("elements", [])),
-                }
-                self.logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
+            if not ranked_only:
+                # Legacy find history is semantic state; ranked v2 finds deliberately skip it.
+                norm_subj = self.parser.normalize_subject(query)
+                history = session.metadata.setdefault("history", {})
+                if norm_subj not in history:
+                    history[norm_subj] = {
+                        "target": copy.deepcopy(target),
+                        "elements": copy.deepcopy(perception.get("elements", [])),
+                    }
+                    self.logger.log_debug(step.id, f"Stored FIRST appearance for '{norm_subj}'")
 
             step.status = StepStatus.PASSED
             return True
@@ -429,6 +442,7 @@ class Automator:
         step.failure_reason = self._failure_details("FIND", query, perception, "Element not found")
         return False
 
+    # pylint: disable=too-many-return-statements
     async def _execute_do(self, session: TestSession, step: TestStep, action_cmd: str) -> bool:
         """Handles a DO: sub-step — resolves coords and fires the interaction.
 
@@ -441,10 +455,21 @@ class Automator:
         action = parts[0].lower()
         payload = self._resolve_payload(parts[1] if len(parts) > 1 else "", session)
 
+        if step.wait_seconds is not None:
+            await asyncio.sleep(step.wait_seconds)
+            step.status = StepStatus.PASSED
+            return True
         if action == "wait":
             return await self._handle_wait_action(session, step, payload)
         if action == "scroll":
+            if step.scroll_position:
+                viewport = await self._get_scroll_metrics()
+                await self._scroll_to_position(0 if step.scroll_position == "top" else int(viewport["max_scroll_top"]))
+                step.status = StepStatus.PASSED
+                return True
             return await self._handle_scroll_action(session, step, payload)
+        if action == "press-key":
+            return await self._handle_keypress_action(step, payload)
 
         target = session.metadata.get("target")
         if not target:
@@ -483,22 +508,25 @@ class Automator:
         poll_interval: float,
         screenshot_suffix: str,
         require_element_match: bool = False,
+        ranked_only: bool = False,
+        expect_absent: bool = False,
     ) -> tuple[bool, Dict[str, Any], str]:
-        """Polls perception until the semantic intent matches or the timeout expires."""
+        """Polls perception until a semantic intent or a strict ranked query matches."""
         start_wait = datetime.now()
         test_slug = _test_slug(session)
 
-        intent = self.parser.parse_verify_intent(query)
-        self.logger.log_debug(step.id, f"Parsed intent: {intent}")
-        keyword = str(intent.keyword or "")
-        subject = str(intent.subject or "")
-        position = str(intent.position or "")
-        if keyword:
-            perc_query = f"'{keyword}' {subject} {position}"
-        elif subject or position:
-            perc_query = f"{subject} {position}"
-        else:
-            perc_query = query
+        intent = None
+        perc_query = query
+        if not ranked_only:
+            intent = self.parser.parse_verify_intent(query)
+            self.logger.log_debug(step.id, f"Parsed intent: {intent}")
+            keyword = str(intent.keyword or "")
+            subject = str(intent.subject or "")
+            position = str(intent.position or "")
+            if keyword:
+                perc_query = f"'{keyword}' {subject} {position}"
+            elif subject or position:
+                perc_query = f"{subject} {position}"
 
         perception: Dict[str, Any] = {}
         reasoning = ""
@@ -517,7 +545,11 @@ class Automator:
 
             if perception:
                 self._log_perception_summary(step.id, perc_query, perception, selected=None)
-                if require_element_match:
+                if ranked_only:
+                    target = self._ranked_target(perception)
+                    match_found = (target is None) if expect_absent else (target is not None)
+                    reasoning = "Ranked target is absent." if expect_absent else "Ranked target is visible."
+                elif require_element_match:
                     match_found, reasoning = self._check_wait_for_match(intent, perception)
                 else:
                     match_found, reasoning = self._check_verification_match(session, intent, perception)
@@ -529,18 +561,29 @@ class Automator:
         return False, perception, reasoning
 
     async def _execute_verify(
-        self, session: TestSession, step: TestStep, query: str, timeout: Optional[int] = None
+        self, session: TestSession, step: TestStep, query: str, timeout: Optional[float] = None
     ) -> bool:
-        """Handles a VERIFY: sub-step — semantically evaluates the UI state with polling."""
-        timeout = timeout or self.parser.config.verification_timeout
+        """Handle semantic verification or a strict ranked v2 verification."""
+        timeout = timeout or step.timeout_seconds or self.parser.config.verification_timeout
         start_wait = datetime.now()
 
-        success, perception, reasoning = await self._poll_for_intent_match(session, step, query, timeout, 1.0, "verify")
+        success, perception, reasoning = await self._poll_for_intent_match(
+            session,
+            step,
+            query,
+            timeout,
+            1.0,
+            "verify",
+            ranked_only=step.ranked_only,
+            expect_absent=step.expect_absent,
+        )
         if success:
             step.status = StepStatus.PASSED
             return True
 
         step.status = StepStatus.FAILED
+        if step.wait_for_target:
+            step.failure_type = FailureType.TIMEOUT
         wait_time = (datetime.now() - start_wait).total_seconds()
         reasoning = reasoning or f"Verification failed after {wait_time:.1f}s"
         step.failure_reason = self._failure_details("VERIFY", query, perception, reasoning)
@@ -581,6 +624,8 @@ class Automator:
     async def _handle_scroll_action(self, session: TestSession, step: TestStep, payload: str) -> bool:
         """Handles explicit scroll commands, including target-seeking scrolls."""
         query = payload.strip()
+        if step.ranked_only:
+            return await self._scroll_to_target(session, step, query)
         normalized_query = self.parser.normalize_verify_query(query)
 
         # should be the usual case
@@ -606,24 +651,73 @@ class Automator:
         step.status = StepStatus.PASSED
         return True
 
+    async def _handle_keypress_action(self, step: TestStep, payload: str) -> bool:
+        """Handles explicit targetless keyboard commands."""
+        if not self.page:
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.ACTION_ERROR
+            step.failure_reason = "Cannot press a key because the browser page is not initialized."
+            return False
+
+        key = self._normalize_keypress_payload(payload)
+        if not key:
+            step.status = StepStatus.FAILED
+            step.failure_type = FailureType.ACTION_ERROR
+            step.failure_reason = "Keypress command requires a key name, such as 'Press key Enter'."
+            return False
+
+        if self.verbosity >= 1:
+            print(f"  [DO] press-key {key!r}")
+
+        await self.page.keyboard.press(key)
+        await asyncio.sleep(self.parser.config.step_delay_seconds)
+        step.status = StepStatus.PASSED
+        return True
+
+    def _normalize_keypress_payload(self, payload: str) -> str:
+        """Normalize friendly key aliases into Playwright keyboard.press syntax."""
+        raw = payload.strip()
+        if not raw:
+            return ""
+
+        quoted = re.fullmatch(r"(['\"])(.*)\1", raw)
+        if quoted:
+            return quoted.group(2)
+
+        if raw.endswith("++"):
+            parts = [part.strip() for part in raw[:-2].split("+") if part.strip()]
+            parts.append("+")
+        else:
+            parts = [part.strip() for part in raw.split("+")]
+
+        if not parts or any(part == "" for part in parts):
+            return raw
+
+        return "+".join(self._normalize_key_name(part, self.parser.language_pack.key_aliases) for part in parts)
+
+    @staticmethod
+    def _normalize_key_name(key: str, aliases: Dict[str, str]) -> str:
+        """Normalize one key or modifier alias without validating Playwright's full key set."""
+        lowered = key.lower()
+        if lowered in aliases:
+            return aliases[lowered]
+        if re.fullmatch(r"f\d{1,2}", lowered):
+            return lowered.upper()
+        if re.fullmatch(r"key[a-z]", lowered):
+            return f"Key{lowered[-1].upper()}"
+        if re.fullmatch(r"digit\d", lowered):
+            return f"Digit{lowered[-1]}"
+        return key
+
     def _parse_wait_duration(self, payload: str) -> Optional[float]:
         """Parses a duration payload into seconds when the wait is time-based."""
-        wait_time = 0.5
         msg = payload.lower()
-
-        match = re.search(r"([\d\.]+)\s*(s|sec|seconds?|ms|m|mins?|minutes?)", msg)
+        units = self.parser.language_pack.wait_duration_units
+        unit_pattern = "|".join(re.escape(unit) for unit in sorted(units, key=len, reverse=True))
+        match = re.search(rf"([\d\.]+)\s*({unit_pattern})\b", msg)
         if not match:
             return None
-
-        val = float(match.group(1))
-        unit = match.group(2)
-        if unit.startswith("m") and unit != "ms":
-            wait_time = val * 60
-        elif unit == "ms":
-            wait_time = val / 1000.0
-        else:
-            wait_time = val
-        return wait_time
+        return float(match.group(1)) * units[match.group(2)]
 
     def _is_scroll_target_query(self, payload: str) -> bool:
         """Returns whether a scroll payload looks like a target-seeking command."""
@@ -644,7 +738,7 @@ class Automator:
 
         intent = self.parser.parse_verify_intent(query)
         subject = intent.query_text.strip().lower()
-        generic_scope_values = {"", "page", "screen", "view", "viewport", "document"}
+        generic_scope_values = {"", *(term.lower() for term in self.parser.language_pack.generic_scope_terms)}
 
         if intent.position == "top" and subject in generic_scope_values:
             return "absolute_top"
@@ -724,7 +818,7 @@ class Automator:
     # pylint: disable=too-many-locals, too-many-return-statements, too-many-branches, too-many-statements
     async def _scroll_to_target(self, session: TestSession, step: TestStep, payload: str) -> bool:
         """Scrolls until a target enters the center band or the page range is exhausted."""
-        query = self.parser.normalize_verify_query(payload)
+        query = payload.strip() if step.ranked_only else self.parser.normalize_verify_query(payload)
         if not query:
             step.status = StepStatus.FAILED
             step.failure_type = FailureType.PERCEPTION_MISMATCH
@@ -759,8 +853,11 @@ class Automator:
             self._log_perception_summary(step.id, query, perception, selected=None)
             target = None
             if perception:
-                intent = self.parser.parse_verify_intent(query)
-                target = self._select_grounded_target(intent, perception)
+                if step.ranked_only:
+                    target = self._ranked_target(perception)
+                else:
+                    intent = self.parser.parse_verify_intent(query)
+                    target = self._select_grounded_target(intent, perception)
             if target:
                 metrics = perception.get("viewport", {}) or {}
                 viewport = {
@@ -840,6 +937,15 @@ class Automator:
             return filtered_elements[0]
 
         return None
+
+    def _ranked_target(self, perception: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return the first Perception-ranked candidate meeting the v2 threshold."""
+        matches = perception.get("top_matches") or []
+        target = matches[0] if matches else None
+        if target and target.get("similarity") is not None:
+            if float(target["similarity"]) < self.parser.config.perception_match_threshold:
+                return None
+        return target
 
     def _resolve_payload(self, payload: str, session: TestSession) -> str:
         """Resolves placeholders in the payload string."""
@@ -1111,6 +1217,11 @@ class Automator:
             await self.page.mouse.click(x, y)
         elif norm_action == "right-click":
             await self.page.mouse.click(x, y, button="right")
+        elif norm_action == "clear":
+            await self.page.mouse.click(x, y)
+            modifier = "Meta" if sys.platform == "darwin" else "Control"
+            await self.page.keyboard.press(f"{modifier}+A")
+            await self.page.keyboard.press("Backspace")
         elif any(verb in norm_action for verb in ["type", "enter", "input"]):
             # Focus and clear
             await self.page.mouse.click(x, y)

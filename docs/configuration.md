@@ -188,6 +188,18 @@ These are more specialized knobs and are most useful when tuning matching qualit
 
 ## Recommended Defaults
 
+### Language pack
+
+Set the natural-language grammar once for the project. English is the default.
+
+```toml
+[tool.vizqa]
+language = "en"
+```
+
+The equivalent INI form is `[vizqa]` with `language = en`; an INI value overrides
+the TOML value. The configured id must match a bundled language-pack YAML file.
+
 Most teams should start with:
 
 ```bash

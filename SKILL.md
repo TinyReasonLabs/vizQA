@@ -16,7 +16,8 @@ It works by:
 - choosing the best visible target
 - clicking, typing, scrolling, waiting, or verifying like a user would
 
-It is not an LLM runner. Write natural-language steps, but keep them concrete and visible.
+It is not an LLM runner. Prefer deterministic YAML v2 operation blocks for new
+tests; legacy natural-language steps remain supported.
 
 ## Core Rule
 
@@ -51,6 +52,28 @@ A vizQA test is a YAML file with these common fields:
 - `steps`: ordered user actions and checks
 
 Strings can use environment interpolation like `${APP_URL}`.
+
+### Deterministic YAML v2 (preferred)
+
+Set `schema: 2` and write one typed operation per step. The operation is exact;
+only its visible `target` is resolved by UI Perception. Legacy `action` steps
+can be mixed into the same v2 test when needed, and only those steps use the
+semantic parser. Never use DOM selectors, IDs, or test IDs.
+
+```yaml
+schema: 2
+name: "User Login"
+url: "https://example.com/login"
+steps:
+  - click: { target: "Sign in button" }
+  - type: { target: "username field", text: "admin" }
+  - assert_visible: { target: "Dashboard", timeout: 5 }
+```
+
+Available operations: `click`, `right_click`, `hover`, `type`, `clear`,
+`press_key`, `check`, `uncheck`, `select`, `drag`, `upload`, `scroll`, `wait`,
+`assert_visible`, and `assert_not_visible`. See `docs/test_cases.md` and
+`schemas/vizqa-test.schema.json` for field contracts and editor autocomplete.
 
 ### Minimal Example
 
@@ -248,6 +271,7 @@ Useful environment variables:
 - `VIZQA_WAIT_FOR_POLL_INTERVAL`: polling cadence for `wait for ...`
 - `VIZQA_SCROLL_CENTER_BAND_MIN` / `VIZQA_SCROLL_CENTER_BAND_MAX`: center band for `scroll to ...`
 - `VIZQA_STEP_DELAY_SECONDS`: pause between interaction steps
+- `VIZQA_PERCEPTION_MATCH_THRESHOLD`: minimum ranked Perception similarity for v2 targets
 
 Use shorter delays for stable local runs and longer delays when the UI animates or settles slowly.
 
